@@ -13,8 +13,8 @@ This is a prompt-driven setup. Explore, present what you found, settle each sect
 ## Sources
 
 - **Templates**: the `kitchen/` folder of the dkitchen repository, `../../kitchen/` from this skill's base directory. Read [kitchen/README.md](../../kitchen/README.md) first: it maps each template to its installed path and defines the template markers and the default vocabulary. If the folder is missing because the skill was copied on its own, clone `https://github.com/917Dhj/dkitchen` at the tag matching `ding --version` (for example `v0.2.0`) into a temporary directory and use its `kitchen/`.
-- **Reference repo scripts**: [scripts/](scripts/) in this skill. Each starts with a comment listing what to adapt.
-- **Renderer**: [render.py](render.py) in this skill turns the templates into rule files for a chosen set of modules.
+- **Reference repo scripts**: [scripts/](../build-team/scripts/) in the build-team skill. Each starts with a comment listing what to adapt.
+- **Renderer**: [kitchen/render.py](../../kitchen/render.py) turns the templates into rule files for a chosen set of modules.
 - **`ding`**: `ding --help`, and the guide at https://github.com/917Dhj/dkitchen/blob/main/docs/ding.md, including the `.dkitchen.toml` keys.
 
 ## 1. Explore
@@ -66,7 +66,7 @@ Show the user:
 - the list of files to create or change, with the full text of each new `docs/agents/` file and a diff for each existing file;
 - the `.dkitchen.toml`, holding only keys that differ from the defaults, plus `[log] issue` for `unattended`;
 - the adapted repo scripts;
-- the GitHub changes: the four `status:*` labels from [kitchen/core/issue-tracker.md](../../kitchen/core/issue-tracker.md), and for `unattended` a pinned "Orchestrator log" ticket;
+- the GitHub changes: the four `status:*` labels from [kitchen/team/issue-tracker.md](../../kitchen/team/issue-tracker.md), and for `unattended` a pinned "Orchestrator log" ticket;
 - an optional `.claude/settings.json` allow list for the commands the stations run all day: `ding *`, `gh issue *`, `gh pr *`, and the repo scripts.
 
 Let the user edit anything before you write. Done when the user approves the draft, including each GitHub change by name.
@@ -75,10 +75,10 @@ Let the user edit anything before you write. Done when the user approves the dra
 
 Apply exactly the approved draft.
 
-**Rules.** Render the templates with this skill's [render.py](render.py), which keeps the chosen modules' marked text, drops the rest, removes every module marker, and prints the two pointer blocks:
+**Rules.** Render the templates with [kitchen/render.py](../../kitchen/render.py), which keeps the chosen modules' marked text, drops the rest, removes every module marker, and prints the two pointer blocks:
 
 ```bash
-python <this skill's base directory>/render.py --modules run-budgets,unattended --out docs/agents
+python <this skill's base directory>/../../kitchen/render.py --templates team,night --modules run-budgets --out docs/agents
 ```
 
 Then edit the rendered files:
@@ -88,7 +88,7 @@ Then edit the rendered files:
 - For the minimal kitchen, rewrite the designer's and verifier's duties into the orchestrator's as settled in section B, and drop the sections that only concern them.
 - When a `docs/agents/` file already exists from another setup, keep its sections that dkitchen does not cover, and replace or add dkitchen's.
 
-**Pointer blocks.** Wrap each block from [kitchen/core/agents-block.md](../../kitchen/core/agents-block.md) in `<!-- dkitchen:start -->` and `<!-- dkitchen:end -->`, replacing an existing block in place. Put the first block in `AGENTS.md`, creating the file if needed, because Codex reads `AGENTS.md`. Put the second in the `CLAUDE.md` Claude Code already loads (root or `.claude/`), creating a root `CLAUDE.md` if there is none, and make sure it imports `AGENTS.md` (`@AGENTS.md`, or `@../AGENTS.md` from `.claude/`).
+**Pointer blocks.** Wrap each block from [kitchen/agents-block.md](../../kitchen/agents-block.md) in `<!-- dkitchen:start -->` and `<!-- dkitchen:end -->`, replacing an existing block in place. Put the first block in `AGENTS.md`, creating the file if needed, because Codex reads `AGENTS.md`. Put the second in the `CLAUDE.md` Claude Code already loads (root or `.claude/`), creating a root `CLAUDE.md` if there is none, and make sure it imports `AGENTS.md` (`@AGENTS.md`, or `@../AGENTS.md` from `.claude/`).
 
 **Settings and scripts.** Write `.dkitchen.toml` and the repo scripts, then make the approved GitHub changes with `gh label create` and, for `unattended`, `gh issue create` and `gh issue pin`, writing the new ticket's number into `[log] issue`.
 

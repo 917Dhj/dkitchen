@@ -6,15 +6,15 @@ These are the house rules of dkitchen, as templates. The setup skill installs th
 
 | Template | Installed as | What it covers |
 | --- | --- | --- |
-| [core/agents-block.md](core/agents-block.md) | blocks in `AGENTS.md` and `CLAUDE.md` | The pointers every session reads |
-| [core/roles.md](core/roles.md) | `docs/agents/roles.md` | Stations, who decides what, verification, results, relaying, signatures, PR review |
-| [core/issue-tracker.md](core/issue-tracker.md) | `docs/agents/issue-tracker.md` | Tickets, executor comments, the status block, status labels |
-| [core/messaging.md](core/messaging.md) | `docs/agents/messaging.md` | Messaging sessions with `ding` |
-| [core/long-running-jobs.md](core/long-running-jobs.md) | `docs/agents/long-running-jobs.md` | `ding launch`, resumable jobs, compute and shared services |
-| [modules/run-budgets.md](modules/run-budgets.md) | `docs/agents/run-budgets.md` | Run requests, ticket budgets, what needs the user's approval |
-| [modules/model-text.md](modules/model-text.md) | `docs/agents/model-text.md` | Prompts and other text a model sees, owned by the designer |
-| [modules/artifacts.md](modules/artifacts.md) | `docs/agents/artifacts.md` | The artifact registry and frozen files |
-| [modules/unattended.md](modules/unattended.md) | `docs/agents/unattended.md` | Running while the user is away: the issue watcher and the orchestrator log |
+| [agents-block.md](agents-block.md) | blocks in `AGENTS.md` and `CLAUDE.md` | The pointers every session reads |
+| [team/roles.md](team/roles.md) | `docs/agents/roles.md` | Stations, who decides what, verification, results, relaying, signatures, PR review |
+| [team/issue-tracker.md](team/issue-tracker.md) | `docs/agents/issue-tracker.md` | Tickets, executor comments, the status block, status labels |
+| [team/messaging.md](team/messaging.md) | `docs/agents/messaging.md` | Messaging sessions with `ding` |
+| [team/long-running-jobs.md](team/long-running-jobs.md) | `docs/agents/long-running-jobs.md` | `ding launch`, resumable jobs, compute and shared services |
+| [team/run-budgets.md](team/run-budgets.md) | `docs/agents/run-budgets.md` | Run requests, ticket budgets, what needs the user's approval |
+| [team/model-text.md](team/model-text.md) | `docs/agents/model-text.md` | Prompts and other text a model sees, owned by the designer |
+| [team/artifacts.md](team/artifacts.md) | `docs/agents/artifacts.md` | The artifact registry and frozen files |
+| [night/unattended.md](night/unattended.md) | `docs/agents/unattended.md` | Running while the user is away: the issue watcher and the orchestrator log |
 
 Core files go into every kitchen. Each module is optional.
 

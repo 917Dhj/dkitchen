@@ -6,7 +6,9 @@ import sys
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "skills/setup-dkitchen/scripts"
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "skills/build-team/scripts"
+RENDER = ROOT / "kitchen/render.py"
 
 
 def load(name):
@@ -108,7 +110,7 @@ def test_paragraphs_preserve_leading_space_and_match_one_source():
 
 
 def test_render_keeps_chosen_modules_and_leaves_no_markers(tmp_path):
-    spec = spec_from_file_location("render", SCRIPTS.parent / "render.py")
+    spec = spec_from_file_location("render", RENDER)
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
     text = ("Lead.\n\n<!-- module:artifacts -->\n- frozen\n<!-- /module:artifacts -->\n- always\n"
@@ -121,11 +123,12 @@ def test_render_keeps_chosen_modules_and_leaves_no_markers(tmp_path):
         module.render("<!-- module:artifacts -->x", {"artifacts"})
 
 
-@pytest.mark.parametrize("modules", ["", "run-budgets,model-text,artifacts,unattended", "unattended"])
-def test_rendered_kitchen_has_no_markers_and_no_broken_links(tmp_path, modules):
+@pytest.mark.parametrize("templates, modules", [("team", ""), ("team,night", "run-budgets,model-text,artifacts"),
+                                                ("team,night", "")])
+def test_rendered_kitchen_has_no_markers_and_no_broken_links(tmp_path, templates, modules):
     import re
     out = tmp_path / "docs/agents"
-    result = subprocess.run([sys.executable, str(SCRIPTS.parent / "render.py"), "--modules", modules, "--out", str(out)],
+    result = subprocess.run([sys.executable, str(RENDER), "--templates", templates, "--modules", modules, "--out", str(out)],
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "## AGENTS.md" in result.stdout and "## CLAUDE.md" in result.stdout and "module:" not in result.stdout
