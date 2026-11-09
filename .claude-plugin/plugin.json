@@ -1,7 +1,7 @@
 {
   "name": "dkitchen",
-  "version": "0.6.0",
-  "description": "Install the dkitchen multi-agent workflow into your repo: stations, house rules, and repo scripts, set up by /setup-dkitchen and the build skills.",
+  "version": "0.6.1",
+  "description": "Install the dkitchen multi-agent workflow into your repo: roles, house rules, and repo scripts, set up by /setup-dkitchen and the build skills.",
   "author": {
     "name": "917Dhj",
     "url": "https://github.com/917Dhj"

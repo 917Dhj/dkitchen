@@ -12,7 +12,7 @@ Words follow the repo's vocabulary in `.dkitchen.toml` and `docs/agents/`.
 
 ## 1. Close the orders
 
-Find the latest night orders on the orchestrator log ticket, with `ding night show` or by searching the ticket. Close them before anything else, with `ding night close` or one comment: `<orchestrator signature>: night orders closed at <time UTC>`. Stations that check the orders from now on find them closed.
+Find the latest night orders on the orchestrator log ticket, with `ding night show` or by searching the ticket. Close them before anything else, with `ding night close` or one comment: `<orchestrator signature>: night orders closed at <time UTC>`. Roles that check the orders from now on find them closed.
 
 If no orders were posted, say so in one line and report the same way, counting the night from the user's last message.
 

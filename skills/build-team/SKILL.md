@@ -1,6 +1,6 @@
 ---
 name: build-team
-description: Build or change the team of a dkitchen kitchen in this repo — its stations, design lines, tickets, PR review, watches, run budgets, and model-visible text rules. Use when the user asks to set up the kitchen's team, add or split a designer, or change how the stations work together.
+description: Build or change the team of a dkitchen kitchen in this repo — its roles, design lines, tickets, PR review, watches, run budgets, and model-visible text rules. Use when the user asks to set up the kitchen's team, add or split a designer, or change how the roles work together.
 ---
 
 # Build the team
@@ -36,11 +36,11 @@ Summarize what is present and what is missing in a short list, ending with your 
 
 One section, one answer, then the next. Lead each with your recommendation so the user can accept it in a word, and skip any section that exploration already settled.
 
-**A. Stations.** The kitchen has an orchestrator, a designer, a verifier, and executors. Ask which model each Claude Code station runs; the defaults are the strongest available model for the orchestrator and designer and a cheaper one for the verifier.
+**A. Roles.** The kitchen has an orchestrator, a designer, a verifier, and executors. Ask which model each Claude Code role runs; the defaults are the strongest available model for the orchestrator and designer and a cheaper one for the verifier.
 
 **B. Design lines.** One designer holds every design area in one context. When the areas from exploration would crowd that context, recommend a separate design line for each area that has its own decisions and tickets, such as "a training designer owns the training data, training configs, and the evaluation of trained models". When the user agrees, settle for each extra line:
 
-- its station name and signature, and any alias executors may write;
+- its role name and signature, and any alias executors may write;
 - which tickets are its own: a parent ticket and everything under it, or a `Design: <line>` second line;
 - what it decides, and what it asks the other lines for.
 
@@ -69,7 +69,7 @@ Show the user:
 - the team's `.dkitchen.toml` keys: the vocabulary, including `[merge] review_pass`, `review_changes`, and `[watch] handoff` for a language other than English; each design line's name in `[stations.aliases]` and `[rule] signatures`; `[merge] review_check = "review"`, so that merges need the reviewer's verdict; and `[merge] required_checks` with the CI checks a merge needs;
 - the adapted repo scripts;
 - the GitHub changes: the four `status:*` labels from [issue-tracker.md](../../kitchen/team/issue-tracker.md);
-- an optional `.claude/settings.json` allow list for the commands the stations run all day: `ding *`, `gh issue *`, `gh pr *`, and the repo scripts.
+- an optional `.claude/settings.json` allow list for the commands the roles run all day: `ding *`, `gh issue *`, `gh pr *`, and the repo scripts.
 
 Done when the user approves the draft, including each GitHub change by name.
 
@@ -99,6 +99,6 @@ Tell the user, briefly:
 
 1. which sessions to open: the orchestrator, each designer line, and the verifier in Claude Code; executors in Codex, one per ticket, each in its own worktree;
 2. to put those session names into the table at the top of `docs/agents/roles.md`;
-3. that each Claude Code station starts its watch at session start, as `docs/agents/watch.md` says;
+3. that each Claude Code role starts its watch at session start, as `docs/agents/watch.md` says;
 4. how to start: describe the first piece of work to the designer, who writes it as a ticket with `write-ticket`;
-5. that `/shift-change` hands a station over to a fresh session when its context fills up.
+5. that `/shift-change` hands a role over to a fresh session when its context fills up.

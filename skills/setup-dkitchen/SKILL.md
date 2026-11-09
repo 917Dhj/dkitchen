@@ -35,7 +35,7 @@ One question at a time. Lead each with your recommendation so the user can accep
 
 | Need | Recommend | Build skill |
 | --- | --- | --- |
-| A team of agents: stations, tickets, PR review | Always yes; every other part builds on it | [build-team](../build-team/SKILL.md) |
+| A team of agents: roles, tickets, PR review | Always yes; every other part builds on it | [build-team](../build-team/SKILL.md) |
 | Code the agents write and change | Yes for any repo with code the agents change; the reference checks need Python | [build-repo](../build-repo/SKILL.md) |
 | Work done item by item: evaluations, batch inference, data processing | Yes when the repo has scripts that loop over items; needs `build-repo` | [build-runner](../build-runner/SKILL.md) |
 | Work that keeps moving while the user is away | Yes when the repo has long jobs or several parallel workstreams, or the user asks for it | [build-night](../build-night/SKILL.md) |

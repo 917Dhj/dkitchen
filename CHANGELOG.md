@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- **Words.** The rules, skills, and docs call the orchestrator, designers, verifier, and executors *roles* instead of *stations*: in a kitchen a station is one cook's place on the line, which fits only the executors. Nothing to change in a repo: `.dkitchen.toml` keeps its `[stations]` table, and `ding` its options and output fields. Run `/setup-dkitchen` or `build-team` again to bring the word into your installed rules.
+
 ## 0.6.0
 
 Not compatible with 0.5: see *Upgrading* below.

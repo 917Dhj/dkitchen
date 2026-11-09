@@ -20,7 +20,7 @@
   <a href="https://x.com/dahuoji09"><img src="https://img.shields.io/badge/follow-%40dahuoji09-000000?logo=x" alt="X: @dahuoji09"></a>
 </p>
 
-dkitchen is the multi-agent workflow I use every day to run my research repo. It gives a set of Claude Code and Codex sessions fixed stations, a shared way to hand off work through GitHub issues, clear rules for when to stop and ask you, and the tools that tie it together. You keep the decisions only you can make: what to research, what to try, what to spend.
+dkitchen is the multi-agent workflow I use every day to run my research repo. It gives a set of Claude Code and Codex sessions fixed roles, a shared way to hand off work through GitHub issues, clear rules for when to stop and ask you, and the tools that tie it together. You keep the decisions only you can make: what to research, what to try, what to spend.
 
 ## 🍽️ Why a kitchen
 
@@ -38,7 +38,7 @@ dkitchen sets up your agents the same way. You are the head chef.
   <img src="https://raw.githubusercontent.com/917Dhj/dkitchen/main/docs/assets/kitchen.gif" width="100%" alt="A pixel-art kitchen: you talk a design through with the designer, the verifier checks the ticket, the orchestrator rings the bell to start a Codex executor on free GPUs, reviews and merges a PR, and brings you one decision to approve">
 </p>
 
-| Station | In a kitchen | What it does | Runs on |
+| Role | In a kitchen | What it does | Runs on |
 | --- | --- | --- | --- |
 | 👑 **You** | Head chef | Choose the direction, approve designs and budgets, decide what the results mean for your paper. | You |
 | 🤖 **Orchestrator** | Sous chef at the pass | Schedules tickets, GPUs, and concurrency. Merges PRs, closes tickets, reports facts to you. | Claude Code · Claude Opus 5.5 |
@@ -46,7 +46,7 @@ dkitchen sets up your agents the same way. You are the head chef.
 | 🔍 **Verifier** | Taster | Spot-checks finished runs and outputs against code and data, and reviews PRs. Reports what it found and never makes the call. | Claude Code · Claude Sonnet 5.5 |
 | 🔪 **Executors** | Line cooks | One fresh session per ticket, in its own worktree. Implements, runs, and reports on the ticket. | Codex · GPT-6.1 Sol |
 
-Each station has written rules for what it owns, what it hands off, and when it must stop. When something fits no station, the agents ask you.
+Each role has written rules for what it owns, what it hands off, and when it must stop. When something fits no role, the agents ask you.
 
 ## 🎫 How a ticket moves through the kitchen
 
@@ -70,7 +70,7 @@ Agents propose on these and wait. An approval only counts when it is in your own
 
 Everything else the kitchen handles on its own, by one rule: **if anyone would do it the same way, the agents do it. If the choice changes the results, the cost, or the direction, they stop and wait for you.**
 
-This is what lets you walk away. While you are in class, asleep, or reading papers, each station's watch wakes it when work reaches it: an executor finishes a stage, gets stuck, or goes quiet; you leave a comment; a PR is ready. Before you leave, `/goodnight` collects the approvals the night may need; the orchestrator moves forward what they cover, and `/goodmorning` brings you the decisions that are left.
+This is what lets you walk away. While you are in class, asleep, or reading papers, each role's watch wakes it when work reaches it: an executor finishes a stage, gets stuck, or goes quiet; you leave a comment; a PR is ready. Before you leave, `/goodnight` collects the approvals the night may need; the orchestrator moves forward what they cover, and `/goodmorning` brings you the decisions that are left.
 
 ## ⚖️ One pool of resources
 
@@ -100,11 +100,11 @@ You can address a session by its UUID, its name, or a GitHub issue such as `'#42
 
 ### 📋 The kitchen's routines
 
-The stations' everyday steps are `ding` commands too, so they run the same careful way every time:
+The roles' everyday steps are `ding` commands too, so they run the same careful way every time:
 
 - `ding relay` sends a message to a ticket's executor, and records it on the ticket only once delivery is confirmed.
 - `ding review` records a verdict on the current PR HEAD. With `[merge] review_check`, `ding merge`, `ding watch`, and `ding waits` share PR readiness checks; every merge requires the default target branch. See [the review and merge guide](docs/ding.md).
-- `ding watch` waits in each station's background and wakes it when a ticket needs it.
+- `ding watch` waits in each role's background and wakes it when a ticket needs it.
 - `ding waits` lists overdue unanswered waits, including ones still pending after a prior watch batch.
 - `ding log` keeps the orchestrator's log of what it did while you were away.
 - `ding night` opens, shows, and closes time-limited night orders on that log. Run `/goodnight` and `/goodmorning` in the orchestrator session to collect the orders and report their use.
@@ -113,7 +113,7 @@ The stations' everyday steps are `ding` commands too, so they run the same caref
 
 ### 📜 The house rules
 
-The rules every station follows live in [kitchen/](https://github.com/917Dhj/dkitchen/blob/main/kitchen/README.md), one folder per part of the kitchen: the team (who owns what, tickets, reviews, when to stop and ask, with optional modules for run budgets and model prompts), the repo's code rules and checks, the runner, and the night shift for when you are away. The rules guard what comes next rather than clean up the past, and a change to a check says why in a `Guard-change:` commit trailer.
+The rules every role follows live in [kitchen/](https://github.com/917Dhj/dkitchen/blob/main/kitchen/README.md), one folder per part of the kitchen: the team (who owns what, tickets, reviews, when to stop and ask, with optional modules for run budgets and model prompts), the repo's code rules and checks, the runner, and the night shift for when you are away. The rules guard what comes next rather than clean up the past, and a change to a check says why in a `Guard-change:` commit trailer.
 
 ### 🧩 The skills
 
@@ -122,7 +122,7 @@ The plugin installs ten skills. The build skills set up one part of the kitchen 
 | Skill | What it does |
 | --- | --- |
 | `/setup-dkitchen` | The entry: checks the prerequisites, settles the language and what you need, and walks through the build skills below |
-| `build-team` | The stations, tickets, PR review, and watches; it can suggest extra design lines for a repo with several kinds of work |
+| `build-team` | The roles, tickets, PR review, and watches; it can suggest extra design lines for a repo with several kinds of work |
 | `build-repo` | Where code goes, changing modules in place, and the `ding check` gates in CI (Python repos) |
 | `build-runner` | One resumable runner for work done item by item, such as evaluations and batch inference (Python repos) |
 | `build-night` | Night orders and the orchestrator's log, so work keeps moving while you are away |
@@ -131,8 +131,8 @@ The everyday skills run while the kitchen works:
 
 | Skill | When |
 | --- | --- |
-| `write-ticket` | Every time a station writes a ticket; the model reaches for it on its own |
-| `/shift-change` | When a station's session is replaced by a fresh one |
+| `write-ticket` | Every time a role writes a ticket; the model reaches for it on its own |
+| `/shift-change` | When a role's session is replaced by a fresh one |
 | `/improve-kitchen` | Every couple of weeks: turns what keeps going wrong into checks, tools, or rules, and retires the text they replace |
 | `/goodnight`, `/goodmorning` | Before you leave and when you are back |
 

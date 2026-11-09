@@ -1,6 +1,6 @@
 ---
 name: write-ticket
-description: Write a ticket in a dkitchen kitchen — a new GitHub issue, a sub-ticket for one run, or the brief that dispatches an executor. Use whenever a station opens or rewrites a ticket.
+description: Write a ticket in a dkitchen kitchen — a new GitHub issue, a sub-ticket for one run, or the brief that dispatches an executor. Use whenever a role opens or rewrites a ticket.
 ---
 
 # Write a ticket
@@ -25,10 +25,10 @@ Done when every claim you will make has a link, a number, or a file and line beh
 - **Approval**: the user's words quoted verbatim with their date, when a user decision is the ticket's origin.
 - **Depends on**: the tickets that must finish first, and why.
 - **Problem**: what goes wrong today, one point per incident, each with its evidence. The problem, not the fix.
-- **Do**: the behaviour to reach and where it lands. Write decisions, not options. Write the rules and limits that apply in full, since the executor never sees policy messages sent to other stations. Write model-visible text verbatim. Where the work needs a judgment halfway, write a checkpoint: "explore, then wait for the designer".
+- **Do**: the behaviour to reach and where it lands. Write decisions, not options. Write the rules and limits that apply in full, since the executor never sees policy messages sent to other roles. Write model-visible text verbatim. Where the work needs a judgment halfway, write a checkpoint: "explore, then wait for the designer".
 - **Leave alone**: what must not change even when it looks related, such as interfaces, running jobs, or other tickets' files.
 - **Exit conditions**: each one judged by reading a number or running a command, never by taste: a test that passes, a count against a threshold, an offline replay that matches. The executor turns them into its gate table, row for row and in this order.
-- **Footer**: the tier and budget when the ticket runs models, who executes, and the station that answers questions on the ticket.
+- **Footer**: the tier and budget when the ticket runs models, who executes, and the role that answers questions on the ticket.
 
 A parent ticket holds the design, rulings, and summary. Each run gets a sub-ticket (`ding new --parent <ticket>`), written the same way and scoped to that run.
 
@@ -42,7 +42,7 @@ Check the draft, and fix what fails:
 - every exit condition is judged by a number or a command;
 - Leave alone is written;
 - the tier and budget are written when the ticket runs models;
-- the station that answers questions is named;
+- the role that answers questions is named;
 - nothing the work needs lives only in this conversation;
 - `ding check-refs <draft.md>` reports no wrong reference.
 

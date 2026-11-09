@@ -9,7 +9,7 @@ Write tickets with the `write-ticket` skill. A ticket in this repo is laid out l
 ```text
 <title: what changes, in a few words>
 
-Design: <the designer line that owns it>; reviewer: <station>
+Design: <the designer line that owns it>; reviewer: <role>
 > <the user's approval in their own words, with its date, when the ticket comes from a user decision>
 Depends on: <tickets that must finish first, or leave the line out>
 
@@ -18,7 +18,7 @@ Depends on: <tickets that must finish first, or leave the line out>
 ## Leave alone
 ## Exit conditions
 
-<the tier and budget, who executes, and the station that answers questions on the ticket>
+<the tier and budget, who executes, and the role that answers questions on the ticket>
 ```
 
 ## Executor comments

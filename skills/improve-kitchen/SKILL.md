@@ -139,9 +139,9 @@ N. docs/agents/improve-kitchen.md and docs/agents/improve-kitchen-history.md, as
 
 ## Evidence sources
 
-Run from the repo root. `SINCE` is the window's start, as `YYYY-MM-DDT00:00:00Z`. The station names, signatures, status words, review lines, and the log ticket come from the repo's `.dkitchen.toml`, or `ding`'s defaults where it sets none.
+Run from the repo root. `SINCE` is the window's start, as `YYYY-MM-DDT00:00:00Z`. The role names, signatures, status words, review lines, and the log ticket come from the repo's `.dkitchen.toml`, or `ding`'s defaults where it sets none.
 
-1. **Ticket and PR comments**: `gh api "repos/<owner>/<repo>/issues/comments?since=$SINCE&per_page=100" --paginate --slurp`. `since` filters on the update time, so older comments come back too; compare `created_at` with the window. Every station posts under one GitHub account, so tell authors apart by signature. Look for reviews that did not pass, `blocked` statuses, reruns, reverted decisions, and repeated requests.
+1. **Ticket and PR comments**: `gh api "repos/<owner>/<repo>/issues/comments?since=$SINCE&per_page=100" --paginate --slurp`. `since` filters on the update time, so older comments come back too; compare `created_at` with the window. Every role posts under one GitHub account, so tell authors apart by signature. Look for reviews that did not pass, `blocked` statuses, reruns, reverted decisions, and repeated requests.
 2. **The orchestrator log**, when `[log] issue` is set: the same comments, filtered to that ticket. Look for missed waits, wrong releases, and stalled cards.
 3. **The user's own corrections**, the strongest signal: user messages in the Claude Code transcripts of the repo and its worktrees, `~/.claude/projects/<the path with every / replaced by ->/*.jsonl`, in files changed since the window's start. Take records with `type: user` and a string `message.content`. Skip content that is command or cross-session wrapping, such as text starting with `<`. Deduplicate by text, since the same message recurs across forked transcripts.
 4. **Memory**: `type: feedback` files in that project's `memory/` folder changed since the window's start. Each one is a correction somebody chose to keep.

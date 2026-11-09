@@ -20,7 +20,7 @@ Every session loads these lines, so each one is a pointer to a doc under `docs/a
 ```markdown
 @AGENTS.md
 
-- **Watch**: at session start, start your station's watch as in [docs/agents/watch.md](docs/agents/watch.md).
+- **Watch**: at session start, start your role's watch as in [docs/agents/watch.md](docs/agents/watch.md).
 - **While the user is away** (orchestrator): move work forward as in [docs/agents/unattended.md](docs/agents/unattended.md).
 
 ## Execution boundaries

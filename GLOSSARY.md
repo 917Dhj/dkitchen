@@ -8,20 +8,20 @@ dkitchen runs a repo's work through a team of agent sessions coordinated on GitH
 The installed set of house rules, settings, and repo scripts that lets a team of agent sessions work on one repo.
 _Avoid_: Workflow, setup
 
-**Station**:
-A role in the kitchen, filled by one agent session at a time: the orchestrator, a designer, the verifier, or an executor.
-_Avoid_: Agent, role, seat
+**Role**:
+A part of the kitchen's team, filled by one agent session at a time: the orchestrator, a designer, the verifier, or an executor. `.dkitchen.toml` names the roles under `[stations]`, a key kept from earlier versions.
+_Avoid_: Station (in a real kitchen, one cook's place on the line), agent, seat
 
 **Design line**:
-One designer station and the tickets it owns, when a kitchen splits design between several designers.
+One designer role and the tickets it owns, when a kitchen splits design between several designers.
 _Avoid_: Sub-designer, design track
 
 **Verifier**:
-The station that checks a ticket's facts against the code and data, and reviews PRs by default, without making decisions.
-_Avoid_: Checker, reviewer (when the station is meant)
+The role that checks a ticket's facts against the code and data, and reviews PRs by default, without making decisions.
+_Avoid_: Checker, reviewer (when the role is meant)
 
 **Shift change**:
-Replacing the session that fills a station with a fresh one, carried over by a handover note.
+Replacing the session that fills a role with a fresh one, carried over by a handover note.
 _Avoid_: Handoff (Matt Pocock's skill of that name is general-purpose)
 
 ## Work
@@ -111,5 +111,5 @@ A skill that installs or changes one part of the kitchen and can run again to up
 _Avoid_: Setup skill (that name belongs to the entry, `setup-dkitchen`)
 
 **Everyday skill**:
-A skill the stations use while the kitchen runs, such as writing a ticket or a shift change.
+A skill the roles use while the kitchen runs, such as writing a ticket or a shift change.
 _Avoid_: Runtime skill
