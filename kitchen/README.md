@@ -22,6 +22,20 @@ Each build skill installs one folder. [render.py](render.py) renders a folder wi
 
 A module is optional within its skill. Every other file of a folder is installed whenever its skill runs.
 
+## Installing
+
+Every build skill installs its templates the same way. The skill's own file says which templates, questions, and checks are its own; this section holds what they share.
+
+- **Prerequisites.** The kitchen runs on GitHub issues: `git remote -v` and `gh repo view` must show a GitHub remote, and `gh auth status` must pass. A repo without one stops here; tell the user, and offer to continue once one exists. `ding --version` must report 0.6.0 or later; when it is missing or older, offer `pipx install dkitchen` or `pipx upgrade dkitchen`. The kitchen needs both Claude Code (`claude --version`) for the orchestrator, designer, and verifier, and Codex (`codex --version`, an App Server socket under `/tmp/codex-daemon-$(id -u)`) for executors, plus `tmux -V`.
+- **Templates.** The `kitchen/` folder of the dkitchen repository, `../../kitchen/` from a skill's base directory. If the folder is missing because a skill was copied on its own, clone `https://github.com/917Dhj/dkitchen` at the tag matching `ding --version` (for example `v0.6.0`) into a temporary directory and use its `kitchen/`.
+- **Language.** The installed rules are written in the user's language. For any language other than English, translate the [vocabulary](#vocabulary) once, show it as a table, and get it confirmed: it is used word for word in the rules and in `.dkitchen.toml`, and scripts match these words exactly. A kitchen that already has a `.dkitchen.toml` keeps its vocabulary.
+- **Rendering.** `python <kitchen>/render.py --templates <folder> [--modules …] --out docs/agents` writes the folder's files. Then fill every `<!-- fill: … -->` from the user's answers; where a gap does not apply, remove the sentence or section around it and reword what still mentions it. Translate every file for a language other than English.
+- **Updating in place.** A `<!-- dkitchen:start -->` block or a `.dkitchen.toml` means dkitchen is already installed, and this run updates it. Before rendering over an installed file, read it: carry over its filled gaps, its wording, and everything added since it was installed, such as rows of known situations and standing rules, and show the user the diff. A file from another setup, such as an issue-tracker doc from Matt Pocock's skills, is merged: keep its sections dkitchen does not cover, and replace or add dkitchen's.
+- **Pointer blocks.** `render.py` prints the two blocks for every file installed in `docs/agents/`, whichever skill installed it. Wrap each in `<!-- dkitchen:start -->` and `<!-- dkitchen:end -->`, replacing the existing block in place. The first goes in `AGENTS.md`, created if needed, because Codex reads `AGENTS.md`. The second goes in the `CLAUDE.md` Claude Code already loads, at the root or in `.claude/`, or a new root `CLAUDE.md`; it imports `AGENTS.md` (`@AGENTS.md`, or `@../AGENTS.md` and `../`-prefixed links from `.claude/`).
+- **Settings.** `.dkitchen.toml` holds only keys that differ from the defaults ([the keys](../docs/ding.md#dkitchentoml)). Each skill writes its own keys and keeps the rest.
+- **Approval.** Nothing is written or posted before the user approves the draft, including each GitHub change by name.
+- **Checks every skill runs.** `grep -rn '<!-- module:\|<!-- /module:\|<!-- fill:' docs/agents AGENTS.md CLAUDE.md .claude/CLAUDE.md` finds nothing, and every relative link in the installed files resolves to an existing file.
+
 ## Template markers
 
 - `<!-- module:NAME -->` … `<!-- /module:NAME -->` wraps text that belongs to module `NAME`. When the module is installed, keep the text and drop the markers. When it is not, drop the text too.
