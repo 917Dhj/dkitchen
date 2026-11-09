@@ -379,6 +379,8 @@ These commands carry out the kitchen's routine steps, as the house rules in [kit
 | `ding night open\|show\|close` | Orchestrator opens/closes; any station reads | Records night orders on `[log] issue`, shows the open orders and their link, or closes them. Orders expire at `--until`. Calls no model. |
 | `ding watch [--for NAME]` | A station, in the background | Waits for GitHub activity, prints it as one batch, and exits. `--for NAME` selects requests and explicit handoffs to that station. See [Watches](../kitchen/team/watch.md). |
 | `ding waits [--for NAME] [--minutes N] [--json]` | Any station | Lists overdue unanswered waits from the latest executor comment on each open ticket, oldest first. Read-only; no model calls or watch state changes. |
+| `ding check [--base REF]` | Executor before hand-over; CI on every PR | Runs the repo checks set in `[check]`: layout rules on the files added since `--base` (default `origin/main`), then Ruff, import-linter and the repo's own checks on the whole tree, and the guard-change trailer rule. See [Repo checks](#repo-checks). |
+| `ding map [FOLDER…]` | Any station | Lists each Python module under the library areas, or the given folders, with the first line of its docstring. |
 | `ding check-refs draft.md` | Verifier | Checks every `file:line` in a draft comment, in backticks or not (a name written right next to it must appear on that line), and every `sha256`, against `origin/main` or `--root DIR`. It also asks GitHub that each `#N` ticket, `PR#N`, issue or PR link, and comment link exists, that a `PR#N` or `/pull/` link is a PR, and that a comment link's comment belongs to the ticket in the link (`--repo` for bare `#N`, `--offline` to skip). It prints how many references of each kind it checked, and lists every wrong one and every one it could not check, also in its JSON line. Exits 1 when something is wrong. Give several drafts to check them one by one: each line then names its file, the JSON lines carry a `draft` key, and the exit status is nonzero (1 for a wrong reference, 2 for an unreadable file) if any draft fails. |
 | `ding rule 42 draft.md [--reply-to LINK_OR_ID] [--notify SESSION] [--force]`<br>`ding rule 42 body.md --edit-body --base base.md` | Designer | Posts the designer's ruling on ticket #42. Nothing is sent unless the draft's line 1 starts with one of `[rule] signatures`, line 2 with the `[rule] type_label` and one of `[rule] types`, and `check-refs` finds nothing wrong (it takes `--ref`, `--root`, `--tolerance`, `--repo`, `--offline`). With `--reply-to`, it stops and lists the link and first line of every comment that came after the one answered; `--force` posts anyway. Without it, it shows the latest comment's time and first line as a hint. It posts with `gh issue comment` and prints only the comment URL on stdout. `--notify SESSION` then sends `[rule] notify` plus the draft's complete stripped first nonempty line to a Codex session with `ding send`; if that fails, the error says so and the comment stays. `ding` cannot message Claude Code sessions, so `--notify` refuses a `uds:` or `local_` address before posting; tell those with `SendMessage`, using the printed URL. `--edit-body` replaces the ticket body instead: it stops unless the current body equals the `--base` file (line endings and trailing newlines aside), edits with `gh issue edit`, then reads the body back and fails unless it matches the draft byte for byte, ignoring trailing newlines. The line 1 and 2 check applies to comments only. |
 
@@ -494,6 +496,56 @@ ding night close
 
 `close` posts `[night] closed` followed by ` at <time UTC>` for the open orders. If they have expired or are already closed, it prints `no night orders open` and posts nothing. GitHub read failures return nonzero rather than treating the orders as absent. `[night] heading` and `closed` must be nonempty single-line strings; without `[night]`, the English defaults below apply. Changing these words also changes which existing markers can be recognized.
 
+### Repo checks
+
+```bash
+ding check --base origin/main
+ding map
+```
+
+`ding check` needs a `[check]` table in `.dkitchen.toml`; without one it prints how to set it up and exits 2. The table maps each **area** kind to the repo paths that hold that kind of thing:
+
+```toml
+[check]
+library = ["src/mypkg"]
+tools = ["scripts"]
+experiments = ["experiments"]
+tests = ["tests"]
+docs = ["docs"]
+outputs = ["outputs"]
+assets = ["configs", "prompts"]
+vendor = ["third_party"]
+root_files = ["Makefile.local"]     # top-level files allowed beyond the usual names
+ruff = true                         # ruff check and ruff format --check on the whole tree
+imports = true                      # lint-imports with the contracts in pyproject.toml
+commands = [["python", "scripts/check_gpu_ids.py"]]   # the repo's own checks
+```
+
+Paths are relative and inside the repo; a path belongs to one kind only; a file belongs to the longest area path that holds it. Hidden top-level folders such as `.github` are outside the layout rules.
+
+**Layout rules** apply to the files the working tree adds against `--base`: files added by the commits since `--base`, staged or not, and untracked files Git does not ignore. A file that was already on `--base` never fails them, so installing the checks into an older repo does not turn it red.
+
+| Rule | Fails when an added file … |
+| --- | --- |
+| `root-file` | sits at the top level and is neither one of the usual names (`README*`, `LICENSE*`, `COPYING*`, `NOTICE*`, `CHANGELOG*`, `CONTRIBUTING*`, `CODE_OF_CONDUCT*`, `SECURITY*`, `CITATION*`, `AGENTS.md`, `CLAUDE.md`, `GLOSSARY.md`, `GLOSSARY-MAP.md`, `pyproject.toml`, `setup.py`, `setup.cfg`, `MANIFEST.in`, `requirements*.txt`, `*.lock`, `Makefile`, `Dockerfile`, `environment.yml`, `tox.ini`, `noxfile.py`, `conftest.py`) nor in `root_files` |
+| `top-level-dir` | sits in a top-level folder no area names |
+| `no-area` | sits in a folder an area names part of, outside every area path |
+| `ticket-in-path` | has `issue12`, `ticket-12` or the like in its path (any area but vendor) |
+| `version-copy` | is in the library or tools and has a version in its name, such as `_v2` |
+| `code-in-docs` | is a code file in docs or assets |
+| `test-placement` | is a test file (`test_*.py`, `*_test.py`) outside `<tests area>/<package>/test_<behaviour>.py` |
+| `study-layout` | starts a new study folder in experiments that is not snake_case or has no `__init__.py` |
+| `module-docstring` | is a nonempty library `.py` file without a docstring whose first line says something |
+| `output-tracked` | is in an outputs area, so Git tracks an output |
+
+Vendor areas are never checked.
+
+**Whole-tree tools** run from the repo root: `ruff check` and `ruff format --check` with the vendor and outputs areas excluded, and `lint-imports`, each with the settings in `pyproject.toml`. Each can be switched off in `[check]`, for example until a cleanup ticket lands. A tool that is not installed is a failure, not a skip. Each `commands` entry runs from the repo root with `--base <commit>` appended; a nonzero exit fails the check and its output is shown.
+
+**Guard changes.** When this change touches `[check]` or `[merge]` in `.dkitchen.toml`, `[tool.ruff]` or `[tool.importlinter]` in `pyproject.toml`, a file under `.github/workflows/`, or a file a `commands` entry runs, some commit since `--base` must carry a trailer `Guard-change: #<ticket> <reason>`. Installing the checks, when `--base` has no `[check]`, is not a guard change. The trailers found are printed for the reviewer.
+
+`ding check` exits 0 when everything passes, 1 on any problem, and 2 when it cannot run, such as an unknown `--base` or a missing `[check]`. `--json` prints the findings, the guard changes, and the trailers.
+
 ### .dkitchen.toml
 
 Put this file at the repo root to change the kitchen's words. Every key is optional; these are the defaults:
@@ -557,6 +609,10 @@ idle_minutes = 45                    # 0 disables idle-executor wakes
 design_answer_minutes = 30           # 0 disables unanswered-station and PR backstops
 unrouted_wait_minutes = 30           # 0 disables unknown-station wait reminders
 handoff = ["hand to "]               # written right before a station name to hand it work, e.g. ["交"]
+
+[check]                              # repo checks for `ding check` and `ding map`; see Repo checks. Absent by default.
+
+[build]                              # notes the build skills keep for each other; `ding` skips this table
 ```
 
 `[sessions] name` may use `{issue}`, `{name}` (the `--name` text), and `{repo}` (`OWNER/REPO`), with an optional format spec such as `{issue:04d}`. Any other field is an error when the file is read. The `--name` text is filled in as is, so braces in it are kept. `ding new` without `--issue` and `ding rename` use `--name` unchanged.

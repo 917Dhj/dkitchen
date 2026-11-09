@@ -29,7 +29,7 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.6", "import-linter>=2"]
 
 [project.scripts]
 ding = "dkitchen.ding:main"

@@ -1849,6 +1849,17 @@ def main(argv=None) -> int:
     sub.add_argument("--tolerance", type=int, default=0, help="check-refs: lines around a reference that may hold its name")
     sub.add_argument("--repo", help="Repository (default: repo in .dkitchen.toml, then the one gh sees)")
     sub.add_argument("--offline", action="store_true", help="check-refs: do not ask GitHub")
+    sub = commands.add_parser("check", help="Run the repo checks: layout of added files, Ruff, import contracts, "
+                                            "guard changes, and the repo's own checks",
+                              description="Layout rules apply to the files added since --base; Ruff, import-linter "
+                                          "and the [check] commands look at the whole tree. A change to the checks needs a "
+                                          "`Guard-change: #<ticket> <reason>` commit trailer. Areas: library, tools, "
+                                          "experiments, tests, docs, outputs, assets, vendor, set in [check] of "
+                                          ".dkitchen.toml. Exit 0 passed, 1 problems, 2 could not run.")
+    sub.add_argument("--base", default="origin/main", help="Revision to compare with (default: origin/main)")
+    sub.add_argument("--json", action="store_true", help="Print the findings as JSON")
+    sub = commands.add_parser("map", help="List each Python module with the first line of its docstring")
+    sub.add_argument("paths", nargs="*", help="Folders to map (default: the library areas in [check])")
     sub = commands.add_parser("check-refs", help="Check `file:line`, sha256, ticket, PR, and comment references "
                                                  "in a draft comment")
     sub.add_argument("draft", nargs="+", help="Draft comment file; several files are checked one by one and "
@@ -1912,6 +1923,9 @@ def main(argv=None) -> int:
         if args.action == "rule":
             from dkitchen import config, rule
             return rule.rule(args, config.load())
+        if args.action in {"check", "map"}:
+            from dkitchen import check, config
+            return (check.check if args.action == "check" else check.module_map)(args, config.load())
         if args.action == "check-refs":
             from dkitchen import refs
             return refs.check_refs(args)
