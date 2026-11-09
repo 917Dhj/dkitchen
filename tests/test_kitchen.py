@@ -164,14 +164,6 @@ def test_relay_queue_keeps_plain_message_and_interrupt_passes_through(tmp_path, 
     assert sends == [["send", "o/r#42", "--from", "总编排", "--message", text, *tail]]
 
 
-@pytest.mark.parametrize("listed, code", [("待合并：PR#7, PR#9", 0), ("待合并：PR#9", 1), ("", 1)])
-def test_merge_accepts_a_pr_the_executor_lists_as_pending_merge(tmp_path, monkeypatch, capsys, listed, code):
-    loaded = settings(tmp_path, CHINESE.replace("[status]\n", '[status]\npending_merge = "待合并"\n'))
-    status = "状态：进行中\n在等：无\n关键数字：—\n下一步：跑 9B\n" + listed + "\n\nCodex session: x"
-    calls = []
-    monkeypatch.setattr(orchestrate, "call", fake_call([view(), thread_comments(status), (0, ""), view("MERGED")], calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", ticket=42, no_ticket=False), loaded) == code
-    assert ("待合并" in capsys.readouterr().out) == bool(listed)
 
 
 def view(state="OPEN", head="abc123", draft=False, body=""):
@@ -190,93 +182,28 @@ def test_merge_only_at_the_reviewed_head(tmp_path, monkeypatch, capsys, response
     loaded = settings(tmp_path, 'repo = "o/r"')
     calls = []
     monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", ticket=None, no_ticket=True), loaded) == code
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == code
     captured = capsys.readouterr()
     assert message in captured.out + captured.err
     if len(calls) > 1:
         assert calls[1][-2:] == ("--match-head-commit", "abc123")
 
 
-def thread_comments(*bodies):
-    return 0, json.dumps([[{"body": body, "html_url": f"https://c/{index}"} for index, body in enumerate(bodies)]])
 
 
 SESSION = "Codex session: 00000000-0000-4000-8000-000000000001"
-WAITING = f"状态：进行中\n在等：总编排审合PR7；核查核对绑定\n关键数字：1\n下一步：合入后启动\n{SESSION}"
-WITHDRAWN = f"状态: 进行中\n在等: 无\n关键数字: 1\n下一步: 执行者更新PR7\n{SESSION}"
 
 
-@pytest.mark.parametrize("latest, code", [(WAITING, 0), (WITHDRAWN, 1),
-                                          (f"## 进展\n还在改\n{SESSION}", 1),
-                                          (f"状态：完成\n在等：无（总编排已知）\n{SESSION}", 1)])
-def test_merge_needs_the_executor_waiting_on_the_orchestrator(tmp_path, monkeypatch, capsys, latest, code):
-    loaded = settings(tmp_path, CHINESE)
-    calls = []
-    comments = thread_comments(WITHDRAWN, "核查：通过", latest, "总编排：收到", "用户：好")
-    responses = [view(), comments] + ([(0, ""), view("MERGED")] if code == 0 else [])
-    monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", ticket=236, no_ticket=False), loaded) == code
-    captured = capsys.readouterr()
-    assert calls[1][:4] == ("gh", "api", "--paginate", "--slurp")
-    assert calls[1][4] == "repos/o/r/issues/236/comments?per_page=100"
-    assert "#236 latest executor status (https://c/2):" in captured.out
-    if code:
-        assert len(calls) == 2
-        assert "not waiting on 总编排" in captured.err and "Nothing merged" in captured.err
-    else:
-        assert calls[2][:3] == ("gh", "pr", "merge")
-        assert "PR #7 merged as m1" in captured.out
 
 
-@pytest.mark.parametrize("body, tickets, code, message", [
-    ("修 #236 的入口，沿用 #322 的规则。", {236: WAITING, 322: None}, 0, "#236 latest executor status"),
-    ("See https://github.com/o/r/issues/236 and PR #7.", {236: WAITING}, 0, "#236 latest executor status"),
-    ("#236 和 #322", {236: WAITING, 322: WAITING}, 1, "mentioned in it: #236, #322; pass --ticket N"),
-    ("No ticket here; &#39;quoted&#39; and o/r#5 are not references.", {}, 1, "mentioned in it: none"),
-])
-def test_merge_finds_the_one_ticket_with_executor_comments(tmp_path, monkeypatch, capsys, body, tickets, code, message):
-    loaded = settings(tmp_path, CHINESE)
-    calls = []
-    responses = [view(body=body)]
-    responses += [thread_comments(*([latest] if latest else ["总设计：答复"])) for latest in tickets.values()]
-    responses += [(0, ""), view("MERGED")] if code == 0 else []
-    monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", ticket=None, no_ticket=False), loaded) == code
-    captured = capsys.readouterr()
-    assert message in captured.out + captured.err
-    assert [call[4] for call in calls if call[:2] == ("gh", "api")] == [
-        f"repos/o/r/issues/{number}/comments?per_page=100" for number in tickets]
 
 
-CLAUDE = "Claude session: ToM agent person experience record implementation"
 
 
-@pytest.mark.parametrize("bodies, code", [
-    ((f"状态：进行中\n在等：总编排审合PR7\n关键数字：1\n下一步：合入后冒烟\n{CLAUDE}",), 0),
-    ((WAITING, f"状态：进行中\n在等：无\n关键数字：1\n下一步：还在改PR7\n{CLAUDE}"), 1),
-    ((f"状态：完成\n在等：无\n关键数字：1\n下一步：交给执行者\n{CLAUDE}", WAITING), 0),
-])
-def test_merge_reads_claude_and_codex_executors_by_the_latest_comment(tmp_path, monkeypatch, capsys, bodies, code):
-    loaded = settings(tmp_path, CHINESE)
-    responses = [view(), thread_comments("总设计：答复", *bodies)] + ([(0, ""), view("MERGED")] if code == 0 else [])
-    monkeypatch.setattr(orchestrate, "call", fake_call(responses, []))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", ticket=1020, no_ticket=False), loaded) == code
-    assert f"#1020 latest executor status (https://c/{len(bodies)}):" in capsys.readouterr().out
 
 
-def test_merge_refuses_a_ticket_without_executor_comments(tmp_path, monkeypatch, capsys):
-    loaded = settings(tmp_path, CHINESE)
-    monkeypatch.setattr(orchestrate, "call", fake_call([view(), thread_comments("总设计：答复")], []))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", ticket=9, no_ticket=False), loaded) == 1
-    assert "#9 has no executor comment" in capsys.readouterr().err
 
 
-def test_merge_checks_head_and_draft_before_reading_the_ticket(tmp_path, monkeypatch, capsys):
-    loaded = settings(tmp_path, CHINESE)
-    calls = []
-    monkeypatch.setattr(orchestrate, "call", fake_call([view(head="fff999")], calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", ticket=236, no_ticket=False), loaded) == 1
-    assert len(calls) == 1
 
 
 @pytest.mark.parametrize("value", ['"hca-check"', '[1]', '[""]', '["   "]', 'false'])
@@ -312,22 +239,20 @@ def check_responses(runs=(), statuses=(), sha="abc123"):
         ("status", ("success", "failure", "pending", "error"))) for state in states
 ])
 def test_merge_requires_success_on_reviewed_head(tmp_path, monkeypatch, capsys, source, state):
-    loaded = settings(tmp_path, CHINESE + '\n[merge]\nrequired_checks = ["hca-check"]')
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check"]')
     calls = []
-    responses = [view(), thread_comments(WAITING)] + check_responses(
+    responses = [view()] + check_responses(
         runs=[check_run(state)] if source == "run" else [],
         statuses=[commit_status(state)] if source == "status" else [])
     if state == "success":
         responses += [(0, ""), view("MERGED")]
     monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", ticket=236, no_ticket=False), loaded) == (
-        0 if state == "success" else 1)
-    assert calls[1][-1] == "repos/o/r/issues/236/comments?per_page=100"
-    assert calls[2] == ("gh", "api", "--paginate", "--slurp",
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == (0 if state == "success" else 1)
+    assert calls[1] == ("gh", "api", "--paginate", "--slurp",
                         "repos/o/r/commits/abc123/check-runs?filter=latest&per_page=100")
-    assert calls[3] == ("gh", "api", "--paginate", "--slurp", "repos/o/r/commits/abc123/status?per_page=100")
+    assert calls[2] == ("gh", "api", "--paginate", "--slurp", "repos/o/r/commits/abc123/status?per_page=100")
     if state == "success":
-        assert calls[4][-2:] == ("--match-head-commit", "abc123")
+        assert calls[3][-2:] == ("--match-head-commit", "abc123")
     else:
         error = capsys.readouterr().err
         assert "hca-check" in error and "abc123" in error
@@ -338,7 +263,7 @@ def test_merge_requires_success_on_reviewed_head(tmp_path, monkeypatch, capsys, 
             assert "https://checks/1" in error
         else:
             assert "https://statuses/1" in error
-        assert len(calls) == 4
+        assert len(calls) == 3
     assert not responses
 
 
@@ -352,7 +277,7 @@ def test_merge_missing_or_other_commit_checks_do_not_count(tmp_path, monkeypatch
     loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check"]')
     calls = []
     monkeypatch.setattr(orchestrate, "call", fake_call([view()] + check_responses(runs, statuses, sha), calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", no_ticket=True), loaded) == 1
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
     assert "check hca-check has not finished on abc123 (missing)" in capsys.readouterr().err
     assert len(calls) == 3
 
@@ -364,7 +289,7 @@ def test_merge_checks_all_pages_and_both_sources(tmp_path, monkeypatch):
                                  {"sha": "abc123", "statuses": [commit_status(name="deploy")]}])),
                  (0, ""), view("MERGED")]
     monkeypatch.setattr(orchestrate, "call", fake_call(responses, []))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", no_ticket=True), loaded) == 0
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 0
     assert not responses
 
 
@@ -373,7 +298,7 @@ def test_merge_reports_every_failed_required_check_and_duplicate(tmp_path, monke
     calls = []
     responses = [view()] + check_responses([check_run(), check_run("failure")], [commit_status("error", "deploy")])
     monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", no_ticket=True), loaded) == 1
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
     error = capsys.readouterr().err
     assert "hca-check is failure" in error and "deploy is error" in error
     assert "https://checks/1" in error and "https://statuses/1" in error
@@ -389,19 +314,17 @@ def test_merge_refuses_unreadable_check_data(tmp_path, monkeypatch, capsys, resp
     loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check"]')
     calls = []
     monkeypatch.setattr(orchestrate, "call", fake_call([view()] + responses, calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", no_ticket=True), loaded) == 1
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
     assert "cannot read" in capsys.readouterr().err
     assert not any(call[:3] == ("gh", "pr", "merge") for call in calls)
 
 
-@pytest.mark.parametrize("pr, comment", [(view(draft=True), None), (view(head="fff999"), None),
-                                        (view(), WITHDRAWN)])
-def test_merge_existing_gates_run_before_required_checks(tmp_path, monkeypatch, pr, comment):
-    loaded = settings(tmp_path, CHINESE + '\n[merge]\nrequired_checks = ["hca-check"]')
+@pytest.mark.parametrize("pr", [view(draft=True), view(head="fff999")])
+def test_merge_existing_gates_run_before_required_checks(tmp_path, monkeypatch, pr):
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check"]')
     calls = []
-    responses = [pr] + ([thread_comments(comment)] if comment else [])
-    monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", ticket=236), loaded) == 1
+    monkeypatch.setattr(orchestrate, "call", fake_call([pr], calls))
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
     assert not any("/commits/" in argument for call in calls for argument in call)
 
 
@@ -409,7 +332,7 @@ def test_merge_empty_required_checks_keeps_existing_behavior(tmp_path, monkeypat
     loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = []')
     calls = []
     monkeypatch.setattr(orchestrate, "call", fake_call([view(), (0, ""), view("MERGED")], calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc", no_ticket=True), loaded) == 0
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 0
     assert len(calls) == 3 and calls[1][:3] == ("gh", "pr", "merge")
 
 
@@ -418,18 +341,27 @@ def test_merge_help_describes_required_checks(capsys):
         ding.main(["merge", "--help"])
     assert exc.value.code == 0
     help_text = capsys.readouterr().out
-    assert "required_checks" in help_text and "hca-check" in help_text and "no bypass" in help_text
+    assert "required_checks" in help_text and "review_check" in help_text and "no bypass" in help_text
 
 
 @pytest.mark.parametrize("argv, error", [
-    (["merge", "7", "abc", "--ticket", "0"], "--ticket must be a positive issue number"),
-    (["merge", "7", "abc", "--ticket", "3", "--no-ticket"], "not allowed with argument"),
+    (["merge", "7", "abc", "--ticket", "3"], "unrecognized arguments: --ticket"),
+    (["merge", "7", "abc", "--no-ticket"], "unrecognized arguments: --no-ticket"),
 ])
-def test_merge_ticket_options(capsys, argv, error):
+def test_merge_has_no_ticket_gate_options(capsys, argv, error):
     with pytest.raises(SystemExit) as exc:
         ding.main(argv)
     assert exc.value.code == 2
     assert error in capsys.readouterr().err
+
+
+def test_merge_command_reaches_the_gate(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, 'repo = "o/r"')
+    monkeypatch.setattr(config, "load", lambda: loaded)
+    calls = []
+    monkeypatch.setattr(orchestrate, "call", fake_call([view(), (0, ""), view("MERGED")], calls))
+    assert ding.main(["merge", "7", "abc"]) == 0
+    assert calls[1][:3] == ("gh", "pr", "merge")
 
 
 def test_log_needs_a_ticket(tmp_path, capsys):
@@ -1944,6 +1876,8 @@ def routed_settings(tmp_path):
 signatures = ["总设计：", "总设计（训练）："]
 [stations.aliases]
 "总设计（训练）" = ["训练设计"]
+[watch]
+handoff = ["交"]
 ''')
 
 
@@ -2453,7 +2387,8 @@ def test_review_posts_comment_and_status_on_full_head(tmp_path, monkeypatch, cap
     monkeypatch.setattr(orchestrate, 'call', fake_call([
         (0, json.dumps({'headRefOid': sha})), (0, '{"html_url":"https://review"}'), (0, '{}')], calls))
     assert ding.main(['review', '7', sha[:8], verdict, '--body-file', str(body)]) == 0
-    assert f'审过 {sha[:8]}：' in calls[1][-1] and 'Reviewed tests.' in calls[1][-1]
+    line = 'pass' if verdict == 'pass' else 'changes requested, see below'
+    assert calls[1][-1].startswith(f'body=Reviewed {sha[:8]}: {line}\n\n') and 'Reviewed tests.' in calls[1][-1]
     assert calls[2] == ('gh', 'api', f'repos/o/r/statuses/{sha}', '-f', f'state={expected}',
                         '-f', 'context=review', '-f', 'target_url=https://review')
 
@@ -2501,9 +2436,8 @@ def test_review_gate_needs_no_executor_comment_and_expires_on_push(tmp_path, mon
     if head == 'abc123':
         responses += [(0, ''), view('MERGED')]
     monkeypatch.setattr(orchestrate, 'call', fake_call(responses, calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha=head, ticket=42, no_ticket=False), loaded) == (head != 'abc123')
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha=head), loaded) == (head != 'abc123')
     assert not any('/issues/' in str(call) for call in calls)
-    assert 'ignored' in capsys.readouterr().out
 
 
 def test_merge_refuses_wrong_base_without_review_check(tmp_path, monkeypatch, capsys):
@@ -2511,7 +2445,7 @@ def test_merge_refuses_wrong_base_without_review_check(tmp_path, monkeypatch, ca
     pr = json.loads(view()[1]) | {'baseRefName': 'stacked'}
     calls = []
     monkeypatch.setattr(orchestrate, 'call', fake_call([(0, json.dumps(pr))], calls))
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha='abc', no_ticket=True), loaded) == 1
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha='abc'), loaded) == 1
     assert 'stacked, not repository default branch main' in capsys.readouterr().err
     assert len(calls) == 1
 
@@ -2697,7 +2631,7 @@ def test_merge_refuses_missing_default_branch(tmp_path, monkeypatch, payload):
         calls.append(args)
         return SimpleNamespace(returncode=0, stdout=responses.pop(0), stderr='')
     monkeypatch.setattr(orchestrate, 'call', call)
-    assert orchestrate.merge(SimpleNamespace(pr=7, sha='abc', no_ticket=True), loaded) == 1
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha='abc'), loaded) == 1
     assert calls[-1] == ('gh', 'api', 'repos/o/r')
 
 
@@ -2785,4 +2719,44 @@ def test_waits_excludes_drafts_except_failed_review(review_pr, capsys, review):
 @pytest.mark.parametrize('enabled', [False, True])
 def test_review_comment_is_verifier_only_with_review_check(tmp_path, enabled):
     loaded = settings(tmp_path, 'repo="o/r"\n[merge]\nreview_check=' + ('"review"' if enabled else '""'))
-    assert watch.role('审过 e7870cd7：通过\n\nchecked', loaded) == (loaded.stations.verifier if enabled else loaded.stations.user)
+    expected = loaded.stations.verifier if enabled else loaded.stations.user
+    assert watch.role('Reviewed e7870cd7: pass\n\nchecked', loaded) == expected
+    assert watch.role('Reviewed e7870cd7: changes requested, see below\n\nfindings', loaded) == expected
+    assert watch.role('Reviewed it: pass', loaded) == loaded.stations.user
+
+
+def test_review_lines_follow_the_configured_wording(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, 'repo="o/r"\n[merge]\nreview_check="review"\n'
+                                'review_pass="审过 {sha}：通过"\nreview_changes="审过 {sha}：有出入，见下"')
+    assert watch.role('审过 e7870cd7：通过\n\nchecked', loaded) == loaded.stations.verifier
+    assert watch.role('审过 e7870cd7:有出入,见下', loaded) == loaded.stations.verifier
+    assert watch.role('Reviewed e7870cd7: pass', loaded) == loaded.stations.user
+    body = tmp_path / 'review.md'
+    body.write_text('details')
+    calls = []
+    monkeypatch.setattr(orchestrate, 'call', fake_call([
+        (0, '{"headRefOid":"abcdef0123"}'), (0, '{"html_url":"https://review"}'), (0, '{}')], calls))
+    assert orchestrate.review(SimpleNamespace(pr=7, sha='abcdef01', verdict='changes', body_file=body), loaded) == 0
+    assert calls[1][-1] == 'body=审过 abcdef01：有出入，见下\n\ndetails'
+
+
+@pytest.mark.parametrize('text', ['review_pass = "Reviewed: pass"', 'review_pass = "{sha}"',
+                                  'review_changes = "a {sha} {sha}"', 'review_pass = "a\\n{sha}"', 'review_pass = 1'])
+def test_bad_review_lines_are_refused(tmp_path, text):
+    with pytest.raises(ValueError, match="must be one line holding {sha} once"):
+        settings(tmp_path, '[merge]\n' + text)
+
+
+def test_handoff_words_default_to_english_and_are_configurable(tmp_path):
+    english = settings(tmp_path, 'repo="o/r"')
+    assert watch.station_wakes("Orchestrator: done\nhand to Designer", "Designer", english)
+    assert not watch.station_wakes("Orchestrator: done\n交Designer", "Designer", english)
+    chinese = settings(tmp_path, 'repo="o/r"\n[watch]\nhandoff = ["交"]')
+    assert watch.station_wakes("Orchestrator: done\n交Designer", "Designer", chinese)
+    with pytest.raises(ValueError, match="handoff must be a nonempty list"):
+        settings(tmp_path, '[watch]\nhandoff = []')
+
+
+def test_pending_merge_key_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="unknown keys in \\[status\\]: pending_merge"):
+        settings(tmp_path, '[status]\npending_merge = "Pending merge"')

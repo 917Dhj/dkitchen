@@ -23,7 +23,6 @@ Every key is optional. The defaults match the English templates in kitchen/:
     blocked = "blocked"
     done = "done"
     none = "none"                        # a Waiting on value naming nobody
-    pending_merge = "Pending merge"      # optional field listing PRs ready to merge, e.g. "PR#12, PR#14"
 
     [labels]
     prefix = "status:"
@@ -54,10 +53,13 @@ Every key is optional. The defaults match the English templates in kitchen/:
     idle_minutes = 45                    # 0 disables idle-executor wakes
     design_answer_minutes = 30           # 0 disables unanswered-station and PR backstops
     unrouted_wait_minutes = 30           # 0 disables unknown-station wait reminders
+    handoff = ["hand to "]               # written right before a station name to hand it work, e.g. ["交"]
 
     [merge]
     required_checks = []                # e.g. ["hca-check"]; only success permits merging
-    review_check = ""                   # e.g. "review"; replaces the legacy ticket gate
+    review_check = ""                   # e.g. "review": the commit status `ding review` writes and `ding merge` requires
+    review_pass = "Reviewed {sha}: pass"                                 # first line of a passing review
+    review_changes = "Reviewed {sha}: changes requested, see below"      # first line of a failing review
 """
 from __future__ import annotations
 
@@ -102,7 +104,6 @@ class Status:
     blocked: str = "blocked"
     done: str = "done"
     none: str = "none"
-    pending_merge: str = "Pending merge"
 
 
 @dataclass(frozen=True)
@@ -181,12 +182,15 @@ class Watch:
     idle_minutes: float = 45
     design_answer_minutes: float = 30
     unrouted_wait_minutes: float = 30
+    handoff: tuple[str, ...] = ("hand to ",)
 
 
 @dataclass(frozen=True)
 class Merge:
     required_checks: tuple[str, ...] = ()
     review_check: str = ""
+    review_pass: str = "Reviewed {sha}: pass"
+    review_changes: str = "Reviewed {sha}: changes requested, see below"
 
 
 SESSION_FIELDS = ("issue", "name", "repo")
@@ -268,6 +272,14 @@ def section(cls, values: object, name: str):
         elif key == "review_check":
             if not isinstance(value, str) or (value and not value.strip()):
                 raise ValueError(f"{FILE}: [merge] review_check must be a check name or an empty string")
+        elif key == "handoff":
+            if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
+                raise ValueError(f"{FILE}: [watch] handoff must be a nonempty list of nonempty words")
+            value = tuple(value)
+        elif key in {"review_pass", "review_changes"}:
+            if (not isinstance(value, str) or value.count("{sha}") != 1 or "\n" in value or "\r" in value
+                    or not value.replace("{sha}", "").strip()):
+                raise ValueError(f"{FILE}: [merge] {key} must be one line holding {{sha}} once")
         elif key == "preflight":
             if (not isinstance(value, list) or not value
                     or not all(isinstance(item, str) and "\0" not in item for item in value)
