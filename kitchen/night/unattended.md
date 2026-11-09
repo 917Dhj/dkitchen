@@ -10,7 +10,7 @@ Night orders count as the user's own words, within the scope of the user's reply
 
 When asked for night orders, each designer replies under its signature within 10 minutes. It gives approvals with their scope and limits, rules of the form "if <observable>, then <action>; otherwise <action>", or "park until morning", plus its hard stops. A line whose designer has not replied by the deadline is parked.
 
-Before writing `waiting on user`, or stopping to wait for the user, **every station runs `ding night show`**. If an open order covers the case, it acts within that order's scope and limits and names the order number in its comment. Otherwise it waits for the user. An order ends when closed or when its end time passes. During the night, every `ding log --item` the orchestrator writes names the order number it relied on, or the standing approval covering the action.
+Before writing `waiting on user`, or stopping to wait for the user, **every role runs `ding night show`**. If an open order covers the case, it acts within that order's scope and limits and names the order number in its comment. Otherwise it waits for the user. An order ends when closed or when its end time passes. During the night, every `ding log --item` the orchestrator writes names the order number it relied on, or the standing approval covering the action.
 
 Night orders never lift the hard stops: changing the goal, a dataset, the experimental conditions, or decision thresholds set in advance; touching a held-out test set; changing model-visible text; top-ups; runaway spend. <!-- fill: rewrite this list in the repo's own terms when it is not a research repo. -->
 

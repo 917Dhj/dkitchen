@@ -1,6 +1,6 @@
 # Relaying and signatures
 
-Read this before messaging another session. Stations and their duties are in [roles.md](roles.md), and `ding` itself in [messaging.md](messaging.md).
+Read this before messaging another session. Roles and their duties are in [roles.md](roles.md), and `ding` itself in [messaging.md](messaging.md).
 
 ## Relaying
 
@@ -16,11 +16,11 @@ The orchestrator, designer, and verifier message each other directly, without as
 
 ## Signatures
 
-All stations post from one GitHub account, so comments are told apart by how they are written, which is also how `ding watch` tells who wrote what:
+All roles post from one GitHub account, so comments are told apart by how they are written, which is also how `ding watch` tells who wrote what:
 
 - Executor comments carry a `Codex session:` line, or a `Claude session:` line when a Claude Code session is the executor.
-- The designer, verifier, and orchestrator start the first line with their station name: `Designer:`, `## Verifier:`, `Orchestrator:`.
+- The designer, verifier, and orchestrator start the first line with their role name: `Designer:`, `## Verifier:`, `Orchestrator:`.
 - A PR review comment starts with the line `ding review` writes.
-- Everything else is the user's. The user's comments never start with a station name.
+- Everything else is the user's. The user's comments never start with a role name.
 
-Station names, the signature separator, status fields and words, and the log ticket's number live in the repo's `.dkitchen.toml`, which `ding` reads. When you change this wording, change the docs and that file together.
+Role names, the signature separator, status fields and words, and the log ticket's number live in the repo's `.dkitchen.toml`, which `ding` reads. When you change this wording, change the docs and that file together.

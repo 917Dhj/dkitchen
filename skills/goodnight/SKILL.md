@@ -8,13 +8,13 @@ disable-model-invocation: true
 
 The user is about to be away for several hours, usually overnight. Your job is to write **night orders**: the captain's orders for the watch. They list what the kitchen may do without waking anyone, and when to stop. A night where a run waits on the user while cards sit idle is the failure this skill exists to prevent. Such a wait usually comes from something the user would have approved in a word, if anyone had asked before they left.
 
-The orchestrator runs this skill, because the orchestrator is the station that stops during the night. It schedules cards, starts services and releases runs. The designers own their lines' technical calls. You gather their stops, add your own, and give the user one list.
+The orchestrator runs this skill, because the orchestrator is the role that stops during the night. It schedules cards, starts services and releases runs. The designers own their lines' technical calls. You gather their stops, add your own, and give the user one list.
 
-Words in this file follow the repo's vocabulary in `.dkitchen.toml` and its `docs/agents/` rules. Read "designer" as every designer station the repo has, for example a general designer and a training designer.
+Words in this file follow the repo's vocabulary in `.dkitchen.toml` and its `docs/agents/` rules. Read "designer" as every designer role the repo has, for example a general designer and a training designer.
 
 ## 1. Ask the designers
 
-Send this question to every designer station now, before anything else, so their answers arrive while you work. Use the repo's messaging, as in `docs/agents/messaging.md`. Translate the message into the repo's working language, keeping its meaning:
+Send this question to every designer role now, before anything else, so their answers arrive while you work. Use the repo's messaging, as in `docs/agents/messaging.md`. Translate the message into the repo's working language, keeping its meaning:
 
 > Night orders: the user goes offline for about <N> hours, until <time UTC>. For your line over that window, list every point where work would stop to wait on the user. For each point, give one of these:
 > (a) the approval you want, with its scope (spend, card-hours, service, endpoint);
@@ -55,7 +55,7 @@ Done when every running job and every ready ticket reaches one of two ends withi
 Give every stop exactly one disposition:
 
 - **Approve**: what, and the limit, for example card-hours, ¥ or $, a host, or a service.
-- **Rule**: "if <observable>, then <action>; otherwise <action>". The observable is something a station can read without judgment, such as an exit code, a gate in `summary.json`, or a count.
+- **Rule**: "if <observable>, then <action>; otherwise <action>". The observable is something a role can read without judgment, such as an exit code, a gate in `summary.json`, or a count.
 - **Park**: it waits for the morning, and the user knows that now.
 
 Then list the **hard stops**: things that halt work whatever the orders say. Start from the repo's rules for what the user decides. Typical hard stops are changing the goal, a dataset, conditions or decision thresholds, touching a held-out test set, changing model-visible text, top-ups, and runaway spend. Add the designers' lists.

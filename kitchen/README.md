@@ -9,9 +9,9 @@ Each build skill installs one folder. [render.py](render.py) renders a folder wi
 | Template | Installed by | Installed as | What it covers |
 | --- | --- | --- | --- |
 | [agents-block.md](agents-block.md) | every build skill | blocks in `AGENTS.md` and `CLAUDE.md` | The pointers every session reads, for the files installed |
-| [team/roles.md](team/roles.md) | `build-team` | `docs/agents/roles.md` | Stations, design lines, who decides what, the verifier, known situations, results, designer replies, asking the user |
+| [team/roles.md](team/roles.md) | `build-team` | `docs/agents/roles.md` | Roles, design lines, who decides what, the verifier, known situations, results, designer replies, asking the user |
 | [team/relaying.md](team/relaying.md) | `build-team` | `docs/agents/relaying.md` | Messaging another session, and comment signatures |
-| [team/watch.md](team/watch.md) | `build-team` | `docs/agents/watch.md` | Each station's `ding watch`, and what wakes it |
+| [team/watch.md](team/watch.md) | `build-team` | `docs/agents/watch.md` | Each role's `ding watch`, and what wakes it |
 | [team/reviewing.md](team/reviewing.md) | `build-team` | `docs/agents/reviewing.md` | Handing over, reviewing, and merging PRs |
 | [team/issue-tracker.md](team/issue-tracker.md) | `build-team` | `docs/agents/issue-tracker.md` | The ticket layout, executor comments, the status block, labels, result reports |
 | [team/messaging.md](team/messaging.md) | `build-team` | `docs/agents/messaging.md` | Messaging sessions with `ding` |
@@ -49,17 +49,17 @@ The rules and the `ding` commands share one vocabulary. The defaults are below. 
 
 | Word | Default | Read by |
 | --- | --- | --- |
-| Station names | Orchestrator, Designer, Verifier, Executor | Everyone |
+| Role names | Orchestrator, Designer, Verifier, Executor | Everyone |
 | Signatures | A comment's first line starts with `Orchestrator:`, `Designer:`, or `Verifier:` (Markdown heading marks allowed). Executor comments carry a `Codex session:` line (`Claude session:` for a Claude Code executor). Anything else is the user's. | `ding watch`, `ding relay`, `ding log` |
 | Owner line | `Codex owner: <session id>` | `ding` targets |
 | Status fields | `Status`, `Waiting on`, `Key numbers`, `Next` | `ding board --status`, `ding watch` |
 | Status values | `in progress`, `waiting on design`, `waiting on user`, `blocked`, `done` | `ding watch` |
 | Nobody to wait on | `none` | `ding watch` |
-| Handing to a station | `hand to <station>`, also `@<station>` | `ding watch --for` |
+| Handing to a role | `hand to <role>`, also `@<role>` | `ding watch --for` |
 | Designer reply type | `Type: actionable`, `Type: proposal, awaiting user`, `Type: record` | Orchestrator, executors, `ding rule` |
 | Review lines | `Reviewed <sha>: pass`, `Reviewed <sha>: changes requested, see below` | `ding review`, `ding watch` |
 | Status labels | `status:awaiting-design`, `status:awaiting-user`, `status:blocked`, `status:done` | `ding watch`, `gh issue list` |
-| Night-order markers | `Orchestrator: user decision (night orders`, `Orchestrator: night orders closed` | `ding night`, all stations |
+| Night-order markers | `Orchestrator: user decision (night orders`, `Orchestrator: night orders closed` | `ding night`, all roles |
 
 ## Tools the rules call
 

@@ -1,6 +1,6 @@
 # Reviewing and merging PRs
 
-Each PR has one reviewer: the verifier, unless the ticket names another station. Then the orchestrator labels the PR `review:<station>`, and that station's watch picks it up.
+Each PR has one reviewer: the verifier, unless the ticket names another role. Then the orchestrator labels the PR `review:<role>`, and that role's watch picks it up.
 
 ## Handing over: the executor
 
@@ -10,7 +10,7 @@ Open PRs as drafts. Before marking one ready, run `scripts/review_pr.py <PR> [te
 
 ## Reviewing: the reviewer
 
-Publish the verdict with `ding review <PR> <sha> pass|changes --body-file <file>`. It posts the review comment and writes the review status on that exact commit. When the HEAD moves, read the new commits and publish again, even when the only change is a merge from main. A station taking over as reviewer inherits the verdicts already published rather than reviewing again.
+Publish the verdict with `ding review <PR> <sha> pass|changes --body-file <file>`. It posts the review comment and writes the review status on that exact commit. When the HEAD moves, read the new commits and publish again, even when the only change is a merge from main. A role taking over as reviewer inherits the verdicts already published rather than reviewing again.
 
 Run the full test suite only when the change crosses packages, such as a change to a shared interface; otherwise run the tests the change touches.<!-- module:model-text --> When the ticket gives prompt text, also run `scripts/check_prompt_in_issue.py` ([model-text.md](model-text.md)).<!-- /module:model-text -->
 

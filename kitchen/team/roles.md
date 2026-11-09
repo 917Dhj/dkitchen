@@ -1,12 +1,12 @@
-# Stations
+# Roles
 
 Read this once at session start. Before messaging another session, read [relaying.md](relaying.md).
 
 ## Current sessions
 
-When a session is replaced, edit only this table. Everywhere else, write the station, never a session name.
+When a session is replaced, edit only this table. Everywhere else, write the role, never a session name.
 
-| Station | Session name |
+| Role | Session name |
 | --- | --- |
 | Orchestrator | (not yet opened) |
 | Designer | (not yet opened) |
@@ -21,13 +21,13 @@ When a session is replaced, edit only this table. Everywhere else, write the sta
 
 ## Design lines
 
-<!-- fill: remove this section when the kitchen has one designer. Otherwise, for each extra design line: its station name and signature (also in `.dkitchen.toml`), which tickets are its own (a parent ticket and everything under it, or a `Design: <line>` second line), what it decides, and what it asks the other lines for. -->
+<!-- fill: remove this section when the kitchen has one designer. Otherwise, for each extra design line: its role name and signature (also in `.dkitchen.toml`), which tickets are its own (a parent ticket and everything under it, or a `Design: <line>` second line), what it decides, and what it asks the other lines for. -->
 
 Where these rules say "designer", the designer line that owns the ticket acts. Each line signs with its own name and runs its own watch. A line that needs a change in another line's area asks that line and makes no change itself. When two lines disagree, both views stay on the ticket for the user.
 
 ## Who owns what
 
-**The user decides** the research direction, how datasets are used, and what the paper claims<!-- module:run-budgets -->; also each ticket's budget, approved once, a change of model or endpoint, and service starts ([run-budgets.md](run-budgets.md))<!-- /module:run-budgets -->. On these, other stations propose and wait for the user, as in [Asking the user](#asking-the-user). An approval counts only in the user's own words; no station can produce one.
+**The user decides** the research direction, how datasets are used, and what the paper claims<!-- module:run-budgets -->; also each ticket's budget, approved once, a change of model or endpoint, and service starts ([run-budgets.md](run-budgets.md))<!-- /module:run-budgets -->. On these, other roles propose and wait for the user, as in [Asking the user](#asking-the-user). An approval counts only in the user's own words; no role can produce one.
 
 Everything else goes to its owner below. Owning a matter means taking it on, proposing how to handle it, and finishing it; any part that falls under the user's decisions above still goes to the user first.
 
@@ -110,8 +110,8 @@ Waiting for the user: changing the goal, the dataset, or experimental conditions
 
 The orchestrator and the designer ask the user. The verifier and executors write what needs deciding, the options, and their recommendation on the ticket, and one of those two brings it to the user.
 
-- Before asking, read the ticket for a decision the user already made. When you ask, leave one line on the ticket, "Asked the user: <question>", so the other station does not ask again.
-- Whichever session the user answers in pastes the user's words verbatim on the ticket, with the first line `<station>: user decision`, such as `Orchestrator: user decision`. Add no requirement the ticket lacks. Then tell the other station "#N user decided, see the ticket". That comment counts as the user's own approval; relay it to the executor as in [relaying.md](relaying.md).
+- Before asking, read the ticket for a decision the user already made. When you ask, leave one line on the ticket, "Asked the user: <question>", so the other role does not ask again.
+- Whichever session the user answers in pastes the user's words verbatim on the ticket, with the first line `<role>: user decision`, such as `Orchestrator: user decision`. Add no requirement the ticket lacks. Then tell the other role "#N user decided, see the ticket". That comment counts as the user's own approval; relay it to the executor as in [relaying.md](relaying.md).
 - When the user answers a question in another session, that session pastes the answer on the ticket the same way.
 - Before acting on an answer, check the ticket for a newer user decision. When two disagree, bring both to the user rather than acting on the older one.
 - Whoever posts the user's decision removes `status:awaiting-user` from the ticket.
