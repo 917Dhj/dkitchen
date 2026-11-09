@@ -19,6 +19,7 @@
     "./skills/setup-dkitchen",
     "./skills/build-team",
     "./skills/build-repo",
+    "./skills/build-runner",
     "./skills/build-night",
     "./skills/write-ticket",
     "./skills/shift-change",

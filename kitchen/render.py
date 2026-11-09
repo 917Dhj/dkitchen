@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Render kitchen templates into a repo's rule folder.
 
-Usage: render.py --templates team[,repo,night] [--modules run-budgets,model-text] --out docs/agents [--kitchen DIR]
+Usage: render.py --templates team[,repo,runner,night] [--modules run-budgets,model-text] --out docs/agents [--kitchen DIR]
 
-Each build skill renders its own templates: `team` for build-team, `repo` for build-repo, `night` for build-night. Writes each chosen
-template, plus the chosen modules' files, into --out, keeping each chosen module's marked text and dropping the
-others', with every module marker removed. Then prints the AGENTS.md and CLAUDE.md pointer blocks, keeping only the
-pointers whose `docs/agents/` file exists in --out, so the blocks always match what is installed, whichever skill
-ran last. `<!-- fill: … -->` gaps are left in place for the skill to fill.
+Each build skill renders its own templates: `team` for build-team, `repo` for build-repo, `runner` for build-runner,
+`night` for build-night. Writes each chosen template, plus the chosen modules' files, into --out, keeping each
+chosen module's marked text and dropping the others', with every module marker removed. Then prints the AGENTS.md
+and CLAUDE.md pointer blocks, keeping only the pointers whose `docs/agents/` file exists in --out, so the blocks
+always match what is installed, whichever skill ran last. `<!-- fill: … -->` gaps are left in place for the skill to
+fill.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ import sys
 TEMPLATES = {"team": ("roles.md", "relaying.md", "watch.md", "reviewing.md", "issue-tracker.md", "messaging.md",
                       "long-running-jobs.md"),
              "repo": ("code.md",),
+             "runner": ("runner.md",),
              "night": ("unattended.md",)}
 MODULES = {"run-budgets": ("team", "run-budgets.md"), "model-text": ("team", "model-text.md")}
 SECTION = re.compile(r"<!-- module:([\w-]+) -->(.*?)<!-- /module:\1 -->", re.S)

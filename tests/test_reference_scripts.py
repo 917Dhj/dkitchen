@@ -122,7 +122,7 @@ def test_render_keeps_chosen_modules_and_leaves_no_markers(tmp_path):
 
 
 @pytest.mark.parametrize("templates, modules", [("team", ""), ("team,night", "run-budgets,model-text"),
-                                                ("team,night", "")])
+                                                ("team,night", ""), ("team,repo,runner", "")])
 def test_rendered_kitchen_has_no_markers_and_no_broken_links(tmp_path, templates, modules):
     import re
     out = tmp_path / "docs/agents"
@@ -178,7 +178,7 @@ def test_plugin_lists_every_skill_under_its_own_name():
 def test_rendering_every_folder_installs_every_template_once(tmp_path):
     import re
     out = tmp_path / "docs/agents"
-    result = subprocess.run([sys.executable, str(RENDER), "--templates", "team,repo,night", "--modules", "run-budgets,model-text",
+    result = subprocess.run([sys.executable, str(RENDER), "--templates", "team,repo,runner,night", "--modules", "run-budgets,model-text",
                              "--out", str(out)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     templates = sorted(path.name for path in ROOT.glob("kitchen/*/*.md"))
@@ -198,6 +198,9 @@ def test_pointer_blocks_follow_the_installed_files(tmp_path):
     assert team.returncode == 0 and "unattended.md" not in team.stdout and "watch.md" in team.stdout
     night = subprocess.run([sys.executable, str(RENDER), "--templates", "night", "--out", str(out)], capture_output=True, text=True)
     assert night.returncode == 0 and "unattended.md#night-orders" in night.stdout and "roles.md" in night.stdout
+    assert "runner.md" not in night.stdout
+    runner = subprocess.run([sys.executable, str(RENDER), "--templates", "runner", "--out", str(out)], capture_output=True, text=True)
+    assert runner.returncode == 0 and "docs/agents/runner.md" in runner.stdout and "unattended.md" in runner.stdout
     alone = subprocess.run([sys.executable, str(RENDER), "--templates", "team", "--modules", "nope", "--out", str(out)],
                            capture_output=True, text=True)
     assert alone.returncode == 2 and "unknown modules" in alone.stderr

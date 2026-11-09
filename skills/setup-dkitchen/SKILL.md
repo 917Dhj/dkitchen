@@ -15,8 +15,8 @@ Shared install steps, such as prerequisites, language, rendering, and pointer bl
 Read the repo's starting state; assume nothing.
 
 - **Prerequisites**: each one in [Installing](../../kitchen/README.md#installing).
-- **Existing setup**: `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `docs/agents/`, `.dkitchen.toml`, `.claude/settings.json`. Note which build skills already ran: `docs/agents/roles.md` for `build-team`, `docs/agents/code.md` for `build-repo`, `docs/agents/unattended.md` for `build-night`.
-- **The work**: the README, the main code, how tests run, and whether there are long jobs, several parallel workstreams, or a user who wants progress while away.
+- **Existing setup**: `AGENTS.md`, `CLAUDE.md`, `.claude/CLAUDE.md`, `docs/agents/`, `.dkitchen.toml`, `.claude/settings.json`. Note which build skills already ran: `docs/agents/roles.md` for `build-team`, `docs/agents/code.md` for `build-repo`, `docs/agents/runner.md` for `build-runner`, `docs/agents/unattended.md` for `build-night`.
+- **The work**: the README, the main code, how tests run, whether scripts loop over items, and whether there are long jobs, several parallel workstreams, or a user who wants progress while away.
 - **Language**: the language the user writes to you in, and the language of the repo's docs.
 
 Done when you can name, with evidence, each prerequisite's state, which build skills already ran, and a recommendation for each need in step 3.
@@ -37,6 +37,7 @@ One question at a time. Lead each with your recommendation so the user can accep
 | --- | --- | --- |
 | A team of agents: stations, tickets, PR review | Always yes; every other part builds on it | [build-team](../build-team/SKILL.md) |
 | Code the agents write and change | Yes for any repo with code the agents change; the reference checks need Python | [build-repo](../build-repo/SKILL.md) |
+| Work done item by item: evaluations, batch inference, data processing | Yes when the repo has scripts that loop over items; needs `build-repo` | [build-runner](../build-runner/SKILL.md) |
 | Work that keeps moving while the user is away | Yes when the repo has long jobs or several parallel workstreams, or the user asks for it | [build-night](../build-night/SKILL.md) |
 
 Done when the language is settled and every need has an answer.

@@ -56,6 +56,40 @@ _Avoid_: Category, folder type, zone
 A change to a check, its configuration, or CI, which must say why in a `Guard-change:` commit trailer.
 _Avoid_: Check tweak
 
+## Running experiments
+
+**Runner**:
+The one entry point a repo runs its per-item batch work through, given a spec.
+_Avoid_: Harness, pipeline
+
+**Spec**:
+The complete description of a run: its items, arms, parameters, services, concurrency, and output folder.
+_Avoid_: Config (that is `.dkitchen.toml`)
+
+**Run**:
+Everything one spec writes into one output folder, possibly over several jobs as it is resumed.
+_Avoid_: Job (a job is one launched process)
+
+**Item**:
+One unit of work in a run, with a unique id.
+_Avoid_: Sample, question
+
+**Arm**:
+One variant of the work applied to the same items, such as a task function with its parameters.
+_Avoid_: Group, condition
+
+**Task function**:
+The function a spec names to do one item of one arm.
+_Avoid_: Plugin (Claude Code uses that word)
+
+**Run identity**:
+What makes two jobs the same run: the spec's configuration and the content of its inputs, not the code.
+_Avoid_: Run hash, fingerprint
+
+**Segment**:
+The stretch of a run done on one code commit.
+_Avoid_: Phase, stage
+
 ## Improving the kitchen
 
 **Improvement pass**:
