@@ -64,13 +64,6 @@ def test_added_path_with_spaces_and_patch_tab():
     assert review_pr.added_line_warnings(diff) == ['has space.py:1: hard-coded absolute path "/tmp/new"']
 
 
-def test_current_frozen_files_keep_all_artifact_names():
-    records = [{"name": "first", "status": "current", "depends_on": ["shared.py"]},
-               {"name": "second", "status": "current", "depends_on": ["shared.py", "only.py"]},
-               {"name": "old", "status": "superseded", "depends_on": ["old.py"]}]
-    assert review_pr.frozen_dependencies(records) == {"shared.py": ["first", "second"], "only.py": ["second"]}
-
-
 def test_removed_names_still_imported_are_reported():
     before = "DATA = 1\nKEPT = 2\ndef gone(): pass\n"
     removed = {"pkg.paths": review_pr.top_level_names(before) - review_pr.top_level_names("KEPT = 2\n"), "pkg.dead": None}
@@ -113,17 +106,17 @@ def test_render_keeps_chosen_modules_and_leaves_no_markers(tmp_path):
     spec = spec_from_file_location("render", RENDER)
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
-    text = ("Lead.\n\n<!-- module:artifacts -->\n- frozen\n<!-- /module:artifacts -->\n- always\n"
+    text = ("Lead.\n\n<!-- module:run-budgets -->\n- budget\n<!-- /module:run-budgets -->\n- always\n"
             "Stop when<!-- module:model-text --> text changes,<!-- /module:model-text --> or scope changes.\n")
-    assert module.render(text, {"artifacts"}) == "Lead.\n\n- frozen\n- always\nStop when or scope changes.\n"
+    assert module.render(text, {"run-budgets"}) == "Lead.\n\n- budget\n- always\nStop when or scope changes.\n"
     assert module.render(text, {"model-text"}) == "Lead.\n\n- always\nStop when text changes, or scope changes.\n"
     with pytest.raises(ValueError, match="unknown module"):
         module.render("<!-- module:nope -->x<!-- /module:nope -->", set())
     with pytest.raises(ValueError, match="unbalanced"):
-        module.render("<!-- module:artifacts -->x", {"artifacts"})
+        module.render("<!-- module:run-budgets -->x", {"run-budgets"})
 
 
-@pytest.mark.parametrize("templates, modules", [("team", ""), ("team,night", "run-budgets,model-text,artifacts"),
+@pytest.mark.parametrize("templates, modules", [("team", ""), ("team,night", "run-budgets,model-text"),
                                                 ("team,night", "")])
 def test_rendered_kitchen_has_no_markers_and_no_broken_links(tmp_path, templates, modules):
     import re

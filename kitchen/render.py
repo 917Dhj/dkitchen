@@ -16,17 +16,16 @@ from pathlib import Path
 import re
 import sys
 
-TEMPLATES = {"team": ("roles.md", "issue-tracker.md", "messaging.md", "long-running-jobs.md"),
+TEMPLATES = {"team": ("roles.md", "relaying.md", "watch.md", "reviewing.md", "issue-tracker.md", "messaging.md",
+                      "long-running-jobs.md"),
              "night": ("unattended.md",)}
-MODULES = {"run-budgets": ("team", "run-budgets.md"), "model-text": ("team", "model-text.md"),
-           "artifacts": ("team", "artifacts.md")}
-LINKED = {"unattended": "night"}   # marker names that follow a template set rather than a module
+MODULES = {"run-budgets": ("team", "run-budgets.md"), "model-text": ("team", "model-text.md")}
 SECTION = re.compile(r"<!-- module:([\w-]+) -->(.*?)<!-- /module:\1 -->", re.S)
 POINTER = re.compile(r"\(docs/agents/([\w.-]+\.md)(?:#[\w-]+)?\)")
 
 
 def render(text: str, modules: set[str]) -> str:
-    unknown = {name for name, _ in SECTION.findall(text)} - set(MODULES) - set(LINKED)
+    unknown = {name for name, _ in SECTION.findall(text)} - set(MODULES)
     if unknown:
         raise ValueError(f"unknown module markers: {', '.join(sorted(unknown))}")
     text = re.sub(r"^[ \t]*(<!-- /?module:[\w-]+ -->)[ \t]*\n", r"\1", text, flags=re.M)  # a marker line leaves no line
@@ -65,17 +64,15 @@ def main() -> int:
         parser.error(f"unknown modules: {', '.join(sorted(modules - set(MODULES)))}")
     if {MODULES[name][0] for name in modules} - templates:
         parser.error("a module needs its template set: " + ", ".join(f"{name} needs {MODULES[name][0]}" for name in sorted(modules)))
-    kept = modules | {marker for marker, owner in LINKED.items() if owner in templates}
     try:
         sources = [args.kitchen / group / name for group in TEMPLATES if group in templates for name in TEMPLATES[group]]
         sources += [args.kitchen / group / name for module, (group, name) in MODULES.items() if module in modules]
         args.out.mkdir(parents=True, exist_ok=True)
         for source in sources:
-            (args.out / source.name).write_text(render(source.read_text(encoding="utf-8"), kept), encoding="utf-8")
+            (args.out / source.name).write_text(render(source.read_text(encoding="utf-8"), modules), encoding="utf-8")
             print(f"wrote {args.out / source.name}", file=sys.stderr)
         installed = {path.name for path in args.out.glob("*.md")}
         present = {module for module, (_, name) in MODULES.items() if name in installed}
-        present |= {marker for marker, owner in LINKED.items() if set(TEMPLATES[owner]) <= installed}
         pointers = blocks(render((args.kitchen / "agents-block.md").read_text(encoding="utf-8"), present), installed)
         for heading, body in pointers.items():
             print(f"## {heading}\n\n{body}\n")
