@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0
+
+Not compatible with 0.5: see *Upgrading* below.
+
+- **Skills.** `/setup-dkitchen` is now the entry: it checks prerequisites, settles the language and what the user needs, and walks through the build skills. `build-team` installs the team rules and can recommend extra design lines; `build-night` installs night orders and the orchestrator log. Each build skill also runs on its own and updates an installed kitchen in place. New runtime skills: `write-ticket` for writing tickets, and `/shift-change` for handing a station over to a fresh session.
+- **Rules.** The verifier no longer gates dispatch; designers and executors talk directly; every station runs its own watch; PR review, relaying and watches get their own short files; asking the user, known situations, the ticket layout and the gate table are new; run budgets get light, medium and heavy tiers and are estimates, not pause lines. The artifacts module and frozen files are removed. Templates live in `kitchen/team/` and `kitchen/night/`, and the renderer in `kitchen/render.py`.
+- **`ding merge`** no longer reads executor comments: `--ticket`, `--no-ticket` and `[status] pending_merge` are removed. Merges rest on the HEAD, draft, base, `[merge] required_checks` and the `[merge] review_check` status.
+- **Wording.** `[merge] review_pass` and `review_changes` set the review line `ding review` writes and `ding watch` recognises, and `[watch] handoff` sets the words that hand work to a station. Both default to English.
+
+### Upgrading from 0.5
+
+- Delete `pending_merge` from `[status]` in `.dkitchen.toml`; `ding` now refuses the key.
+- Set `[merge] review_check = "review"` if it is not set, so merges need the reviewer's verdict.
+- A kitchen in another language sets `review_pass`, `review_changes` and `handoff` to its own words, for example `review_pass = "审过 {sha}：通过"`, `review_changes = "审过 {sha}：有出入，见下"` and `handoff = ["交"]`, which were the hard-coded words before.
+- Run `/setup-dkitchen` or `build-team` again to bring `docs/agents/` up to the new rules.
+
 ## 0.5.15
 
 - `ding watch` keeps every reported line whose GitHub time is at or after the new `since`, so items stamped ahead of the clock are reported once. The state file now stores `seen` as line-to-time; older list states still load.

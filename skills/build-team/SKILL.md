@@ -66,7 +66,7 @@ Done when every section has an answer from the user, or was settled by explorati
 Show the user:
 
 - the files to create or change, with the full text of each new `docs/agents/` file and a diff for each existing file;
-- the team's `.dkitchen.toml` keys: the vocabulary, each design line's name in `[stations.aliases]` and `[rule] signatures`, and `[merge] required_checks` with the CI checks a merge needs;
+- the team's `.dkitchen.toml` keys: the vocabulary, including `[merge] review_pass`, `review_changes`, and `[watch] handoff` for a language other than English; each design line's name in `[stations.aliases]` and `[rule] signatures`; `[merge] review_check = "review"`, so that merges need the reviewer's verdict; and `[merge] required_checks` with the CI checks a merge needs;
 - the adapted repo scripts;
 - the GitHub changes: the four `status:*` labels from [issue-tracker.md](../../kitchen/team/issue-tracker.md);
 - an optional `.claude/settings.json` allow list for the commands the stations run all day: `ding *`, `gh issue *`, `gh pr *`, and the repo scripts.

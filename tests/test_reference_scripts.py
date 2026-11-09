@@ -130,3 +130,69 @@ def test_rendered_kitchen_has_no_markers_and_no_broken_links(tmp_path, templates
         assert "module:" not in text, path
         for link in re.findall(r"\]\(([\w.-]+\.md)(?:#[\w-]+)?\)", text):
             assert (out / link).exists(), (path, link)
+
+
+def anchors(path):
+    """GitHub heading anchors of a Markdown file."""
+    import re
+    slugs = set()
+    for heading in re.findall(r"^#{1,6} (.+)$", path.read_text(encoding="utf-8"), flags=re.M):
+        slugs.add(re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-"))
+    return slugs
+
+
+def test_skill_and_kitchen_links_resolve():
+    import re
+    sources = [*ROOT.glob("skills/*/SKILL.md"), *ROOT.glob("kitchen/**/*.md")]
+    assert len(sources) > 10
+    for source in sources:
+        text = re.sub(r"```.*?```", "", source.read_text(encoding="utf-8"), flags=re.S)
+        for target, anchor in re.findall(r"\]\((?!https?:|#|docs/agents/)([^)\s#]+)(?:#([\w-]+))?\)", text):
+            path = (source.parent / target).resolve()
+            if not path.exists() and source.parent.parent.name == "kitchen":
+                # templates link to each other by installed name; installed, every folder lands in docs/agents/
+                path = next(iter(sorted(source.parents[1].glob(f"*/{target}"))), path)
+            assert path.exists(), (source, target)
+            if anchor and path.suffix == ".md":
+                assert anchor in anchors(path), (source, target, anchor)
+
+
+def test_plugin_lists_every_skill_under_its_own_name():
+    import json
+    import re
+    listed = json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["skills"]
+    folders = sorted(f"./skills/{path.parent.name}" for path in ROOT.glob("skills/*/SKILL.md"))
+    assert sorted(listed) == folders
+    for folder in folders:
+        text = (ROOT / folder / "SKILL.md").read_text(encoding="utf-8")
+        assert re.search(rf"^name: {re.escape(folder.rsplit('/', 1)[1])}$", text, flags=re.M), folder
+    version = re.search(r'^version = "(.+)"$', (ROOT / "pyproject.toml").read_text(), flags=re.M).group(1)
+    assert json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"] == version
+
+
+def test_rendering_every_folder_installs_every_template_once(tmp_path):
+    import re
+    out = tmp_path / "docs/agents"
+    result = subprocess.run([sys.executable, str(RENDER), "--templates", "team,night", "--modules", "run-budgets,model-text",
+                             "--out", str(out)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    templates = sorted(path.name for path in ROOT.glob("kitchen/*/*.md"))
+    assert sorted(path.name for path in out.glob("*.md")) == templates
+    for path in out.glob("*.md"):
+        for target, anchor in re.findall(r"\]\(([\w.-]+\.md)(?:#([\w-]+))?\)", path.read_text()):
+            assert (out / target).exists(), (path.name, target)
+            if anchor:
+                assert anchor in anchors(out / target), (path.name, target, anchor)
+    for line in re.findall(r"\(docs/agents/([\w.-]+\.md)", result.stdout):
+        assert (out / line).exists(), line
+
+
+def test_pointer_blocks_follow_the_installed_files(tmp_path):
+    out = tmp_path / "docs/agents"
+    team = subprocess.run([sys.executable, str(RENDER), "--templates", "team", "--out", str(out)], capture_output=True, text=True)
+    assert team.returncode == 0 and "unattended.md" not in team.stdout and "watch.md" in team.stdout
+    night = subprocess.run([sys.executable, str(RENDER), "--templates", "night", "--out", str(out)], capture_output=True, text=True)
+    assert night.returncode == 0 and "unattended.md#night-orders" in night.stdout and "roles.md" in night.stdout
+    alone = subprocess.run([sys.executable, str(RENDER), "--templates", "team", "--modules", "nope", "--out", str(out)],
+                           capture_output=True, text=True)
+    assert alone.returncode == 2 and "unknown modules" in alone.stderr
