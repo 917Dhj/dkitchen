@@ -110,7 +110,7 @@ ding launch train -- python train.py                  # 在 tmux 里跑，退出
 
 ### 📜 厨房规矩
 
-每个岗位遵守的规则在 [kitchen/](https://github.com/917Dhj/dkitchen/blob/main/kitchen/README.md)（英文）：谁负责什么、票怎么写、什么时候停下来问你，以及运行预算、模型提示词、正式产物登记、无人值守这几个可选模块。
+每个岗位遵守的规则在 [kitchen/](https://github.com/917Dhj/dkitchen/blob/main/kitchen/README.md)（英文）：谁负责什么、票怎么写、什么时候停下来问你，运行预算和模型提示词两个可选模块，以及你不在时的夜班。
 
 ## 🚀 开始使用
 

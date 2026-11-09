@@ -112,7 +112,7 @@ The stations' everyday steps are `ding` commands too, so they run the same caref
 
 ### 📜 The house rules
 
-The rules every station follows live in [kitchen/](https://github.com/917Dhj/dkitchen/blob/main/kitchen/README.md): who owns what, how tickets are written, when to stop and ask, and optional modules for run budgets, model prompts, registered artifacts, and unattended work.
+The rules every station follows live in [kitchen/](https://github.com/917Dhj/dkitchen/blob/main/kitchen/README.md): who owns what, how tickets are written, when to stop and ask, optional modules for run budgets and model prompts, and the night shift for when you are away.
 
 ## 🚀 Get started
 
