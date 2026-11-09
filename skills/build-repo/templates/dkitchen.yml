@@ -1,0 +1,43 @@
+# dkitchen reference CI workflow. Adapt when installing:
+# - <python>: the Python version the repo runs on.
+# - <install>: the command that installs the repo and its test dependencies, e.g. python -m pip install -e '.[dev]'.
+# - <tests>: the repo's test command.
+# - PYTHONPATH: the folder that holds the library packages, so import-linter can import them ("." for a flat layout,
+#   "src" for a src layout).
+# - The versions of dkitchen, ruff and import-linter: pin the ones the repo was set up with.
+# Keep the job names: [merge] required_checks in .dkitchen.toml names them.
+name: dkitchen
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '<python>'
+      - run: python -m pip install 'dkitchen==0.6.0' 'ruff==0.17.3' 'import-linter==2.15'
+      - run: ding check --base "${{ github.event.pull_request.base.sha }}"
+        env:
+          PYTHONPATH: .
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '<python>'
+      - run: <install>
+      - run: <tests>

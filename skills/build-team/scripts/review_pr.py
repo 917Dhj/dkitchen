@@ -4,8 +4,8 @@
 Usage: scripts/review_pr.py PR [test files...]
 
 Reports the reviewed HEAD, whether the PR is a draft, the test result, hard-coded absolute paths in added
-lines, names the PR deletes that are still imported, and tickets the merge will close. Exits nonzero when
-anything failed.
+lines, names the PR deletes that are still imported, tickets the merge will close, and the PR's Guard-change
+trailers for the reviewer to check. Exits nonzero when anything failed.
 """
 # dkitchen reference script. Adapt when installing:
 # - TEST_COMMAND: how this repo runs a list of test files.
@@ -128,6 +128,11 @@ def unrun_tests_warning(returncode: int, output: str) -> str | None:
     return None
 
 
+def guard_trailers(log: str) -> list[str]:
+    """The `Guard-change:` trailers in `git log --format=%B` output, each as written."""
+    return [line.split(":", 1)[1].strip() for line in log.splitlines() if re.match(r"Guard-change:\s*\S", line)]
+
+
 def closing_references(*texts: str) -> list[str]:
     return sorted({f"#{number}" for text in texts for number in CLOSING.findall(text)}, key=lambda ref: int(ref[1:]))
 
@@ -201,6 +206,7 @@ def main() -> int:
                 description = run("gh", "pr", "view", str(args.pr), "--json", "title,body", "--jq", '.title + "\\n" + .body', cwd=root)
                 commits = run("git", "log", "--format=%B", f"{merge_base}..{head}", cwd=root)
                 summary.append("Tickets the merge will close:\n" + (" ".join(closing_references(description, commits)) or "none"))
+                summary.append("Guard-change trailers:\n" + ("\n".join(guard_trailers(commits)) or "none"))
             finally:
                 run("git", "worktree", "remove", "--force", str(worktree), cwd=root)
     except (OSError, RuntimeError, ValueError, KeyError, TypeError, KeyboardInterrupt) as error:

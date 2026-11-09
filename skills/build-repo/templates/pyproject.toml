@@ -1,0 +1,19 @@
+# dkitchen reference checks for pyproject.toml. Merge these tables into the repo's pyproject.toml. Adapt when installing:
+# - root_packages: the importable packages of the library and experiments areas (and tools, if they are packages).
+# - source_modules: the library packages; forbidden_modules: the experiment, tool, test and doc packages that exist.
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# Real errors only, no style: unused names, syntax errors, mutable defaults, bad asserts, late-binding closures.
+select = ["F", "E9", "B006", "B008", "B011", "B012", "B018", "B023", "PGH004"]
+
+[tool.importlinter]
+root_packages = ["<library package>", "experiments"]
+
+[[tool.importlinter.contracts]]
+name = "The library does not import experiments, tools, tests, or docs"
+type = "forbidden"
+source_modules = ["<library package>"]
+forbidden_modules = ["experiments"]

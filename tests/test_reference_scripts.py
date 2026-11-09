@@ -83,6 +83,11 @@ def test_unrun_tests_and_closing_keywords_are_reported():
     assert review_pr.closing_references(body, "refs #3") == ["#7", "#12", "#165"]
 
 
+def test_guard_change_trailers_are_listed_as_written():
+    log = "Tighten the check\n\nGuard-change: #12 stop version copies\n\nOther\nGuard-change:\nnot a Guard-change: #1 x\n"
+    assert review_pr.guard_trailers(log) == ["#12 stop version copies"]
+
+
 def test_request_check_reports_rendering_slips_and_missing_prompt():
     request = {"messages": [{"role": "system", "content": "Answer the question."},
                             {"role": "user", "content": [{"type": "text", "text": '" Okay."\nWow.'},
@@ -173,7 +178,7 @@ def test_plugin_lists_every_skill_under_its_own_name():
 def test_rendering_every_folder_installs_every_template_once(tmp_path):
     import re
     out = tmp_path / "docs/agents"
-    result = subprocess.run([sys.executable, str(RENDER), "--templates", "team,night", "--modules", "run-budgets,model-text",
+    result = subprocess.run([sys.executable, str(RENDER), "--templates", "team,repo,night", "--modules", "run-budgets,model-text",
                              "--out", str(out)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     templates = sorted(path.name for path in ROOT.glob("kitchen/*/*.md"))

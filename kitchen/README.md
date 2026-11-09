@@ -4,7 +4,7 @@ These are the house rules of dkitchen, as templates. The build skills install th
 
 ## Layout
 
-Each build skill installs one folder. [render.py](render.py) renders a folder with `--templates team` or `--templates night`.
+Each build skill installs one folder. [render.py](render.py) renders a folder with `--templates team`, `repo`, or `night`.
 
 | Template | Installed by | Installed as | What it covers |
 | --- | --- | --- | --- |
@@ -18,6 +18,7 @@ Each build skill installs one folder. [render.py](render.py) renders a folder wi
 | [team/long-running-jobs.md](team/long-running-jobs.md) | `build-team` | `docs/agents/long-running-jobs.md` | `ding launch`, resumable jobs, compute and shared services |
 | [team/run-budgets.md](team/run-budgets.md) | `build-team`, module | `docs/agents/run-budgets.md` | Run tiers, run requests, ticket budgets, what needs the user's approval |
 | [team/model-text.md](team/model-text.md) | `build-team`, module | `docs/agents/model-text.md` | Prompts and other text a model sees, owned by the designer |
+| [repo/code.md](repo/code.md) | `build-repo` | `docs/agents/code.md` | Areas, changing code in place, reuse, verifying a change, and the checks |
 | [night/unattended.md](night/unattended.md) | `build-night` | `docs/agents/unattended.md` | Night orders, what the orchestrator moves forward while the user is away, the orchestrator log |
 
 A module is optional within its skill. Every other file of a folder is installed whenever its skill runs.
