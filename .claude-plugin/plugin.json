@@ -22,6 +22,7 @@
     "./skills/build-night",
     "./skills/write-ticket",
     "./skills/shift-change",
+    "./skills/improve-kitchen",
     "./skills/goodnight",
     "./skills/goodmorning"
   ]

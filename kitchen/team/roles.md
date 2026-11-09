@@ -14,7 +14,7 @@ When a session is replaced, edit only this table. Everywhere else, write the sta
 
 ## Duties
 
-- **Orchestrator** (Claude Code, the strongest model available): reports progress to the user in facts and schedules, starting from `ding board`. Dispatches executors, schedules GPUs and concurrency, merges PRs, and closes tickets.
+- **Orchestrator** (Claude Code, the strongest model available): reports progress to the user in facts and schedules, starting from `ding board`. Dispatches executors, schedules GPUs and concurrency, merges PRs, and closes tickets. In its first report each day, it reminds the user to run `/improve-kitchen` when the last pass in `docs/agents/improve-kitchen-history.md` is more than 14 days old, or there has been none.
 - **Designer** (Claude Code, the strongest model available): designs the work, writes tickets with the `write-ticket` skill, and interprets results.<!-- module:model-text --> Owns model-visible text ([model-text.md](model-text.md)).<!-- /module:model-text -->
 - **Verifier** (Claude Code, a cheaper model): checks facts and makes no decisions. Reads code and data and runs scripts that call no model; runs no models and edits no repo files. Reviews PRs unless a ticket names another reviewer.
 - **Executor** (Codex): one sub-ticket, one session, and one worktree per run (`ding new --parent <ticket>`). The parent ticket holds only the design, rulings, and summary; execution and run requests go on the sub-ticket. A ticket has one executor: `ding new --issue` refuses while another unarchived session owns it, and `--replace` hands it over on purpose. Carries out the ticket and copies text the ticket gives verbatim.<!-- module:model-text --> Stops and hands back to the designer when the work needs new or changed model-visible text.<!-- /module:model-text --> A ticket may name a Claude Code session as its executor; it follows the same rules and signs as [issue-tracker.md](issue-tracker.md#executor-comments) says.
@@ -63,7 +63,7 @@ Before posting, the verifier runs `ding check-refs <draft.md>` on its draft. It 
 
 ## Known situations
 
-The situations below already have a rule. The orchestrator and the verifier follow it without asking the designer, and the log entry names the row it relied on. Only what no row covers goes to the designer. A row is added with the user's approval, usually from an improve-workflow pass.
+The situations below already have a rule. The orchestrator and the verifier follow it without asking the designer, and the log entry names the row it relied on. Only what no row covers goes to the designer. A row is added with the user's approval, usually from an `/improve-kitchen` pass.
 
 | Situation | What to do | Precedent |
 | --- | --- | --- |

@@ -42,7 +42,7 @@ Write it to `/tmp/dkitchen-handoff/<repo name>/<station>-<UTC time>.md`, outside
 - **Open work**: one line per ticket: its link, its state, the next step, and who takes it.
 - **Running**: the watch command, background tasks, and jobs, each with how to check it.
 - **Night orders**: the link to open orders, or "none".
-- **Not yet in the rules**: standing instructions the user gave in this conversation, verbatim with their date. Suggest that the user make them rules, for example with improve-workflow.
+- **Not yet in the rules**: standing instructions the user gave in this conversation, verbatim with their date. Suggest that the user make them rules, for example with `/improve-kitchen`.
 - **Watch out**: what you learned the hard way that no file records.
 - **Skills**: the skills the next shift should load.
 

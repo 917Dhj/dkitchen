@@ -55,4 +55,4 @@ Done when every check passes, or the user has been told exactly which one fails 
 
 ## 6. Hand over
 
-Give the user each build skill's hand-over points in one short list, in the table's order. End with: the rules are theirs to edit; each build skill can be run again on its own to change its part; and `/setup-dkitchen` runs the whole setup again.
+Give the user each build skill's hand-over points in one short list, in the table's order. End with: the rules are theirs to edit, and `/improve-kitchen`, run every couple of weeks, turns what keeps going wrong into checks, tools, or rules; each build skill can be run again on its own to change its part; and `/setup-dkitchen` runs the whole setup again.

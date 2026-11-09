@@ -56,6 +56,20 @@ _Avoid_: Category, folder type, zone
 A change to a check, its configuration, or CI, which must say why in a `Guard-change:` commit trailer.
 _Avoid_: Check tweak
 
+## Improving the kitchen
+
+**Improvement pass**:
+One run of `/improve-kitchen`: it reads a window of failures and friction, and proposes changes the user approves item by item.
+_Avoid_: Retro, review (review is for PRs)
+
+**Lesson**:
+Incidents with one cause, kept because they recur or one of them was expensive.
+_Avoid_: Finding, issue
+
+**Ladder**:
+The order of places a lesson can land, from strongest to weakest: remove the cause, a check, a tool, text.
+_Avoid_: Hierarchy, escalation
+
 ## Skills
 
 **Build skill**:
