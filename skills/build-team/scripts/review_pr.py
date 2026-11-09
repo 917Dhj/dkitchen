@@ -4,13 +4,12 @@
 Usage: scripts/review_pr.py PR [test files...]
 
 Reports the reviewed HEAD, whether the PR is a draft, the test result, hard-coded absolute paths in added
-lines, names the PR deletes that are still imported, and tickets the merge will close; with an artifact
-registry, also frozen files the PR changes. Exits nonzero when anything failed.
+lines, names the PR deletes that are still imported, tickets the merge will close, and the PR's Guard-change
+trailers for the reviewer to check. Exits nonzero when anything failed.
 """
 # dkitchen reference script. Adapt when installing:
 # - TEST_COMMAND: how this repo runs a list of test files.
 # - prepare(): what a fresh worktree needs before tests run (links to data, submodules, env files).
-# - REGISTRY: the artifact registry for the artifacts module, or None.
 # - PROMPTS: the one top-level folder new prompt files belong in, for the model-text module, or None.
 # - ABSOLUTE_PREFIXES: absolute path prefixes that code in this repo must never hard-code.
 # - The import and string-literal checks read Python; replace or drop them for other languages.
@@ -26,7 +25,6 @@ import sys
 import tempfile
 
 TEST_COMMAND = [sys.executable, "-m", "pytest", "-p", "no:cacheprovider"]
-REGISTRY: str | None = "docs/artifacts/registry.yaml"
 PROMPTS: str | None = "prompts"
 ABSOLUTE_PREFIXES = ("/data/", "/root/", "/home/", "/tmp/", "/opt/")
 
@@ -69,17 +67,6 @@ def added_line_warnings(diff: str) -> list[str]:
         elif line.startswith(" "):
             line_number += 1
     return warnings
-
-
-def frozen_dependencies(records: list[dict]) -> dict[str, list[str]]:
-    dependencies: dict[str, list[str]] = {}
-    for record in records:
-        if record["status"] == "current":
-            for path in record.get("depends_on", []):
-                names = dependencies.setdefault(path, [])
-                if record["name"] not in names:
-                    names.append(record["name"])
-    return dependencies
 
 
 def module_name(path: str) -> str:
@@ -141,6 +128,11 @@ def unrun_tests_warning(returncode: int, output: str) -> str | None:
     return None
 
 
+def guard_trailers(log: str) -> list[str]:
+    """The `Guard-change:` trailers in `git log --format=%B` output, each as written."""
+    return [line.split(":", 1)[1].strip() for line in log.splitlines() if re.match(r"Guard-change:\s*\S", line)]
+
+
 def closing_references(*texts: str) -> list[str]:
     return sorted({f"#{number}" for text in texts for number in CLOSING.findall(text)}, key=lambda ref: int(ref[1:]))
 
@@ -150,24 +142,6 @@ def run(*args: str, cwd: Path) -> str:
     if result.returncode:
         raise RuntimeError(f"{' '.join(args)}\n{result.stdout}")
     return result.stdout
-
-
-def registry_records(root: Path, base: str) -> list[dict]:
-    """Registry entries on the base branch and in the checkout, so a PR cannot lift protections by editing it."""
-    if not REGISTRY:
-        return []
-    import yaml
-
-    records = []
-    shown = subprocess.run(["git", "show", f"{base}:{REGISTRY}"], cwd=root, text=True, capture_output=True)
-    try:
-        if shown.returncode == 0:
-            records += yaml.safe_load(shown.stdout) or []
-        if (root / REGISTRY).is_file():
-            records += yaml.safe_load((root / REGISTRY).read_text()) or []
-    except yaml.YAMLError as error:
-        raise ValueError(f"{REGISTRY}: {error}") from error
-    return records
 
 
 def main() -> int:
@@ -192,7 +166,6 @@ def main() -> int:
         if run("gh", "pr", "view", str(args.pr), "--json", "isDraft", "--jq", ".isDraft", cwd=root).strip() == "true":
             summary.append("Draft: yes. Merging will fail; its author marks it ready with gh pr ready first")
         base = run("git", "rev-parse", "origin/main", cwd=root).strip()
-        dependencies = frozen_dependencies(registry_records(root, base))
         pr_base = run("gh", "pr", "view", str(args.pr), "--json", "baseRefOid", "--jq", ".baseRefOid", cwd=root).strip()
         run("git", "fetch", "origin", pr_base, cwd=root)
         merge_base = run("git", "merge-base", pr_base, head, cwd=root).strip()
@@ -218,9 +191,6 @@ def main() -> int:
                     if warning:
                         summary[1] += f"\nTest warning: {warning}"
                     status = int(result.returncode != 0 or warning is not None)
-                if REGISTRY:
-                    frozen = [f"{path}: {', '.join(dependencies[path])}" for path in changed if path in dependencies]
-                    summary.append("Frozen files changed:\n" + ("\n".join(frozen) or "none"))
                 summary.append("Added-line warnings:\n" + ("\n".join(added_line_warnings(diff)) or "none"))
                 removed = {}
                 for path in changed:
@@ -236,9 +206,10 @@ def main() -> int:
                 description = run("gh", "pr", "view", str(args.pr), "--json", "title,body", "--jq", '.title + "\\n" + .body', cwd=root)
                 commits = run("git", "log", "--format=%B", f"{merge_base}..{head}", cwd=root)
                 summary.append("Tickets the merge will close:\n" + (" ".join(closing_references(description, commits)) or "none"))
+                summary.append("Guard-change trailers:\n" + ("\n".join(guard_trailers(commits)) or "none"))
             finally:
                 run("git", "worktree", "remove", "--force", str(worktree), cwd=root)
-    except (OSError, RuntimeError, ValueError, KeyError, TypeError, ImportError, KeyboardInterrupt) as error:
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError, KeyboardInterrupt) as error:
         summary.append(f"Error: {error}")
         status = 1
     finally:

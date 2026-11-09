@@ -6,7 +6,9 @@ import sys
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "skills/setup-dkitchen/scripts"
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "skills/build-team/scripts"
+RENDER = ROOT / "kitchen/render.py"
 
 
 def load(name):
@@ -62,13 +64,6 @@ def test_added_path_with_spaces_and_patch_tab():
     assert review_pr.added_line_warnings(diff) == ['has space.py:1: hard-coded absolute path "/tmp/new"']
 
 
-def test_current_frozen_files_keep_all_artifact_names():
-    records = [{"name": "first", "status": "current", "depends_on": ["shared.py"]},
-               {"name": "second", "status": "current", "depends_on": ["shared.py", "only.py"]},
-               {"name": "old", "status": "superseded", "depends_on": ["old.py"]}]
-    assert review_pr.frozen_dependencies(records) == {"shared.py": ["first", "second"], "only.py": ["second"]}
-
-
 def test_removed_names_still_imported_are_reported():
     before = "DATA = 1\nKEPT = 2\ndef gone(): pass\n"
     removed = {"pkg.paths": review_pr.top_level_names(before) - review_pr.top_level_names("KEPT = 2\n"), "pkg.dead": None}
@@ -86,6 +81,11 @@ def test_unrun_tests_and_closing_keywords_are_reported():
     assert review_pr.unrun_tests_warning(1, "1 failed in 0.02s") is None
     body = "Report for the C step.\n\nCloses #165 and fixes: #7; see #99.\nResolved https://github.com/o/r/issues/12"
     assert review_pr.closing_references(body, "refs #3") == ["#7", "#12", "#165"]
+
+
+def test_guard_change_trailers_are_listed_as_written():
+    log = "Tighten the check\n\nGuard-change: #12 stop version copies\n\nOther\nGuard-change:\nnot a Guard-change: #1 x\n"
+    assert review_pr.guard_trailers(log) == ["#12 stop version copies"]
 
 
 def test_request_check_reports_rendering_slips_and_missing_prompt():
@@ -108,24 +108,25 @@ def test_paragraphs_preserve_leading_space_and_match_one_source():
 
 
 def test_render_keeps_chosen_modules_and_leaves_no_markers(tmp_path):
-    spec = spec_from_file_location("render", SCRIPTS.parent / "render.py")
+    spec = spec_from_file_location("render", RENDER)
     module = module_from_spec(spec)
     spec.loader.exec_module(module)
-    text = ("Lead.\n\n<!-- module:artifacts -->\n- frozen\n<!-- /module:artifacts -->\n- always\n"
+    text = ("Lead.\n\n<!-- module:run-budgets -->\n- budget\n<!-- /module:run-budgets -->\n- always\n"
             "Stop when<!-- module:model-text --> text changes,<!-- /module:model-text --> or scope changes.\n")
-    assert module.render(text, {"artifacts"}) == "Lead.\n\n- frozen\n- always\nStop when or scope changes.\n"
+    assert module.render(text, {"run-budgets"}) == "Lead.\n\n- budget\n- always\nStop when or scope changes.\n"
     assert module.render(text, {"model-text"}) == "Lead.\n\n- always\nStop when text changes, or scope changes.\n"
     with pytest.raises(ValueError, match="unknown module"):
         module.render("<!-- module:nope -->x<!-- /module:nope -->", set())
     with pytest.raises(ValueError, match="unbalanced"):
-        module.render("<!-- module:artifacts -->x", {"artifacts"})
+        module.render("<!-- module:run-budgets -->x", {"run-budgets"})
 
 
-@pytest.mark.parametrize("modules", ["", "run-budgets,model-text,artifacts,unattended", "unattended"])
-def test_rendered_kitchen_has_no_markers_and_no_broken_links(tmp_path, modules):
+@pytest.mark.parametrize("templates, modules", [("team", ""), ("team,night", "run-budgets,model-text"),
+                                                ("team,night", ""), ("team,repo,runner", "")])
+def test_rendered_kitchen_has_no_markers_and_no_broken_links(tmp_path, templates, modules):
     import re
     out = tmp_path / "docs/agents"
-    result = subprocess.run([sys.executable, str(SCRIPTS.parent / "render.py"), "--modules", modules, "--out", str(out)],
+    result = subprocess.run([sys.executable, str(RENDER), "--templates", templates, "--modules", modules, "--out", str(out)],
                             capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
     assert "## AGENTS.md" in result.stdout and "## CLAUDE.md" in result.stdout and "module:" not in result.stdout
@@ -134,3 +135,72 @@ def test_rendered_kitchen_has_no_markers_and_no_broken_links(tmp_path, modules):
         assert "module:" not in text, path
         for link in re.findall(r"\]\(([\w.-]+\.md)(?:#[\w-]+)?\)", text):
             assert (out / link).exists(), (path, link)
+
+
+def anchors(path):
+    """GitHub heading anchors of a Markdown file."""
+    import re
+    slugs = set()
+    for heading in re.findall(r"^#{1,6} (.+)$", path.read_text(encoding="utf-8"), flags=re.M):
+        slugs.add(re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-"))
+    return slugs
+
+
+def test_skill_and_kitchen_links_resolve():
+    import re
+    sources = [*ROOT.glob("skills/*/SKILL.md"), *ROOT.glob("kitchen/**/*.md")]
+    assert len(sources) > 10
+    for source in sources:
+        text = re.sub(r"```.*?```", "", source.read_text(encoding="utf-8"), flags=re.S)
+        for target, anchor in re.findall(r"\]\((?!https?:|#|docs/agents/)([^)\s#]+)(?:#([\w-]+))?\)", text):
+            path = (source.parent / target).resolve()
+            if not path.exists() and source.parent.parent.name == "kitchen":
+                # templates link to each other by installed name; installed, every folder lands in docs/agents/
+                path = next(iter(sorted(source.parents[1].glob(f"*/{target}"))), path)
+            assert path.exists(), (source, target)
+            if anchor and path.suffix == ".md":
+                assert anchor in anchors(path), (source, target, anchor)
+
+
+def test_plugin_lists_every_skill_under_its_own_name():
+    import json
+    import re
+    listed = json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["skills"]
+    folders = sorted(f"./skills/{path.parent.name}" for path in ROOT.glob("skills/*/SKILL.md"))
+    assert sorted(listed) == folders
+    for folder in folders:
+        text = (ROOT / folder / "SKILL.md").read_text(encoding="utf-8")
+        assert re.search(rf"^name: {re.escape(folder.rsplit('/', 1)[1])}$", text, flags=re.M), folder
+    version = re.search(r'^version = "(.+)"$', (ROOT / "pyproject.toml").read_text(), flags=re.M).group(1)
+    assert json.loads((ROOT / ".claude-plugin/plugin.json").read_text())["version"] == version
+
+
+def test_rendering_every_folder_installs_every_template_once(tmp_path):
+    import re
+    out = tmp_path / "docs/agents"
+    result = subprocess.run([sys.executable, str(RENDER), "--templates", "team,repo,runner,night", "--modules", "run-budgets,model-text",
+                             "--out", str(out)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    templates = sorted(path.name for path in ROOT.glob("kitchen/*/*.md"))
+    assert sorted(path.name for path in out.glob("*.md")) == templates
+    for path in out.glob("*.md"):
+        for target, anchor in re.findall(r"\]\(([\w.-]+\.md)(?:#([\w-]+))?\)", path.read_text()):
+            assert (out / target).exists(), (path.name, target)
+            if anchor:
+                assert anchor in anchors(out / target), (path.name, target, anchor)
+    for line in re.findall(r"\(docs/agents/([\w.-]+\.md)", result.stdout):
+        assert (out / line).exists(), line
+
+
+def test_pointer_blocks_follow_the_installed_files(tmp_path):
+    out = tmp_path / "docs/agents"
+    team = subprocess.run([sys.executable, str(RENDER), "--templates", "team", "--out", str(out)], capture_output=True, text=True)
+    assert team.returncode == 0 and "unattended.md" not in team.stdout and "watch.md" in team.stdout
+    night = subprocess.run([sys.executable, str(RENDER), "--templates", "night", "--out", str(out)], capture_output=True, text=True)
+    assert night.returncode == 0 and "unattended.md#night-orders" in night.stdout and "roles.md" in night.stdout
+    assert "runner.md" not in night.stdout
+    runner = subprocess.run([sys.executable, str(RENDER), "--templates", "runner", "--out", str(out)], capture_output=True, text=True)
+    assert runner.returncode == 0 and "docs/agents/runner.md" in runner.stdout and "unattended.md" in runner.stdout
+    alone = subprocess.run([sys.executable, str(RENDER), "--templates", "team", "--modules", "nope", "--out", str(out)],
+                           capture_output=True, text=True)
+    assert alone.returncode == 2 and "unknown modules" in alone.stderr

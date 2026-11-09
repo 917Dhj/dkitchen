@@ -1,7 +1,8 @@
 """The orchestrator's routine GitHub writes, each checked step by step.
 
+- review: post a review comment on the PR and write its verdict as the review_check status on the reviewed HEAD.
 - merge: merge a reviewed PR at the reviewed HEAD and print the merge commit; refuses drafts, moved HEADs,
-  wrong bases, and unsuccessful required checks; legacy ticket gates apply without review_check.
+  wrong bases, and unsuccessful required or review checks.
 - relay: send a message to a ticket's executor with `ding send`, then leave the matching ticket comment. By default
   the message goes into the executor's current turn and replaces the orchestrator's relays still queued for it.
 - log: post one entry to the orchestrator log, stamped with the current UTC time.
@@ -49,35 +50,6 @@ def comment(config: Config, repo: str, issue: int, body: str) -> int:
         return fail(f"comment failed: {result.stderr.strip()}")
     print(result.stdout.strip())
     return 0
-
-
-def executor_status(config: Config, repo: str, issue: int) -> dict | None:
-    """The latest executor comment on a ticket: its status block, whether it waits on the orchestrator, and its link."""
-    result = call(config, "gh", "api", "--paginate", "--slurp", f"repos/{repo}/issues/{issue}/comments?per_page=100")
-    if result.returncode:
-        raise RuntimeError(result.stderr.strip())
-    comments = [comment for page in json.loads(result.stdout) for comment in page]
-    executor = [comment for comment in comments if watch.role(comment["body"], config) == config.stations.executor]
-    if not executor:
-        return None
-    latest = executor[-1]
-    names = config.status.fields
-    block = "\n".join(line for line in latest["body"].splitlines()[:len(names)] if line.strip())
-    _, waiting = watch.state_and_waiting(latest["body"], config)
-    ready = not waiting.startswith(config.status.none) and config.stations.orchestrator in waiting
-    listed = watch.fields(latest["body"], config).get(config.status.pending_merge, "")
-    pending = {int(number) for number in re.findall(r"(?i)(?:PR\s*#?|#)\s*(\d+)", listed)}
-    if listed and config.status.pending_merge not in names:
-        block += "\n" + next(line for line in latest["body"].splitlines() if line.startswith(config.status.pending_merge))
-    return {"block": block, "url": latest["html_url"], "ready": ready, "pending_merge": pending}
-
-
-def ticket_references(body: str, repo: str, pr: int) -> list[int]:
-    """Ticket numbers a PR body mentions, as #N or as a link to this repository."""
-    links = rf"https://github\.com/{re.escape(repo)}/(?:issues|pull)/(\d+)"
-    numbers = {int(n) for n in re.findall(rf"(?<![\w/&])#(\d+)\b", body or "")}
-    numbers |= {int(n) for n in re.findall(links, body or "")}
-    return sorted(numbers - {pr})
 
 
 def head_checks(config: Config, repo: str, sha: str) -> dict:
@@ -157,8 +129,8 @@ def review(args, config: Config) -> int:
         return fail(f"cannot read PR HEAD: {error}")
     if not args.sha or not sha.startswith(args.sha):
         return fail(f"PR #{args.pr} HEAD is now {sha}, not the reviewed {args.sha}; review it again")
-    verdict = "通过" if args.verdict == "pass" else "有出入，见下"
-    body = f"审过 {sha[:8]}：{verdict}\n\n{Path(args.body_file).read_text(encoding='utf-8')}"
+    line = config.merge.review_pass if args.verdict == "pass" else config.merge.review_changes
+    body = f"{line.replace('{sha}', sha[:8])}\n\n{Path(args.body_file).read_text(encoding='utf-8')}"
     result = call(config, "gh", "api", f"repos/{repo}/issues/{args.pr}/comments", "-f", f"body={body}")
     if result.returncode:
         return fail(f"review comment failed: {result.stderr.strip()}; no status written")
@@ -199,31 +171,6 @@ def merge(args, config: Config) -> int:
         branch = default_branch(config, repo)
         if pr["baseRefName"] != branch:
             return fail(f"PR base is {pr['baseRefName']}, not repository default branch {branch}")
-        if config.merge.review_check and (getattr(args, "ticket", None) is not None or getattr(args, "no_ticket", False)):
-            print("ding: --ticket/--no-ticket ignored because [merge] review_check is set")
-        if not config.merge.review_check and not getattr(args, "no_ticket", False):
-            ticket, status = getattr(args, "ticket", None), None
-            if ticket is None:
-                found = {}
-                for number in ticket_references(pr.get("body"), repo, args.pr):
-                    candidate = executor_status(config, repo, number)
-                    if candidate is not None:
-                        found[number] = candidate
-                if len(found) != 1:
-                    listed = ", ".join(f"#{number}" for number in found) or "none"
-                    return fail(f"cannot tell PR #{args.pr}'s ticket: tickets with executor comments mentioned in it: "
-                                f"{listed}; pass --ticket N, or --no-ticket for a PR without one")
-                (ticket, status), = found.items()
-            else:
-                status = executor_status(config, repo, ticket)
-                if status is None:
-                    return fail(f"#{ticket} has no executor comment; pass the PR's ticket with --ticket, "
-                                "or --no-ticket for a PR without one")
-            print(f"#{ticket} latest executor status ({status['url']}):\n{status['block']}")
-            if not status["ready"] and args.pr not in status.get("pending_merge", ()):
-                return fail(f"#{ticket}'s executor is not waiting on {config.stations.orchestrator} to merge, and its "
-                            f"{config.status.pending_merge} field does not list PR #{args.pr}; read its latest "
-                            "comment and wait until it asks for the merge. Nothing merged")
         failures = readiness(config, repo, pr, branch)["reasons"]
         if failures:
             return fail("PR readiness blocks merge:\n" + "\n".join(failures))

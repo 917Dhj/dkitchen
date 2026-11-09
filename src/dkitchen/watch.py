@@ -125,6 +125,11 @@ def named(text: str, station: str, config: Config, *, markers: tuple[str, ...] =
     return False
 
 
+def review_line(template: str) -> str:
+    """A pattern for a review comment's first line, with {sha} standing for the reviewed commit's first 8 digits."""
+    return "[0-9a-fA-F]{8}".join(re.escape(part) for part in normalized(template).strip().split("{sha}"))
+
+
 def role(body: str, config: Config) -> str:
     """The station named at the start of the first line; otherwise the executor by a line starting with its
     session signature (`Codex session:`, or `Claude session:` for an executor run in Claude Code); else the user.
@@ -132,7 +137,8 @@ def role(body: str, config: Config) -> str:
     stations = config.stations
     first_line = next((line for line in body.splitlines() if line.strip()), "")
     first_line = normalized(first_line)
-    if config.merge.review_check and re.fullmatch(r"审过 [0-9a-fA-F]{8}:(?:通过|有出入,见下)", first_line):
+    if config.merge.review_check and any(re.fullmatch(review_line(line), first_line.strip())
+                                         for line in (config.merge.review_pass, config.merge.review_changes)):
         return stations.verifier
     first = re.sub(r"^[\s#*>]+", "", first_line)
     if (any(first_line.startswith(normalized(prefix)) or first.startswith(normalized(prefix))
@@ -149,8 +155,8 @@ def role(body: str, config: Config) -> str:
 
 
 def fields(body: str, config: Config) -> dict[str, str]:
-    """The status block's fields, with half- or full-width colons; an unlisted Pending merge field may follow."""
-    count = len(config.status.fields) + (config.status.pending_merge not in config.status.fields)
+    """The status block's fields, with half- or full-width colons."""
+    count = len(config.status.fields)
     pairs = (re.split(r"[:：]", line, maxsplit=1) for line in body.splitlines()[:count])
     return {pair[0].strip(): pair[1].strip() for pair in pairs if len(pair) == 2}
 
@@ -200,8 +206,12 @@ def station_wakes(body: str, station: str, config: Config) -> bool:
                 and station_variants(station, config) & station_variants(config.stations.designer, config)):
             return True
         next_step = fields(body, config).get(config.status.fields[3], "") if len(config.status.fields) > 3 else ""
-        return named(next_step, station, config, markers=("交",))
-    return named(body, station, config, markers=("@", "交"), signature=True)
+        return named(next_step, station, config, markers=handoff(config))
+    return named(body, station, config, markers=("@", *handoff(config)), signature=True)
+
+
+def handoff(config: Config) -> tuple[str, ...]:
+    return tuple(normalized(marker) for marker in config.watch.handoff)
 
 
 def summary(body: str, config: Config) -> str:

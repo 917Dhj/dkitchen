@@ -34,6 +34,7 @@ Use the user's language and this order. Leave out a section that is empty.
 3. **Orders used**: for each numbered order, used (where) or unused. Flag any action that went beyond an order, with its log line.
 4. **Progress**: one line per ticket that moved, with a link. Results go to the designer's reading where one exists; link it rather than interpreting.
 5. **Make standing?**: orders that were used and would read the same every night. An example is "the query-vector service may start on any free card". Propose each as a standing rule. On the user's yes, it goes into the repo's rules as they direct, and future goodnights stop asking it.
+6. **Improve pass**: when the last pass in `docs/agents/improve-kitchen-history.md` is more than 14 days old, or there has been none, one line suggesting `/improve-kitchen`. This report counts as the orchestrator's first report of the day.
 
 ## 4. After the report
 

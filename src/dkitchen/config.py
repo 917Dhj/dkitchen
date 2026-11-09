@@ -23,7 +23,6 @@ Every key is optional. The defaults match the English templates in kitchen/:
     blocked = "blocked"
     done = "done"
     none = "none"                        # a Waiting on value naming nobody
-    pending_merge = "Pending merge"      # optional field listing PRs ready to merge, e.g. "PR#12, PR#14"
 
     [labels]
     prefix = "status:"
@@ -54,10 +53,29 @@ Every key is optional. The defaults match the English templates in kitchen/:
     idle_minutes = 45                    # 0 disables idle-executor wakes
     design_answer_minutes = 30           # 0 disables unanswered-station and PR backstops
     unrouted_wait_minutes = 30           # 0 disables unknown-station wait reminders
+    handoff = ["hand to "]               # written right before a station name to hand it work, e.g. ["交"]
 
     [merge]
     required_checks = []                # e.g. ["hca-check"]; only success permits merging
-    review_check = ""                   # e.g. "review"; replaces the legacy ticket gate
+    review_check = ""                   # e.g. "review": the commit status `ding review` writes and `ding merge` requires
+    review_pass = "Reviewed {sha}: pass"                                 # first line of a passing review
+    review_changes = "Reviewed {sha}: changes requested, see below"      # first line of a failing review
+
+    [check]                              # `ding check` and `ding map`; absent means no repo checks
+    library = ["src/name"]               # areas: repo paths for each kind; see `ding check --help`
+    tools = []
+    experiments = []
+    tests = ["tests"]
+    docs = ["docs"]
+    outputs = []
+    assets = []
+    vendor = []
+    root_files = []                      # top-level files allowed beyond the usual README, LICENSE, pyproject.toml, ...
+    ruff = true                          # run `ruff check` and `ruff format --check` on the whole tree
+    imports = true                       # run `lint-imports` with the contracts in pyproject.toml
+    commands = []                        # the repo's own checks, e.g. [["python", "scripts/check_gpu_ids.py"]]
+
+    [build]                              # notes the build skills keep for each other; `ding` skips this table
 """
 from __future__ import annotations
 
@@ -102,7 +120,6 @@ class Status:
     blocked: str = "blocked"
     done: str = "done"
     none: str = "none"
-    pending_merge: str = "Pending merge"
 
 
 @dataclass(frozen=True)
@@ -181,12 +198,79 @@ class Watch:
     idle_minutes: float = 45
     design_answer_minutes: float = 30
     unrouted_wait_minutes: float = 30
+    handoff: tuple[str, ...] = ("hand to ",)
 
 
 @dataclass(frozen=True)
 class Merge:
     required_checks: tuple[str, ...] = ()
     review_check: str = ""
+    review_pass: str = "Reviewed {sha}: pass"
+    review_changes: str = "Reviewed {sha}: changes requested, see below"
+
+
+AREAS = ("library", "tools", "experiments", "tests", "docs", "outputs", "assets", "vendor")
+
+
+@dataclass(frozen=True)
+class Check:
+    """Repo checks: each area kind maps to the repo paths that hold that kind of thing."""
+    library: tuple[str, ...] = ()
+    tools: tuple[str, ...] = ()
+    experiments: tuple[str, ...] = ()
+    tests: tuple[str, ...] = ()
+    docs: tuple[str, ...] = ()
+    outputs: tuple[str, ...] = ()
+    assets: tuple[str, ...] = ()
+    vendor: tuple[str, ...] = ()
+    root_files: tuple[str, ...] = ()
+    ruff: bool = True
+    imports: bool = True
+    commands: tuple[tuple[str, ...], ...] = ()
+
+    def areas(self) -> dict[str, str]:
+        """Each area path and its kind."""
+        return {path: kind for kind in AREAS for path in getattr(self, kind)}
+
+
+def check_section(values: object) -> Check:
+    if not isinstance(values, dict):
+        raise ValueError(f"{FILE}: [check] must be a table")
+    known = {field.name for field in dataclass_fields(Check)}
+    unknown = sorted(set(values) - known)
+    if unknown:
+        raise ValueError(f"{FILE}: unknown keys in [check]: {', '.join(unknown)}")
+    settings = {}
+    seen: dict[str, str] = {}
+    for key, value in values.items():
+        if key in AREAS or key == "root_files":
+            if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+                raise ValueError(f"{FILE}: [check] {key} must be a list of repo paths")
+            paths = tuple(item.strip().strip("/") for item in value)
+            for path in paths:
+                parts = path.split("/")
+                if (path.startswith(".") and key in AREAS) or ".." in parts or "" in parts or path.startswith("~"):
+                    raise ValueError(f"{FILE}: [check] {key}: {path!r} must be a relative path inside the repo")
+                if key == "root_files" and len(parts) > 1:
+                    raise ValueError(f"{FILE}: [check] root_files: {path!r} must be a top-level file name")
+                if key in AREAS:
+                    if path in seen:
+                        raise ValueError(f"{FILE}: [check] {path!r} is in both {seen[path]} and {key}")
+                    seen[path] = key
+            settings[key] = paths
+        elif key in {"ruff", "imports"}:
+            if not isinstance(value, bool):
+                raise ValueError(f"{FILE}: [check] {key} must be true or false")
+            settings[key] = value
+        else:
+            if (not isinstance(value, list) or not all(
+                    isinstance(argv, list) and argv and all(isinstance(item, str) and item for item in argv)
+                    and argv[0].strip() for argv in value)):
+                raise ValueError(f"{FILE}: [check] commands must be a list of nonempty argv lists")
+            settings[key] = tuple(tuple(argv) for argv in value)
+    if not seen:
+        raise ValueError(f"{FILE}: [check] names no area; give at least one of {', '.join(AREAS)}")
+    return Check(**settings)
 
 
 SESSION_FIELDS = ("issue", "name", "repo")
@@ -228,6 +312,7 @@ class Config:
     launch: Launch = Launch()
     watch: Watch = Watch()
     merge: Merge = Merge()
+    check: Check | None = None
 
     @property
     def designer_signatures(self) -> tuple[str, ...]:
@@ -268,6 +353,14 @@ def section(cls, values: object, name: str):
         elif key == "review_check":
             if not isinstance(value, str) or (value and not value.strip()):
                 raise ValueError(f"{FILE}: [merge] review_check must be a check name or an empty string")
+        elif key == "handoff":
+            if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
+                raise ValueError(f"{FILE}: [watch] handoff must be a nonempty list of nonempty words")
+            value = tuple(value)
+        elif key in {"review_pass", "review_changes"}:
+            if (not isinstance(value, str) or value.count("{sha}") != 1 or "\n" in value or "\r" in value
+                    or not value.replace("{sha}", "").strip()):
+                raise ValueError(f"{FILE}: [merge] {key} must be one line holding {{sha}} once")
         elif key == "preflight":
             if (not isinstance(value, list) or not value
                     or not all(isinstance(item, str) and "\0" not in item for item in value)
@@ -335,11 +428,14 @@ def load(cwd: Path | None = None) -> Config:
         raise ValueError(f"{path}: {exc}") from exc
     sections = {"stations": Stations, "status": Status, "labels": Labels, "log": Log, "sessions": Sessions, "relay": Relay,
                 "rule": Rule, "launch": Launch, "watch": Watch, "night": Night, "merge": Merge}
-    unknown = sorted(set(data) - {"repo", *sections})
+    unknown = sorted(set(data) - {"repo", "check", "build", *sections})
     if unknown:
         raise ValueError(f"{FILE}: unknown keys: {', '.join(unknown)}")
     repo = data.get("repo")
     if repo is not None and (not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo)):
         raise ValueError(f"{FILE}: repo must look like owner/name")
-    return Config(root=root, repo=repo, **{name: section(cls, data[name], name)
-                                            for name, cls in sections.items() if name in data})
+    if "build" in data and not isinstance(data["build"], dict):
+        raise ValueError(f"{FILE}: [build] must be a table")
+    check = check_section(data["check"]) if "check" in data else None
+    return Config(root=root, repo=repo, check=check, **{name: section(cls, data[name], name)
+                                                        for name, cls in sections.items() if name in data})
