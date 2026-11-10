@@ -47,6 +47,31 @@ const SPRITES = {
     "  d  d      d  d  ",
     "  d  d      d  d  ",
   ]},
+  // a woken crab at work: the arms take turns lifting one row, like hands kneading on the counter
+  crabWorkA: { map: { "#": "#f6622a", h: "#ff8c5a", e: "#0f0d0c", d: "#c94a1c" }, rows: [
+    "  ##############  ",
+    "  #hh###########  ",
+    "  ##ee######ee##  ",
+    "####ee######ee##  ",
+    "##################",
+    "  ################",
+    "  ##############  ",
+    "  dddddddddddddd  ",
+    "  d  d      d  d  ",
+    "  d  d      d  d  ",
+  ]},
+  crabWorkB: { map: { "#": "#f6622a", h: "#ff8c5a", e: "#0f0d0c", d: "#c94a1c" }, rows: [
+    "  ##############  ",
+    "  #hh###########  ",
+    "  ##ee######ee##  ",
+    "  ##ee######ee####",
+    "##################",
+    "################  ",
+    "  ##############  ",
+    "  dddddddddddddd  ",
+    "  d  d      d  d  ",
+    "  d  d      d  d  ",
+  ]},
   toque: { map: { w: "#f4f1ea", g: "#d8d4cc", b: "#e2ded6" }, rows: [
     "   wwwwww   ",
     " wwwwwwwwww ",
@@ -229,14 +254,22 @@ function rect(x, y, w, h, color) {
   ctx.fillRect(x * U, y * U, w * U, h * U);
 }
 
-function sprite(name, x, y, outline = true) {
-  const { map, rows, scale: s = 1 } = SPRITES[name];
+// Sprite pixels snap their edges to screen pixels, so a sprite drawn at any scale stays sharp (nearest neighbour).
+function pixel(x, y, s, color) {
+  const x0 = Math.round(x * U), y0 = Math.round(y * U);
+  ctx.fillStyle = color;
+  ctx.fillRect(x0, y0, Math.round((x + s) * U) - x0, Math.round((y + s) * U) - y0);
+}
+
+function sprite(name, x, y, outline = true, scale) {
+  const { map, rows, scale: base = 1 } = SPRITES[name];
+  const s = scale || base;
   if (outline) {
     rows.forEach((row, j) => [...row].forEach((ch, i) => {
-      if (ch !== " ") for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) rect(x + (i + dx) * s, y + (j + dy) * s, s, s, C.outline);
+      if (ch !== " ") for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) pixel(x + (i + dx) * s, y + (j + dy) * s, s, C.outline);
     }));
   }
-  rows.forEach((row, j) => [...row].forEach((ch, i) => { if (ch !== " ") rect(x + i * s, y + j * s, s, s, map[ch]); }));
+  rows.forEach((row, j) => [...row].forEach((ch, i) => { if (ch !== " ") pixel(x + i * s, y + j * s, s, map[ch]); }));
 }
 
 const CJK = /[\u3000-\u9fff\uff00-\uffef]/;
@@ -258,71 +291,100 @@ function text(str, x, y, { size = 16, color = C.ink, align = "left", font = "Sil
 
 // ---- time ---------------------------------------------------------------
 // renderAt(t) draws the frame at t seconds; the same t always draws the same frame.
-const DURATION = 36.6;
-// The story runs on two clocks. REAL is the time in the loop. STORY is the time of the work in the kitchen;
-// it pauses while the head chef and the designer talk (REAL 3 to 12.1) and then runs 4.6 s behind REAL.
-const TALK_END = 12.1, SHIFT = 4.6;
-let REAL = 0, STORY = 0;
+// Four acts: the evening's work (0-34.5), good night (34.5-44), the night (44-56), and the morning (56-65.5),
+// then the end card.
+const DURATION = 71.5;
 const clamp = (v, a = 0, b = 1) => Math.min(b, Math.max(a, v));
 const prog = (t, a, b) => clamp((t - a) / (b - a));
 const ease = (p) => (p < 0.5 ? 2 * p * p : 1 - (-2 * p + 2) ** 2 / 2);
 const lerp = (a, b, p) => a + (b - a) * p;
 const half = (v) => Math.round(v * 2) / 2;                 // moving things stay on the half-unit grid
-const tick = (t, fps) => Math.floor((t - STORY + REAL) * fps);  // stepped idle animation, always on REAL time
+const tick = (t, fps) => Math.floor(t * fps);              // stepped idle animation
 const noise = (n) => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
+const during = (t, spans) => spans.some(([a, b]) => t >= a && t < b);
+// how far the head chef's lights are down: off at bedtime, back on at sunrise
+const nightness = (t) => ease(prog(t, 42.6, 43.6)) * (1 - ease(prog(t, 56.0, 57.2)));
 
 // ---- story --------------------------------------------------------------
 const CAPTIONS_EN = [
   [0.0, "$ ding board      4 cooking · GPU2-3 free · 5 tickets on the rail"],
   [3.0, 'you: "try method B on dataset X?"'],
-  [4.4, "designer comes over: this one changes what the model sees"],
-  [5.4, 'designer: "PROPOSAL: new prompts for B. your call"'],
-  [7.6, 'you: "yes. keep the old prompts as the baseline"'],
-  [10.2, 'designer$ gh issue create --title "Eval method B on X"   → #17'],
-  [12.1, "verifier$ ding check-refs check.md   → 0 problems"],
-  [13.5, 'verifier → orchestrator: "#17 pass"'],
-  [14.6, "orchestrator$ ding board   → GPU2, GPU3 free"],
-  [15.6, 'orchestrator$ ding relay 17 --message "start #17 on GPU2-3"'],
-  [17.2, "codex #17$ ding launch eval17 -- python eval.py --gpus 2,3"],
-  [19.1, "orchestrator$ ding watch   → #14 Status: waiting on design"],
-  [21.4, 'designer → orchestrator: "#14 answered, see the ticket"'],
-  [23.6, "codex #13$ pytest   → 48 passed · PR #31 opened"],
-  [25.2, "orchestrator$ scripts/review_pr.py 31   → ready to merge"],
-  [26.4, "orchestrator$ ding merge 31 3f9c2a1   → merged"],
-  [28.6, "orchestrator → you: 1 decision waiting"],
-  [31.2, 'orchestrator$ ding relay 14 --message "approved: +1.2k calls"'],
-  [32.6, "$ ding board      5 cooking · GPU0-3 busy · you: 0 waiting"],
+  [4.4, "designer comes over with a plan"],
+  [5.4, 'designer: "PROPOSAL: eval B on X, 2k items. your call"'],
+  [7.6, 'you: "yes. keep A as the baseline"'],
+  [10.2, "designer$ write-ticket   → #17"],
+  [12.1, "orchestrator$ ding board   → GPU2, GPU3 free"],
+  [13.6, "orchestrator$ ding new --parent 17 --name 'Eval B on X'"],
+  [15.9, "codex #17: premises hold against the code and data"],
+  [17.4, "codex #17$ ding launch eval17 -- python eval.py --gpus 2,3"],
+  [19.5, "codex #14: Status: waiting on design · Waiting on: Designer"],
+  [20.6, "designer$ ding watch --for Designer   → #14"],
+  [22.8, "designer$ ding rule 14 reply.md --notify '#14'"],
+  [24.4, "codex #13$ scripts/review_pr.py 31   → ok · PR #31 ready"],
+  [26.6, "verifier$ ding watch --for Verifier   → PR #31"],
+  [27.6, "verifier$ ding review 31 3f9c2a1 pass"],
+  [30.2, "orchestrator$ ding merge 31 3f9c2a1   → merged"],
+  [34.5, "you: /goodnight"],
+  [35.8, 'orchestrator → designer: "where does your line stop tonight?"'],
+  [38.2, "orchestrator$ ding night open --until 08:00"],
+  [41.0, "you go to bed. the kitchen keeps cooking"],
+  [48.6, "codex #17: stage 1 passed its gate · Next: stage 2"],
+  [49.4, "orchestrator$ ding night show   → order 1 covers #17"],
+  [50.8, "orchestrator$ ding log --item '#17 stage 2 · order 1'"],
+  [51.6, "codex #15: 3% of the rows are malformed. drop or fix?"],
+  [52.8, "codex #15$ ding night show   → order 2: park it"],
+  [54.0, "#15 parked till morning, and logged"],
+  [56.0, "morning. the kitchen ran all night"],
+  [58.2, "you: /goodmorning"],
+  [58.8, "orchestrator$ ding night close"],
+  [59.8, "orchestrator → you: 1 decision waiting"],
+  [62.2, 'orchestrator$ ding relay 15 --message "fix the parser"'],
+  [63.8, "$ ding board      4 cooking · GPU0-3 busy · you: 0 waiting"],
 ];
 const CAPTIONS_ZH = [
   [0.0, "$ ding board      4 个在做 · GPU2-3 空闲 · 单轨上 5 张票"],
   [3.0, "你：方法 B 在数据集 X 上试试？"],
-  [4.4, "总设计走过来：这件事会改模型看到的内容"],
-  [5.4, "总设计：提案，B 需要新的 prompt，你来定"],
-  [7.6, "你：可以，旧 prompt 留作 baseline"],
-  [10.2, '总设计$ gh issue create --title "Eval method B on X"  → #17'],
-  [12.1, "总核查$ ding check-refs check.md  → 0 个问题"],
-  [13.5, "总核查 → 总编排：#17 通过"],
-  [14.6, "总编排$ ding board  → GPU2、GPU3 空闲"],
-  [15.6, '总编排$ ding relay 17 --message "start #17 on GPU2-3"'],
-  [17.2, "codex #17$ ding launch eval17 -- python eval.py --gpus 2,3"],
-  [19.1, "总编排$ ding watch  → #14 在等设计"],
-  [21.4, "总设计 → 总编排：#14 已回复，见 ticket"],
-  [23.6, "codex #13$ pytest  → 48 passed · 已开 PR #31"],
-  [25.2, "总编排$ scripts/review_pr.py 31  → 可以合并"],
-  [26.4, "总编排$ ding merge 31 3f9c2a1  → 已合并"],
-  [28.6, "总编排 → 你：有 1 件事等你决定"],
-  [31.2, '总编排$ ding relay 14 --message "approved: +1.2k calls"'],
-  [32.6, "$ ding board      5 个在做 · GPU0-3 全忙 · 等你：0"],
+  [4.4, "总设计带着方案走过来"],
+  [5.4, "总设计：提案，在 X 上评测 B，2k 条，你来定"],
+  [7.6, "你：可以，A 留作 baseline"],
+  [10.2, "总设计$ write-ticket  → #17"],
+  [12.1, "总编排$ ding board  → GPU2、GPU3 空闲"],
+  [13.6, "总编排$ ding new --parent 17 --name 'Eval B on X'"],
+  [15.9, "codex #17：对照代码和数据，票面前提成立"],
+  [17.4, "codex #17$ ding launch eval17 -- python eval.py --gpus 2,3"],
+  [19.5, "codex #14：状态：等设计 · 在等：总设计"],
+  [20.6, "总设计$ ding watch --for 总设计  → #14"],
+  [22.8, "总设计$ ding rule 14 reply.md --notify '#14'"],
+  [24.4, "codex #13$ scripts/review_pr.py 31  → ok · PR #31 待审"],
+  [26.6, "总核查$ ding watch --for 总核查  → PR #31"],
+  [27.6, "总核查$ ding review 31 3f9c2a1 pass"],
+  [30.2, "总编排$ ding merge 31 3f9c2a1  → 已合并"],
+  [34.5, "你：/goodnight"],
+  [35.8, "总编排 → 总设计：今晚你这条线停在哪？"],
+  [38.2, "总编排$ ding night open --until 08:00"],
+  [41.0, "你去睡了，厨房照常运转"],
+  [48.6, "codex #17：第一阶段过了门槛 · 下一步：第二阶段"],
+  [49.4, "总编排$ ding night show  → 第 1 条覆盖 #17"],
+  [50.8, "总编排$ ding log --item '#17 第二阶段 · 第 1 条'"],
+  [51.6, "codex #15：3% 的行格式坏了，丢掉还是修？"],
+  [52.8, "codex #15$ ding night show  → 第 2 条：放到早上"],
+  [54.0, "#15 暂停到早上，记进日志"],
+  [56.0, "早上了，厨房转了一整夜"],
+  [58.2, "你：/goodmorning"],
+  [58.8, "总编排$ ding night close"],
+  [59.8, "总编排 → 你：有 1 件事等你决定"],
+  [62.2, '总编排$ ding relay 15 --message "fix the parser"'],
+  [63.8, "$ ding board      4 个在做 · GPU0-3 全忙 · 等你：0"],
 ];
 const CAPTIONS = LANG === "zh" ? CAPTIONS_ZH : CAPTIONS_EN;
 
 // Which parts of the kitchen are lit; the rest is dimmed.
 // The resource panel is never dimmed.
 const REGIONS = { head: [0, 0, 180, 34], pass: [0, 34, 180, 46], line: [0, 80, 180, 44] };
-const FOCUS = [  // in REAL time
+const FOCUS = [
   [0, 1, ["head"]], [1, 2, ["pass"]], [2, 3, ["line"]],
-  [3, 12.1, ["head", "pass"]], [12.1, 14.6, ["pass"]], [14.6, 19.1, ["pass", "panel", "line"]],
-  [19.1, 23.6, ["pass", "line"]], [23.6, 28.6, ["pass", "line"]], [28.6, 32.6, ["head", "pass", "panel"]],
+  [3, 12.1, ["head", "pass"]], [12.1, 26.6, ["pass", "line"]], [26.6, 30.0, ["pass"]], [30.0, 34.5, ["pass", "line"]],
+  [34.5, 41.0, ["head", "pass"]], [41.0, 44.0, ["head"]],
 ];
 
 function lit(region, t) {
@@ -332,25 +394,38 @@ function lit(region, t) {
   return sum / 5;
 }
 
+// While a role is woken, its watch lamp flashes and its crab stands up, bigger, and gets to work.
+const WAKES = { d: [[20.4, 22.8], [36.6, 37.6]], o: [[30.0, 31.2], [34.6, 36.0], [48.8, 50.6], [58.8, 60.0]], v: [[26.6, 29.4]] };
+const woken = (t, key) => WAKES[key].reduce((m, [a, b]) => Math.max(m, Math.min(prog(t, a, a + 0.3), 1 - prog(t, b - 0.3, b))), 0);
+
 // The ticket rail: six slots; #17 arrives, #13 leaves.
 const SLOT = (i) => 72 + i * 17;
 function tickets(t) {
-  const order = t < 22.8 ? ["#12", "#13", "#14", "#15", "#16", "#17"] : ["#12", "#14", "#15", "#16", "#17"];
-  const slide = ease(prog(t, 22.8, 23.4));
+  const order = t < 32.2 ? ["#12", "#13", "#14", "#15", "#16", "#17"] : ["#12", "#14", "#15", "#16", "#17"];
+  const slide = ease(prog(t, 32.2, 32.8));
   const before = { "#12": 0, "#14": 2, "#15": 3, "#16": 4, "#17": 5 };
   return order.map((label, i) => {
-    let x = SLOT(t < 22.8 ? i : lerp(before[label], i, slide)), y = 42.5, alpha = 1;
+    let x = SLOT(t < 32.2 ? i : lerp(before[label], i, slide)), y = 42.5, alpha = 1;
     if (label === "#17") {
-      if (REAL < 11.0) return null;
-      const f = ease(prog(REAL, 11.0, 11.8));
+      if (t < 11.0) return null;
+      const f = ease(prog(t, 11.0, 11.8));
       x = lerp(30, x, f); y = lerp(60, y, f);
     }
-    if (label === "#13") alpha = 1 - prog(t, 22.4, 22.8);
-    return { label, x, y, alpha, checked: label === "#17" && t >= 8.3, flagged: label === "#14" && t >= 14.5 && t < 17.7 };
+    if (label === "#13") alpha = 1 - prog(t, 31.6, 32.2);
+    const flagged = (label === "#14" && t >= 19.5 && t < 23.7) || (label === "#15" && t >= 51.6 && t < 63.3);
+    return { label, x, y, alpha, flagged, parked: label === "#15" && t >= 53.4 && t < 63.3 };
   }).filter(Boolean);
 }
 
-const callsAt = () => Math.round(812 + 30 * (Math.min(REAL, 19.1) + Math.max(0, REAL - 22.3)));
+// #14's paid batch stops while it waits on the designer and runs on through the night.
+const callsAt = (t) => Math.round(812 + 8 * (t - clamp(t - 19.5, 0, 4.2)) + 500 * ease(prog(t, 44.5, 56)));
+// #17's evaluation: stage 1 finishes in the night, and stage 2 starts on night order 1.
+function evalAt(t) {
+  if (t < 50.8) return [1, Math.round(Math.min(534, 20 * Math.max(0, t - 17.8)) + 1466 * ease(prog(t, 44.5, 48.6)))];
+  return [2, Math.round(1400 * ease(prog(t, 50.8, 56)) + 20 * Math.max(0, t - 56))];
+}
+// The wall clock in seconds after midnight: 20:40 at the start, racing through the night.
+const clockAt = (t) => 74400 + 280 * t + 23320 * ease(prog(t, 44.5, 56));
 
 // ---- drawing helpers -----------------------------------------------------
 function alpha(a, draw) { ctx.save(); ctx.globalAlpha *= a; draw(); ctx.restore(); }
@@ -362,8 +437,12 @@ function ring(cx, cy, r, color) {
   }
 }
 
-function check(x, y, color) {
-  [[0, 2], [1, 3], [2, 2], [3, 1], [4, 0]].forEach(([dx, dy]) => rect(x + dx, y + dy, 1, 1, color));
+function check(x, y, color, s = 1) {
+  [[0, 2], [1, 3], [2, 2], [3, 1], [4, 0]].forEach(([dx, dy]) => rect(x + dx * s, y + dy * s, s, s, color));
+}
+
+function moon(x, y, color) {
+  [[1, 0], [2, 0], [0, 1], [0, 2], [1, 3], [2, 3]].forEach(([dx, dy]) => rect(x + dx * 0.75, y + dy * 0.75, 0.75, 0.75, color));
 }
 
 function note(x, y, label) {
@@ -380,6 +459,20 @@ function fly(t, a, b, from, to, label, lift = 10) {
   note(lerp(from[0], to[0], p), lerp(from[1], to[1], p) - Math.sin(p * Math.PI) * lift, label);
 }
 
+// A note that goes straight from one session to another along a curve, leaving a dotted trail that fades after it lands.
+const bez = (a, c, b, s) => [0, 1].map((i) => (1 - s) ** 2 * a[i] + 2 * s * (1 - s) * c[i] + s * s * b[i]);
+function direct(t, a, b, from, ctrl, to, label) {
+  if (t < a || t > b + 1.0) return;
+  const p = ease(prog(t, a, b));
+  alpha(1 - prog(t, b, b + 1.0), () => {
+    for (let s = 0; s < p - 0.04; s += 0.05) {
+      const [x, y] = bez(from, ctrl, to, s);
+      rect(half(x + 2.5), half(y + 1.5), 1, 1, C.brass);
+    }
+  });
+  if (t <= b) { const [x, y] = bez(from, ctrl, to, p); note(x, y, label); }
+}
+
 function bandTitle(str, y, color) {
   rect(3, y + 0.5, 1.5, 1.5, color);
   text(str, 6, y - 0.5, { size: 16, color: C.muted });
@@ -390,6 +483,17 @@ function bubble(x, y, w, h, lines, tailX) {
   rect(x, y, w, h, "#f4efe6");
   for (let k = 0; k < 3; k++) rect(tailX + k, y + h + k * 0.5 - 0.5, 3 - k, 1, "#f4efe6");
   lines.forEach(([str, color], i) => text(str, x + 3, y + 2 + i * 4.5, { size: 12, color: color || "#2a2622" }));
+}
+
+function okChip(x, y) {
+  rect(x, y, 15, 7, "#3f8f4e");
+  rect(x + 1, y + 1, 13, 5, "#e9f6ea");
+  text(L("OK", "批准"), x + 7.5, y + 1.5, { size: 12, color: "#2f7a3e", align: "center" });
+}
+
+function mix(a, b, p) {
+  const ch = (c, i) => parseInt(c.slice(1 + i * 2, 3 + i * 2), 16);
+  return "#" + [0, 1, 2].map((i) => Math.round(lerp(ch(a, i), ch(b, i), p)).toString(16).padStart(2, "0")).join("");
 }
 
 // ---- the kitchen ---------------------------------------------------------
@@ -403,56 +507,200 @@ function background() {
   rect(0, 80, 180, 0.5, C.line);
 }
 
-const SIPS = [[1.0, 2.2], [13.2, 14.4], [20.8, 22.0], [26.2, 27.4]];  // REAL time
+// The window over the head chef's cot: dusk, a moon crossing the night, then sunrise.
+const SKY = [[0, "#3b3a66"], [22, "#1d2042"], [34, "#121631"], [56.2, "#121631"], [57.2, "#c9744a"], [58.8, "#7fb2dc"]];
+function sky(t) {
+  const i = SKY.findIndex(([a]) => a > t);
+  if (i === -1) return SKY[SKY.length - 1][1];
+  if (i === 0) return SKY[0][1];
+  return mix(SKY[i - 1][1], SKY[i][1], prog(t, SKY[i - 1][0], SKY[i][0]));
+}
+
+function windowView(t) {
+  const x = 150, y = 4, w = 20, h = 12;
+  rect(x - 1, y - 1, w + 2, h + 2, "#5e4129");
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(x * U, y * U, w * U, h * U);
+  ctx.clip();
+  rect(x, y, w, h, sky(t));
+  const dark = prog(t, 8, 30) * (1 - prog(t, 56.2, 57.0));
+  if (dark > 0) alpha(dark, () => {
+    for (const [sx, sy] of [[2, 2], [7, 5], [13, 1.5], [17, 6.5], [4, 9], [11, 9.5]])
+      if ((tick(t, 2) + sx) % 7) rect(x + sx, y + sy, 0.5, 0.5, "#f4efe6");
+    const mx = half(x + lerp(15, 3, prog(t, 20, 57))), my = y + 2.5;
+    rect(mx, my, 3, 3, "#f3e6b0");
+    rect(mx + 1.25, my - 0.5, 2.5, 3, sky(t));
+  });
+  if (t >= 56.4) {
+    const sy = half(lerp(y + h, y + 3, ease(prog(t, 56.4, 58.6))));
+    rect(x + 8, sy, 4, 4, "#ffd36a");
+  }
+  ctx.restore();
+  rect(x + w / 2 - 0.25, y, 0.5, h, "#5e4129");
+  rect(x, y + h / 2 - 0.25, w, 0.5, "#5e4129");
+}
+
+// The head chef's cot.
+function cot() {
+  rect(139, 20.5, 2, 13, "#5e4129");
+  rect(173, 24.5, 2, 9, "#5e4129");
+  rect(141, 27, 32, 3, "#d8d4cc");
+  rect(141, 30, 32, 1.5, "#5e4129");
+  rect(141, 25, 7, 2.5, "#f4f1ea");
+  rect(148, 26, 25, 1.5, "#4a63b0");
+}
+
+// Asleep, the head chef lies under the blanket in the moonlight, and the toque hangs on the post.
+function sleeper(t, asleep) {
+  if (asleep <= 0) return;
+  alpha(asleep, () => {
+    rect(140.5, 24.5, 8, 3, "#c9c5bd");
+    rect(148, 23.5, 25, 4, "#5c76c8");
+    rect(151, 22, 16, 2, "#5c76c8");
+    rect(148, 23.5, 25, 0.5, "#8fa6e6");
+    rect(141.5, 20, 7, 2.5, "#2a1f1b");
+    rect(141.5, 22, 7, 3.5, "#f0c39e");
+    rect(141.5, 22, 1, 2, "#2a1f1b");
+    rect(143, 23.5, 1.5, 0.5, "#1b1b1b");
+    rect(146, 23.5, 1.5, 0.5, "#1b1b1b");
+    sprite("toqueSmall", 135, 14.5);
+    for (let k = 0; k < 3; k++) {
+      const p = (t * 0.6 + k / 3) % 1;
+      alpha(Math.sin(p * Math.PI), () => text("z", 150 + p * 8, 19 - p * 7, { size: 16, color: C.ink }));
+    }
+  });
+}
+
+// Where the head chef is: at the desk, walking to the cot at bedtime, and back in the morning.
+function chefAt(t) {
+  const out = ease(prog(t, 41.0, 42.4)), back = ease(prog(t, 57.4, 58.2));
+  return {
+    x: half(lerp(82, 134, out * (1 - back))),
+    shown: 1 - prog(t, 42.4, 42.8) * (1 - prog(t, 57.0, 57.4)),
+    walking: during(t, [[41.0, 42.4], [57.4, 58.2]]),
+    atDesk: t < 41.0 || t >= 58.2,
+  };
+}
+
+const SIPS = [[1.0, 2.2], [13.0, 14.2], [24.8, 26.0], [31.8, 33.0], [63.9, 65.1]];
+
+// The head chef's stamp comes down at a, onto the card's OK chip at (x, y).
+const STAMPS = [39.4, 61.0];
+function stamp(t, a, x, y) {
+  if (t < a || t >= a + 1.3) return;
+  const down = t < a + 0.6 ? ease(prog(t, a, a + 0.5)) : 1 - ease(prog(t, a + 0.7, a + 1.2));
+  const sx = lerp(84, x + 6, ease(prog(t, a, a + 0.3))), sy = lerp(12, y - 6, down);
+  rect(sx - 0.5, sy - 0.5, 4, 5, C.outline);
+  rect(sx, sy, 3, 4, "#7a5638");
+  rect(sx - 1.5, sy + 4, 6, 2, "#3f8f4e");
+}
+
+// The night's log, left on the head chef's desk.
+const LOG = [[50.8, L("#17 stage 2 · 1", "#17 第二阶段 · 1")], [54.0, L("#15 parked · 2", "#15 暂停 · 2")]];
 
 function headChef(t) {
   bandTitle(L("HEAD CHEF · YOU", "主厨 · 你"), 3, "#e8e2d6");
-  sprite("chef", 82, 3);
-  // the spoon gives way to a stamp while a decision is on the table
-  const stamping = t >= 25.5 && t < 26.8;
-  if (!stamping) { sprite("spoon", 82, 18); rect(82.5, 24, 2.5, 2, "#f0c39e"); }
+  const chef = chefAt(t);
+  const asleep = prog(t, 42.4, 42.8) * (1 - prog(t, 57.0, 57.4));
+  cot();
+  if (chef.shown > 0) alpha(chef.shown, () => sprite("chef", chef.x, 3 - (chef.walking && tick(t, 8) % 2 ? 0.5 : 0)));
+  // the spoon gives way to a stamp while a card is on the table
+  const stamping = STAMPS.some((a) => t >= a && t < a + 1.3);
+  if (chef.atDesk && !stamping) { sprite("spoon", 82, 18); rect(82.5, 24, 2.5, 2, "#f0c39e"); }
   rect(66, 25.5, 48, 2, "#7a5638");
   rect(66, 27.5, 48, 5.5, "#5e4129");
   rect(68, 29.5, 44, 0.5, "#6e4c31");
-  // now and then the head chef takes a sip of coffee
-  const sip = SIPS.map(([a, b]) => Math.min(ease(prog(REAL, a, a + 0.35)), 1 - ease(prog(REAL, b - 0.35, b)))).reduce((m, v) => Math.max(m, v), 0);
+  // now and then the head chef takes a sip of coffee; it goes cold overnight
+  const sip = SIPS.map(([a, b]) => Math.min(ease(prog(t, a, a + 0.35)), 1 - ease(prog(t, b - 0.35, b)))).reduce((m, v) => Math.max(m, v), 0);
   const mx = half(lerp(103, 94, sip)), my = half(lerp(20.5, 12, sip));
   sprite("mug", mx, my);
   if (sip > 0) rect(mx + 4.5, my + 2.5, 2.5, 2, "#f0c39e");
-  if (sip < 0.05) {
+  if (sip < 0.05 && (t < 42 || t >= 58.2)) {
     const s = tick(t, 4) % 3;
     rect(104, 16.5 - s * 0.5, 0.5, 2, C.muted);
     rect(106, 15.5 + (s % 2) * 0.5, 0.5, 2, C.muted);
   }
 
-  // the report card
-  if (t >= 24.9 && t < 26.9) {
-    alpha(prog(t, 24.9, 25.1) * (1 - prog(t, 26.6, 26.9)), () => {
-      bubble(10, 6, 64, 25, LANG === "zh"
-        ? [["汇报", "#8a8378"], ["#13 已合并，#17 在跑"], ["待定：#14 再加 1.2k 次调用？"], ["约 $12", "#8a8378"]]
-        : [["REPORT", "#8a8378"], ["#13 merged, #17 running"], ["decide: #14 +1.2k calls?"], ["cost about $12", "#8a8378"]], 72);
-      if (t >= 26.1) {
-        rect(55, 22.5, 15, 7, "#3f8f4e");
-        rect(56, 23.5, 13, 5, "#e9f6ea");
-        text(L("OK", "批准"), 62.5, 24, { size: 12, color: "#2f7a3e", align: "center" });
-      }
+  // lights out over the head chef's corner
+  const night = nightness(t);
+  if (night > 0) rect(0, 0, 180, 34, `rgba(6,9,24,${0.6 * night})`);
+  windowView(t);
+  sleeper(t, asleep);
+
+  // good night: the bubble, the night orders, the stamp, and the orders pinned up for the night
+  if (t >= 34.5 && t < 35.8) alpha(prog(t, 34.5, 34.7) * (1 - prog(t, 35.6, 35.8)), () =>
+    bubble(30, 10, 44, 8, [["/goodnight"]], 70));
+  fly(t, 37.8, 38.4, [90, 60], [40, 16], "", 8);
+  if (t >= 38.4 && t < 41.0) alpha(prog(t, 38.4, 38.6) * (1 - prog(t, 40.7, 41.0)), () => {
+    bubble(10, 6, 64, 25, LANG === "zh"
+      ? [["夜班令 · 到 08:00", "#3a5a9a"], ["1 #17 过门槛开第二阶段"], ["2 其余放到早上"]]
+      : [["NIGHT ORDERS · 08:00", "#3a5a9a"], ["1 #17: stage 2 at gate"], ["2 park everything else"]], 72);
+    if (t >= 40.0) okChip(55, 22.5);
+  });
+  stamp(t, 39.4, 55, 22.5);
+  const pinned = prog(t, 40.8, 41.2) * (1 - prog(t, 58.8, 59.2));
+  if (pinned > 0) alpha(pinned, () => {
+    if (during(t, [[49.4, 50.4], [52.8, 53.8]]) && tick(t, 6) % 2) rect(4.5, 10, 17, 14.5, C.brass);
+    sprite("scroll", 9.5, 11.5);
+    text(L("ORDERS", "夜班令"), 13, 20, { size: 12, color: C.ink, align: "center" });
+  });
+  const logged = prog(t, 50.6, 50.9) * (1 - prog(t, 59.6, 59.9));
+  if (logged > 0) alpha(logged, () => {
+    rect(23.5, 8.5, 41, 21, C.outline);
+    rect(24, 9, 40, 20, "#efe6cf");
+    text(L("LOG", "日志"), 27, 10.5, { size: 12, color: "#8a8378" });
+    LOG.forEach(([at, str], i) => {
+      if (t < at) return;
+      if (t < at + 0.8 && tick(t, 6) % 2) rect(25, 15 + i * 5, 38, 4.5, "#f3d27a");
+      text(str, 27, 15.5 + i * 5, { size: 12, color: "#3b3326" });
     });
-  }
-  fly(t, 24.0, 24.9, [80, 60], [40, 16], "", 8);
-  fly(t, 26.6, 27.5, [40, 16], [88, 58], "", 8);
-  if (stamping) {
-    const down = t < 26.1 ? ease(prog(t, 25.5, 26.0)) : 1 - ease(prog(t, 26.2, 26.7));
-    const sx = lerp(84, 61, ease(prog(t, 25.5, 25.8))), sy = lerp(12, 16.5, down);
-    rect(sx - 0.5, sy - 0.5, 4, 5, C.outline);
-    rect(sx, sy, 3, 4, "#7a5638");
-    rect(sx - 1.5, sy + 4, 6, 2, "#3f8f4e");
-  }
+  });
+
+  // good morning: the report, one decision, and the answer sent to #15
+  if (t >= 58.2 && t < 59.2) alpha(prog(t, 58.2, 58.4) * (1 - prog(t, 59.0, 59.2)), () =>
+    bubble(30, 10, 44, 8, [["/goodmorning"]], 70));
+  fly(t, 59.0, 59.8, [90, 60], [40, 16], "", 8);
+  if (t >= 59.8 && t < 63.8) alpha(prog(t, 59.8, 60.0) * (1 - prog(t, 63.5, 63.8)), () => {
+    bubble(10, 6, 64, 25, LANG === "zh"
+      ? [["早报", "#8a8378"], ["#17 在跑第二阶段"], ["#15：3% 的行坏了"], ["修解析器？"]]
+      : [["MORNING REPORT", "#8a8378"], ["#17 on stage 2"], ["#15: 3% rows bad"], ["fix the parser?"]], 72);
+    if (t >= 61.6) okChip(55, 22.5);
+  });
+  stamp(t, 61.0, 55, 22.5);
+  fly(t, 62.3, 63.3, [40, 16], [168, 96], "", 10);
 }
 
-function crab(x, y, t, phase) {
+// A crab on the pass. Woken (w > 0.5), it grows a little, rises off the counter, and works: its arms take turns.
+const BIG = 1.125;
+function crab(x, t, phase, w = 0) {
+  if (w > 0.5) {
+    const sx = x + 9 - 9 * BIG, sy = 72 - half(1.5 * w) - 10 * BIG;
+    sprite(tick(t, 2.5) % 2 ? "crabWorkA" : "crabWorkB", sx, sy, true, BIG);
+    sprite("toque", sx + 3 * BIG, sy - 8 * BIG, true, BIG);
+    return;
+  }
   const bob = tick(t + phase, 2) % 2 ? 0.5 : 0;
-  sprite("crab", x, y + bob);
+  sprite("crab", x, 62 + bob);
   sprite("toque", x + 3, 54 + bob);
+}
+
+function chip(x, y, label) {
+  rect(x - 0.5, y - 0.5, 22, 5, C.outline);
+  rect(x, y, 21, 4, "#173a22");
+  text(label, x + 1.5, y + 0.5, { size: 12, color: "#7fd18b" });
+  check(x + 16.5, y + 0.75, "#7fd18b", 0.6);
+}
+
+// A role's name on the pass, with its watch lamp: steady while watching, flashing when the watch wakes it.
+function roleLabel(label, cx, t, key) {
+  text(label, cx, 76, { size: 12, color: C.ink, align: "center" });
+  ctx.font = textFont(label, 12, "Silkscreen");
+  const x = half(cx - ctx.measureText(label).width / U / 2 - 4), y = 76.5;
+  const awake = woken(t, key) > 0;
+  if (awake) rect(x - 1.5, y - 1.5, 5, 5, "rgba(255,211,106,0.35)");
+  rect(x - 0.5, y - 0.5, 3, 3, C.outline);
+  rect(x, y, 2, 2, awake ? (tick(t, 6) % 2 ? "#ffd36a" : C.brass) : "#3f8f4e");
 }
 
 function pass(t) {
@@ -466,7 +714,7 @@ function pass(t) {
       rect(x - 0.5, y - 0.5, 13, 10, C.outline);
       rect(x, y, 12, 9, k.flagged ? "#f3d27a" : "#efe6cf");
       text(k.label, x + 6, y + 1.5, { size: 12, color: "#3b3326", align: "center" });
-      if (k.checked) check(x + 3.5, y + 5, "#3f8f4e");
+      if (k.parked) moon(x + 4.75, y + 5, "#3a5a9a");
       else rect(x + 2.5, y + 6, 7, 0.5, "#b5a888");
     });
   }
@@ -474,59 +722,67 @@ function pass(t) {
   rect(8, 66, 164, 9, C.steel);
   rect(8, 74.25, 164, 0.75, C.steelLo);
 
-  // bell rings at 11.0
-  const ringing = t >= 11 && t < 11.8;
+  // the bell rings at 14.0 to start #17
+  const ringing = t >= 14 && t < 14.8;
   sprite("bell", 104 + (ringing ? (tick(t, 16) % 2 ? 0.5 : -0.5) : 0), 57);
-  if (t >= 11 && t < 12.2) {
+  if (t >= 14 && t < 15.2) {
     for (let k = 0; k < 3; k++) {
-      const p = prog(t, 11 + k * 0.2, 11.8 + k * 0.2);
+      const p = prog(t, 14 + k * 0.2, 14.8 + k * 0.2);
       if (p > 0 && p < 1) alpha(1 - p, () => ring(109, 60, 4 + p * 14, C.brass));
     }
-    alpha(1 - prog(t, 11.8, 12.2), () => text("DING!", 117, 56, { size: 16, color: C.brass }));
+    alpha(1 - prog(t, 14.8, 15.2), () => text("DING!", 117, 56, { size: 16, color: C.brass }));
   }
 
-  if (!(REAL >= 4.4 && REAL < 10.2)) crab(18, 62, t, 0);
-  crab(81, 62, t, 0.25);
-  crab(144, 62, t, 0.5);
-  // designer writes: the recipe bobs while drafting a ticket or an answer
-  const drafting = (REAL >= 10.2 && REAL < 11.0) || (t >= 15.9 && t < 16.8);
-  if (!(REAL >= 4.4 && REAL < 10.2)) sprite("scroll", 38, 63 - (drafting && tick(t, 8) % 2 ? 1 : 0));
+  if (!(t >= 4.4 && t < 10.2)) crab(18, t, 0, woken(t, "d"));
+  crab(81, t, 0.25, woken(t, "o"));
+  crab(144, t, 0.5, woken(t, "v"));
+  // designer writes: the recipe bobs while drafting a ticket, an answer, or the night's stops
+  const drafting = during(t, [[10.2, 11.0], [21.8, 22.6], [36.6, 37.0]]);
+  if (!(t >= 4.4 && t < 10.2)) sprite("scroll", 38, 63 - (drafting && tick(t, 8) % 2 ? 1 : 0));
   if (drafting) text("...", 43, 56, { size: 12, color: C.ink });
-  // verifier's magnifier goes to #17 and back
-  const go = ease(prog(t, 7.5, 8.2)), back = ease(prog(t, 9.0, 9.6));
-  const m = go * (1 - back);
-  sprite("magnifier", half(lerp(163, 158, m)), half(lerp(61, 46, m)));
-  fly(t, 8.9, 9.7, [150, 58], [96, 56], L("pass", "通过"), 6);
 
-  // PR #31 arrives on the pass, gets reviewed, merged, and cleared
-  if (t >= 19.6 && t < 23.2) {
-    const p = ease(prog(t, 19.6, 20.6));
-    const x = half(lerp(84, 64, p)), y = half(lerp(98, 59, p) - Math.sin(p * Math.PI) * 6);
-    alpha(1 - prog(t, 22.6, 23.2), () => {
+  // PR #31 arrives on the pass; the verifier reviews it, the checks pass, and the orchestrator merges it
+  if (t >= 25.4 && t < 32.2) {
+    const p = ease(prog(t, 25.4, 26.4));
+    const x = half(lerp(84, 66, p)), y = half(lerp(98, 59, p) - Math.sin(p * Math.PI) * 6);
+    alpha(1 - prog(t, 31.6, 32.2), () => {
       rect(x - 0.5, y + 2.5, 15, 3, C.outline);
       rect(x, y + 3, 14, 2, "#e9e4da");
       rect(x + 2, y - 1, 10, 4, "#c75b3a");
       rect(x + 3, y - 1.5, 8, 1, "#e07a54");
-      text("PR #31", x + 7, y - 6, { size: 12, color: C.ink, align: "center" });
-      if (t >= 20.6 && t < 21.8 && tick(t, 6) % 2) rect(x - 1, y - 2, 16, 8.5, "rgba(255,255,255,0.15)");
-      if (t >= 21.8) {
-        rect(x + 1, y - 9, 12, 4.5, "#8957e5");
-        text(L("MERGED", "已合并"), x + 7, y - 8.75, { size: 12, color: "#ffffff", align: "center" });
-      }
+      if (t >= 27.4 && t < 28.6 && tick(t, 6) % 2) rect(x - 1, y - 2, 16, 8.5, "rgba(255,255,255,0.15)");
+      if (t >= 30.6) {
+        rect(x - 1, y - 6.5, 16, 4.5, "#8957e5");
+        text(L("MERGED", "已合并"), x + 7, y - 6.25, { size: 12, color: "#ffffff", align: "center" });
+      } else text("PR #31", x + 7, y - 6, { size: 12, color: C.ink, align: "center" });
+      [[28.6, L("REVIEW", "审查")], [29.2, L("CHECKS", "检查")], [29.8, L("TESTS", "测试")]].forEach(([at, label], i) => {
+        if (t >= at) chip(42, 44 + i * 5, label);
+      });
     });
   }
-  (LANG === "zh" ? ["总设计", "总编排", "总核查"] : ["DESIGNER", "ORCHESTRATOR", "VERIFIER"]).forEach((label, i) =>
-    text(label, [27, 90, 153][i], 76, { size: 12, color: C.ink, align: "center" }));
+  // the verifier's magnifier goes to the PR and back
+  const m = ease(prog(t, 26.8, 27.4)) * (1 - ease(prog(t, 29.0, 29.6)));
+  sprite("magnifier", half(lerp(163, 70, m)), half(lerp(61, 52, m)));
+
+  // the orchestrator asks the designer for its line's stops; later it tells #17 to start stage 2
+  fly(t, 35.8, 36.6, [90, 58], [30, 58], "?", 6);
+  fly(t, 37.0, 37.8, [30, 58], [90, 58], "", 6);
+  fly(t, 50.0, 50.8, [90, 58], [64, 96], "", 8);
+
+  const labels = LANG === "zh" ? ["总设计", "总编排", "总核查"] : ["DESIGNER", "ORCHESTRATOR", "VERIFIER"];
+  ["d", "o", "v"].forEach((key, i) => roleLabel(labels[i], [27, 90, 153][i], t, key));
 }
 
-function cook(x, ticket, t, { idle = false, phase = 0 } = {}) {
+function cook(x, ticket, t, { idle = false, phase = 0, checked = false, parked = false } = {}) {
   const bob = !idle && tick(t + phase, 3) % 2 ? 0.5 : 0;
   sprite(idle ? "codexIdle" : "codex", x, 106 + bob);
   sprite("toqueSmall", x + 3, 101 + bob);
   if (ticket) {
     rect(x + 1.5, 88.5, 13, 9, C.outline);
-    rect(x + 2, 89, 12, 8, "#efe6cf");
+    rect(x + 2, 89, 12, 8, parked ? "#f3d27a" : "#efe6cf");
     text(ticket, x + 8, 90.5, { size: 12, color: "#3b3326", align: "center" });
+    if (checked) check(x + 5.5, 93.5, "#3f8f4e", 0.75);
+    if (parked) moon(x + 6.75, 93.5, "#3a5a9a");
   }
   if (idle) text("z z", x + 11, 96 - (tick(t, 2) % 2) * 0.5, { size: 12, color: C.muted, align: "center" });
 }
@@ -546,21 +802,27 @@ function steam(x, y, t) {
   }
 }
 
+function flag(x, y) {
+  rect(x, y, 0.75, 9, "#9ea1aa");
+  rect(x + 0.75, y, 6, 4, "#f3d27a");
+  text("?", x + 3.75, y + 0.25, { size: 12, color: "#3b3326", align: "center" });
+}
+
 function line(t) {
   bandTitle(L("THE LINE · CODEX", "灶台 · CODEX"), 82.5, C.codex);
   // A four-burner range is the GPU box. #12 trains on GPU0-1; #17 arrives for GPU2-3.
   const r = 18;
-  const eval17 = t >= 12.4;
+  const eval17 = t >= 15.4;
   // the ding travels from the bell down to the free burners
-  if (t >= 11.4 && t < 12.4) {
-    const p = ease(prog(t, 11.4, 12.4));
+  if (t >= 14.4 && t < 15.4) {
+    const p = ease(prog(t, 14.4, 15.4));
     const x = lerp(109, 65, p), y = lerp(62, 100, p);
     for (let k = 0; k < 4; k++) alpha(1 - k * 0.25, () => rect(half(x + k * 2 * (1 - p)), half(y - k * 1.5), 1.5, 1.5, C.brass));
   }
   rect(r, 107, 38, 13, "#3a3d44");
   rect(r, 105.5, 38, 1.5, "#575b63");
   [0, 1, 2, 3].forEach((i) => {
-    const bx = r + 1.5 + i * 9, on = i < 2 || t >= 12.8;
+    const bx = r + 1.5 + i * 9, on = i < 2 || t >= 15.8;
     rect(bx, 109.5, 8, 5, "#2b2e34");
     text(`${i}`, bx + 4, 110.5, { size: 12, color: on ? C.brass : "#6b6f78", align: "center" });
     rect(bx + 1, 104.5, 6, 1, "#2b2e34");
@@ -572,26 +834,32 @@ function line(t) {
   rect(r + 19, 94, 2, 1, "#8d939c");
   steam(r + 6, 87, t);
   text(L("TRAIN", "训练"), r + 10.5, 96, { size: 12, color: "#2a2d33", align: "center" });
-  if (eval17) {
-    const a = prog(t, 12.6, 13.0);
-    alpha(a, () => {
+  if (t >= 17.4) {
+    alpha(prog(t, 17.4, 17.8), () => {
       flames(r + 22, 103.25, 6, t, 7);
       rect(r + 20, 98.5, 16, 5, "#4a4f57");
       rect(r + 20, 98.5, 16, 0.75, "#8d939c");
       rect(r + 36, 99.5, 3, 1, "#4a4f57");
       text(L("EVAL", "评测"), r + 28, 99.25, { size: 12, color: C.ink, align: "center" });
+      // the runner's progress: items done in the current stage
+      const [stage, n] = evalAt(t);
+      const done = stage === 1 && n >= 2000;
+      text(`S${stage} ${n >= 2000 ? "2k" : n}/2k`, r + 28, 88.5, { size: 12, color: done ? "#7fd18b" : C.brass, align: "center" });
     });
-    if (t >= 13.2) steam(r + 24, 93, t + 0.5);
+    if (t >= 18.0) steam(r + 24, 93, t + 0.5);
   }
   text("GPU 0-3", r + 19, 116, { size: 12, color: C.muted, align: "center" });
   cook(1, "#12", t, { phase: 0.1 });
   if (eval17) {
-    const a = prog(t, 12.4, 12.8);
-    alpha(a, () => cook(57, "#17", t, { phase: 0.3 }));
-    if (t < 13.2) for (let k = 0; k < 6; k++) {
+    const a = prog(t, 15.4, 15.8);
+    alpha(a, () => cook(57, "#17", t, { phase: 0.3, checked: t >= 16.2 && t < 17.6 }));
+    if (t < 16.2) for (let k = 0; k < 6; k++) {
       const ang = (k / 6) * Math.PI * 2, d = 4 + a * 8;
       rect(half(65 + Math.cos(ang) * d), half(112 + Math.sin(ang) * d * 0.7), 1, 1, "#ffd36a");
     }
+    // the executor checks the ticket's premises before it starts
+    if (t >= 15.9 && t < 17.6) alpha(prog(t, 15.9, 16.1) * (1 - prog(t, 17.3, 17.6)), () =>
+      text(L("premises ok", "前提成立"), 65, 84, { size: 12, color: "#7fd18b", align: "center" }));
   }
 
   // #13 writes code, passes its tests, opens a PR, and goes idle after the merge
@@ -599,7 +867,7 @@ function line(t) {
   rect(76, 115, 2, 7, "#5e4129");
   rect(90, 115, 2, 7, "#5e4129");
   sprite("laptop", 77, 104);
-  const done13 = t >= 23.0, passed = t >= 19 && !done13;
+  const done13 = t >= 32.4, passed = t >= 24.4 && !done13;
   rect(79, 105, 10, 5, "#11141c");
   if (passed) {
     rect(79, 105, 10, 5, "#173a22");
@@ -615,7 +883,7 @@ function line(t) {
   text(L("CODE", "写代码"), 84, 116.5, { size: 12, color: C.muted, align: "center" });
   cook(94, done13 ? null : "#13", t, { idle: done13, phase: 0.4 });
 
-  // #14 sends a paid batch; it stops to ask the designer, then resumes
+  // #14 sends a paid batch; it stops to ask the designer directly, then resumes
   rect(112, 102, 15, 20, "#3a3d44");
   rect(113.5, 104, 12, 6, "#11141c");
   text("API", 119.5, 104.5, { size: 12, color: C.claude, align: "center" });
@@ -623,45 +891,53 @@ function line(t) {
   rect(113.5, 112, 12, 2, "#2a2621");
   rect(113.5, 112, half(12 * Math.min(1, calls / 2000)), 2, C.claude);
   text(`${calls}/2k`, 119.5, 115.5, { size: 12, color: C.muted, align: "center" });
-  const asking = t >= 14.5 && t < 17.7;
+  const asking = t >= 19.5 && t < 23.7;
   if (!asking) for (let k = 0; k < 2; k++) {
     const rise = ((tick(t, 5) + k * 3) % 6) * 0.75;
     rect(114 + k * 6, 98 - rise, 5, 3, "#efe6cf");
   }
   cook(128, "#14", t, { phase: 0.7 });
-  if (asking) {
-    rect(141, 90, 0.75, 9, "#9ea1aa");
-    rect(141.75, 90, 6, 4, "#f3d27a");
-    text("?", 144.75, 90.25, { size: 12, color: "#3b3326", align: "center" });
-  }
-  fly(t, 15.0, 15.9, [134, 96], [30, 58], "?", 10);
-  fly(t, 16.8, 17.7, [30, 58], [134, 96], "", 10);
+  if (t >= 21.6 && t < 23.7) flag(141, 90);
 
-  // #15 runs a data job on six CPU cores
+  // #15 runs a data job on six CPU cores; at night it is parked until morning
+  const parked = t >= 53.4 && t < 63.3;
   rect(146, 100, 16, 22, "#3a3d44");
   rect(146, 100, 16, 1.5, "#575b63");
   rect(148, 104, 12, 10, "#2b1a12");
   const glow = tick(t, 3) % 2;
-  rect(149, 105, 10, 8, glow ? "#d9792b" : "#c96a22");
-  rect(149, 105, 10, 2, glow ? "#f6a033" : "#e8902b");
-  text("CPU×6", 154, 116, { size: 12, color: C.brass, align: "center" });
-  cook(163, "#15", t, { phase: 0.2 });
+  rect(149, 105, 10, 8, parked ? "#3a2418" : glow ? "#d9792b" : "#c96a22");
+  rect(149, 105, 10, 2, parked ? "#4a2e1e" : glow ? "#f6a033" : "#e8902b");
+  text("CPU×6", 154, 116, { size: 12, color: parked ? C.muted : C.brass, align: "center" });
+  cook(163, "#15", t, { idle: parked, phase: 0.2, parked });
+  if (t >= 51.6 && t < 53.4) flag(167, 79.5);
+
+  // #14's status block: the four lines every executor comment opens with
+  if (t >= 19.6 && t < 21.6) alpha(prog(t, 19.6, 19.8) * (1 - prog(t, 21.4, 21.6)), () =>
+    bubble(102, 81, 72, 20, LANG === "zh"
+      ? [["状态：等设计"], ["在等：总设计"], [`关键数字：${calls}/2k`], ["下一步：总设计回复"]]
+      : [["Status: waiting on design"], ["Waiting on: Designer"], [`Key numbers: ${calls}/2k calls`], ["Next: Designer answers"]], 134));
+  // the question and the answer travel straight between #14 and the designer, low along the line, past the orchestrator
+  direct(t, 21.0, 21.9, [134, 92], [24, 86], [30, 58], "?");
+  direct(t, 22.8, 23.7, [30, 58], [24, 86], [134, 96], "");
 }
 
 function meters(t) {
-  const busy = ease(prog(t, 12.8, 13.8));
+  const busy = ease(prog(t, 17.6, 18.6));
   const jitter = (i) => (noise(tick(t, 2) + i * 5) - 0.5) * 0.04;
-  const spent = 38 + (callsAt() - 812) * 0.01;
-  const clock = 2 * 3600 + 14 * 60 + 37 + Math.floor(REAL * 113);
+  const spent = 38 + (callsAt(t) - 812) * 0.01;
+  const night = prog(t, 44.5, 56);
+  const parked = t >= 53.4 && t < 63.3;
+  const clock = Math.floor(clockAt(t) / 60) % (24 * 60);
   const two = (n) => String(n).padStart(2, "0");
   return {
     gpus: [0.92 + jitter(0), 0.88 + jitter(1), 0.71 * busy, 0.68 * busy],
-    rows: [[L("API BUDGET", "API 预算"), `$${spent.toFixed(0)} / $100`, spent / 100, C.claude],
-           [L("TOKENS TODAY", "今日 TOKEN"), `${(1.2 + REAL * 0.012).toFixed(2)}M`, 0.55 + REAL * 0.005, "#9fbf7a"],
-           [L("CPU JOBS", "CPU 任务"), "6 / 16", 0.375, C.codex]],
-    clock: `${two(Math.floor(clock / 3600))}:${two(Math.floor(clock / 60) % 60)}:${two(clock % 60)}`,
-    waiting: t >= 24.5 && t < 26.6 ? 1 : 0,
-    gpuBlink: t >= 10 && t < 11 && tick(t, 6) % 2,
+    rows: [[L("API BUDGET", "API 预算"), `$${spent.toFixed(0)} · ${L("est", "预计")} $100`, spent / 100, C.claude],
+           [L("TOKENS TODAY", "今日 TOKEN"), `${(1.2 + t * 0.012 + night * 0.9).toFixed(2)}M`, 0.45 + t * 0.004 + night * 0.15, "#9fbf7a"],
+           [L("CPU JOBS", "CPU 任务"), parked ? "0 / 16" : "6 / 16", parked ? 0 : 0.375, C.codex]],
+    clock: `${two(Math.floor(clock / 60))}:${two(clock % 60)}`,
+    waiting: t >= 59.8 && t < 62.2 ? 1 : 0,
+    night: t >= 38.6 && t < 58.8,
+    gpuBlink: t >= 12.1 && t < 13.1 && tick(t, 6) % 2,
     waitBlink: tick(t, 4) % 2,
   };
 }
@@ -693,6 +969,11 @@ function resources(t) {
   });
   text(L("CLOCK", "时钟"), x + 3, 95, { size: 12, color: C.muted });
   text(m.clock, x + 3, 98, { size: 32, font: "VT323" });
+  if (m.night) {
+    moon(x + 3, 114.75, C.brass);
+    text(L("night orders: open", "夜班令：开着"), x + 6.5, 114.5, { size: 12, color: C.brass });
+    return;
+  }
   if (m.waiting && m.waitBlink) rect(x + 1.5, 113.5, w - 3, 5, "rgba(246,98,42,0.25)");
   text(`${L("waiting on you", "等你决定")}: ${m.waiting}`, x + 3, 114.5, { size: 12, color: m.waiting ? C.claude : C.muted });
 }
@@ -725,6 +1006,11 @@ function resourcesTall(t) {
     rect(rx, y + 4, half(rw * frac), 1.5, color);
   });
   const y = y0 + 12 + 3 * 8.5;
+  if (m.night) {
+    text(L("night orders", "夜班令"), rx, y, { size: 12, color: C.brass });
+    text(L("open", "开着"), rx + rw, y, { size: 12, color: C.brass, align: "right" });
+    return;
+  }
   if (m.waiting && m.waitBlink) rect(rx - 2, y - 1.5, rw + 4, 6, "rgba(246,98,42,0.25)");
   text(L("waiting on you", "等你决定"), rx, y, { size: 12, color: m.waiting ? C.claude : C.muted });
   text(`${m.waiting}`, rx + rw, y, { size: 12, color: m.waiting ? C.claude : C.muted, align: "right" });
@@ -733,7 +1019,7 @@ function resourcesTall(t) {
 // Splits a caption into lines that fit; Chinese can break anywhere, English breaks at spaces.
 function wrap(str, width) {
   const lines = [""];
-  for (const token of str.match(/[\u3000-\u9fff\uff00-\uffef]|[^\s\u3000-\u9fff\uff00-\uffef]+|\s+/g) || []) {
+  for (const token of str.match(/[　-鿿＀-￯]|[^\s　-鿿＀-￯]+|\s+/g) || []) {
     const next = lines[lines.length - 1] + token;
     if (ctx.measureText(next).width > width && lines[lines.length - 1].trim()) lines.push(token.trimStart());
     else lines[lines.length - 1] = next;
@@ -780,7 +1066,7 @@ LOGO.src = "../assets/dkitchen.png";
 const TAGLINE = L(["You decide what to cook.", "Your agents run the kitchen."], ["你决定做什么菜，", "agent 们把厨房转起来。"]);
 
 function endCard(t) {
-  const a = prog(t, 28.6, 29.4);
+  const a = prog(t, 65.5, 66.3);
   if (a <= 0) return;
   ctx.fillStyle = `rgba(10,9,8,${0.88 * a})`;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -797,6 +1083,8 @@ function endCard(t) {
     const lines = tall ? TAGLINE : [TAGLINE.join(" ")];
     lines.forEach((line) => { text(line, cx, y, { size, font, align: "center", color: "#d8d2c4" }); y += tall ? 7 : 8; });
     text("pipx install dkitchen", cx, y + 4, { size: 28, font: "VT323", align: "center", color: C.brass });
+    text(L("then run /setup-dkitchen in Claude Code", "然后在 Claude Code 里运行 /setup-dkitchen"), cx, y + 11,
+         { size: LANG === "zh" ? 24 : 26, font, align: "center", color: C.muted });
   });
 }
 
@@ -815,7 +1103,7 @@ function header() {
 }
 
 function talk(r) {
-  if (r < 3 || r >= TALK_END) return;
+  if (r < 3 || r >= 12.1) return;
   // the idea
   if (r < 4.8) alpha(prog(r, 3, 3.2) * (1 - prog(r, 4.6, 4.8)), () =>
     bubble(18, 9, 56, 12, LANG === "zh" ? [["方法 B 在数据集 X"], ["上试试？"]] : [["try method B"], ["on dataset X?"]], 72));
@@ -829,17 +1117,15 @@ function talk(r) {
     sprite("scroll", x + 20, y + 1);
   }
   if (r >= 5.4 && r < 7.6) alpha(prog(r, 5.4, 5.6) * (1 - prog(r, 7.4, 7.6)), () =>
-    bubble(114, 1, 58, 11, [[L("PROPOSAL", "提案"), "#c2532a"], [L("new prompts for B?", "B 要换新 prompt？")]], 124));
+    bubble(114, 1, 58, 11, [[L("PROPOSAL", "提案"), "#c2532a"], [L("eval B: 2k items?", "评测 B：2k 条？")]], 124));
   if (r >= 7.6 && r < 9.4) alpha(prog(r, 7.6, 7.8) * (1 - prog(r, 9.2, 9.4)), () =>
-    bubble(14, 7, 62, 16, LANG === "zh" ? [["决定", "#2f7a3e"], ["可以，旧 prompt"], ["留作 baseline"]]
-      : [["DECISION", "#2f7a3e"], ["yes. keep the old"], ["prompts as baseline"]], 72));
+    bubble(14, 7, 62, 16, LANG === "zh" ? [["决定", "#2f7a3e"], ["可以，A 留作"], ["baseline"]]
+      : [["DECISION", "#2f7a3e"], ["yes. keep A as"], ["the baseline"]], 72));
   if (r >= 9.0 && r < 9.4) text(L("got it!", "收到！"), 126, 6, { size: 12, color: C.ink, align: "center" });
 }
 
-function renderAt(t) {
-  REAL = ((t % DURATION) + DURATION) % DURATION;
-  STORY = REAL < 3 ? REAL : REAL < TALK_END ? 2.99 : REAL - SHIFT;
-  t = STORY;
+function renderAt(time) {
+  const t = ((time % DURATION) + DURATION) % DURATION;
   ctx.globalAlpha = 1;
   ctx.fillStyle = C.wall;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -850,14 +1136,17 @@ function renderAt(t) {
   headChef(t);
   pass(t);
   line(t);
-  talk(REAL);
-  dim(REAL);
+  // the kitchen's lights are lower at night, but it keeps cooking
+  const night = nightness(t);
+  if (night > 0) rect(0, 34, 180, 90, `rgba(6,9,24,${0.22 * night})`);
+  talk(t);
+  dim(t);
   ctx.restore();
   resources(t);
-  caption(REAL);
+  caption(t);
   endCard(t);
   // fade through black at the loop point
-  const black = Math.max(1 - prog(REAL, 0, 0.5), prog(REAL, DURATION - 0.6, DURATION));
+  const black = Math.max(1 - prog(t, 0, 0.5), prog(t, DURATION - 0.6, DURATION));
   if (black > 0) { ctx.fillStyle = `rgba(0,0,0,${black})`; ctx.fillRect(0, 0, canvas.width, canvas.height); }
 }
 
