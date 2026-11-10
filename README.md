@@ -35,7 +35,7 @@ dkitchen sets up your agents the same way. You are the head chef.
 ## 🧑‍🍳 The kitchen
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/917Dhj/dkitchen/main/docs/assets/kitchen.gif" width="100%" alt="A pixel-art kitchen: you talk a design through with the designer, the verifier checks the ticket, the orchestrator rings the bell to start a Codex executor on free GPUs, reviews and merges a PR, and brings you one decision to approve">
+  <img src="https://raw.githubusercontent.com/917Dhj/dkitchen/main/docs/assets/kitchen.webp" width="100%" alt="A pixel-art kitchen: you agree a plan with the designer, the orchestrator rings the bell to start a Codex executor on free GPUs, an executor asks the designer directly, the verifier reviews a PR and the orchestrator merges it; then you go to bed, the kitchen keeps cooking on your night orders, and in the morning it brings you one decision">
 </p>
 
 | Role | In a kitchen | What it does | Runs on |
