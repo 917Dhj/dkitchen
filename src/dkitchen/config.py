@@ -191,6 +191,7 @@ class Rule:
 class Launch:
     preflight: tuple[str, ...] = ()
     preflight_timeout: float = 300
+    keep_days: float = 14
 
 
 @dataclass(frozen=True)
@@ -371,6 +372,10 @@ def section(cls, values: object, name: str):
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or value <= 0):
                 raise ValueError(f"{FILE}: [launch] preflight_timeout must be a positive finite number of seconds")
+        elif key == "keep_days":
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                raise ValueError(f"{FILE}: [launch] keep_days must be a nonnegative finite number of days")
         elif key in {"idle_minutes", "design_answer_minutes", "unrouted_wait_minutes"}:
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or value < 0):

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.2
+
+- **`ding launch` no longer leaves tmux sessions behind.** The pane's output goes to `launch-records/<name>-<id>.log`, and the session closes when the job exits, however it exits. The wake-up message and the launch line name the log. A job's name is free again once it exits. Logs untouched for `[launch] keep_days` (default 14) are deleted at the next launch, except those of a session still open; records stay, so `ding board` is unchanged. Sessions left by earlier versions stay until you close them. Run `/setup-dkitchen` or `build-team` again to update `docs/agents/long-running-jobs.md`, which told executors to close panes by hand.
+
 ## 0.6.1
 
 - **Words.** The rules, skills, and docs call the orchestrator, designers, verifier, and executors *roles* instead of *stations*: in a kitchen a station is one cook's place on the line, which fits only the executors. Nothing to change in a repo: `.dkitchen.toml` keeps its `[stations]` table, and `ding` its options and output fields. Run `/setup-dkitchen` or `build-team` again to bring the word into your installed rules.

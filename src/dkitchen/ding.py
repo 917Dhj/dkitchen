@@ -1595,6 +1595,45 @@ def launch_preflight(args, command: list[str], record: Path, launch_id: str, set
     return True
 
 
+LAUNCH_LOG = re.compile(r"(?P<name>[A-Za-z0-9][A-Za-z0-9_-]{0,63})-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.log")
+
+
+def prune_launch_logs(directory: Path, keep_days: float, tmux: str) -> None:
+    """Delete launch logs untouched for keep_days, except those of a ding-NAME session still open."""
+    if not keep_days:
+        return
+    cutoff = time.time() - keep_days * 86400
+    old = []
+    for path in directory.glob("*.log"):
+        match = LAUNCH_LOG.fullmatch(path.name)
+        try:
+            if match is not None and path.stat().st_mtime < cutoff:
+                old.append((path, match["name"]))
+        except OSError:
+            continue
+    if not old:
+        return
+    try:
+        result = subprocess.run([tmux, "list-sessions", "-F", "#{session_name}"],
+                                capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        print(f"ding: launch logs not pruned: {exc}", file=sys.stderr)
+        return
+    if result.returncode and not re.search(r"no server running|error connecting", result.stderr or ""):
+        print(f"ding: launch logs not pruned: {(result.stderr or '').strip() or result.returncode}", file=sys.stderr)
+        return
+    open_names = {line.removeprefix("ding-") for line in (result.stdout or "").splitlines() if line.startswith("ding-")}
+    for path, name in old:
+        if name in open_names:
+            continue
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"ding: launch log not pruned ({path}): {exc}", file=sys.stderr)
+
+
 def launch_task(args, command: list[str]) -> int:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", args.name):
         raise ValueError("launch name must be 1-64 letters, digits, underscores or hyphens, starting with a letter or digit")
@@ -1610,14 +1649,16 @@ def launch_task(args, command: list[str]) -> int:
     launch_id = str(uuid4())
     launch_records = (run_registry().parent / "launch-records").resolve()
     record = (Path(args.record) if args.record else launch_records / f"{launch_id}.jsonl").resolve()
+    log = launch_records / f"{args.name}-{launch_id}.log"
     message = message_text(args.message if args.message is not None else
-                           f"Task {args.name} exited; inspect {record}", args.message_file, args.sender)
+                           f"Task {args.name} exited; log: {log}; record: {record}", args.message_file, args.sender)
     inner = [os.path.abspath(sys.executable), str(Path(__file__).resolve()), "run", thread_id,
              "--record", str(record)]
     if getattr(args, "progress", None):
         inner += ["--progress", str(Path(args.progress).resolve())]
     launch_records.mkdir(parents=True, exist_ok=True, mode=0o700)
     launch_records.chmod(0o700)
+    prune_launch_logs(launch_records, settings.keep_days, tmux)
     if not launch_preflight(args, command, record, launch_id, settings):
         return 1
     message_path = launch_records / f"{launch_id}.message.txt"
@@ -1626,6 +1667,7 @@ def launch_task(args, command: list[str]) -> int:
         handle.write(message)
         handle.flush()
         os.fsync(handle.fileno())
+    os.close(os.open(log, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
     _fsync_directory(launch_records)
     inner.extend(["--message-file", str(message_path)])
     if args.socket is not None:
@@ -1641,8 +1683,10 @@ def launch_task(args, command: list[str]) -> int:
                  "-n", args.name, "-c", str(Path.cwd())]
     for key, value in environment.items():
         arguments.extend(["-e", f"{key}={value}"])
-    prelude = (f'{shlex.quote(str(Path(tmux).absolute()))} set-option -p -t "$TMUX_PANE" '
-               f'remain-on-exit on && exec {shlex.join(inner)}')
+    # The pane closes when the job exits, however it exits; its output stays in the log.
+    pipe = shlex.quote(f"cat >> {shlex.quote(str(log))}")
+    prelude = (f'{shlex.quote(str(Path(tmux).absolute()))} pipe-pane -o -t "$TMUX_PANE" {pipe} '
+               f'&& exec {shlex.join(inner)}')
     arguments.extend(["-P", "-F", "#{session_name}\t#{window_name}", "/bin/sh", "-c", prelude])
     # tmux treats a trailing semicolon as a command separator even in argv values.
     arguments = [value[:-1] + r"\;" if value.endswith(";") else value for value in arguments]
@@ -1652,7 +1696,7 @@ def launch_task(args, command: list[str]) -> int:
         raise RuntimeError("tmux launch timed out; task creation is unconfirmed; inspect tmux and run records before retrying") from exc
     if result.returncode:
         raise ValueError(f"tmux launch failed: {result.stderr.strip() or result.returncode}")
-    print(f"ding: created ding-{args.name}/{args.name}; record: {record}")
+    print(f"ding: created ding-{args.name}/{args.name}; log: {log}; record: {record}")
     return 0
 
 

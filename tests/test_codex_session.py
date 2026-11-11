@@ -2673,8 +2673,13 @@ def test_launch_captures_caller_session_environment_command_and_paths(tmp_path, 
                          r"HOME=/caller/home\;", "XDG_STATE_HOME=" + str(cwd / "caller-state") + r"\;",
                          "PYTHONPATH="]
     assert argv[-3:-1] == ["/bin/sh", "-c"]
-    assert argv[-1].split(" && exec ", 1)[0] == (
-        '/fake/bin/tmux set-option -p -t "$TMUX_PANE" remain-on-exit on')
+    assert "remain-on-exit" not in argv[-1]
+    pipe = shlex.split(argv[-1].split(" && exec ", 1)[0])
+    assert pipe[:5] == ["/fake/bin/tmux", "pipe-pane", "-o", "-t", "$TMUX_PANE"]
+    log = cwd / "caller-state;" / "ding/launch-records" / shlex.split(pipe[5])[2].rsplit("/", 1)[1]
+    assert shlex.split(pipe[5]) == ["cat", ">>", str(log)]
+    assert ding.LAUNCH_LOG.fullmatch(log.name)["name"] == "CPU_193"
+    assert log.read_bytes() == b"" and stat.S_IMODE(log.stat().st_mode) == 0o600
     inner = shlex.split(argv[-1].split(" && exec ", 1)[1])
     assert inner[:4] == ["/venv/bin/python", str(Path(ding.__file__).resolve()), "run", THREAD_ID]
     assert inner[inner.index("--record") + 1] == str(cwd / "exit.jsonl")
@@ -2710,7 +2715,9 @@ def test_launch_materializes_message_once_and_defaults_to_unique_records(tmp_pat
         record = Path(inner[inner.index("--record") + 1])
         records_seen.append(record)
         materialized = Path(inner[inner.index("--message-file") + 1])
-        assert materialized.read_text() == (f"Task job exited; inspect {record}" if text is None else text)
+        log = record.parent / f"job-{record.stem}.log"
+        assert log.exists()
+        assert materialized.read_text() == (f"Task job exited; log: {log}; record: {record}" if text is None else text)
         assert record.is_absolute()
         assert record.parent == ding.run_registry().parent / "launch-records"
         assert materialized.stem.removesuffix(".message") == record.stem
@@ -2761,6 +2768,80 @@ def test_launch_collision_does_not_retry_or_modify_tmux(monkeypatch, fake_tmux, 
     assert len(calls) == 1
     assert calls[0][1] == "new-session"
     assert "duplicate session" in capsys.readouterr().err
+
+
+def launch_logs(directory, names, age_days):
+    directory.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for name in names:
+        path = directory / f"{name}-{ding.uuid4()}.log"
+        path.write_text("output")
+        stamp = ding.time.time() - age_days * 86400
+        ding.os.utime(path, (stamp, stamp))
+        paths.append(path)
+    return paths
+
+
+def test_prune_launch_logs_keeps_fresh_open_and_foreign_files(tmp_path, monkeypatch):
+    directory = tmp_path / "launch-records"
+    old_done, old_open = launch_logs(directory, ["done", "still-open"], 20)
+    (fresh,) = launch_logs(directory, ["fresh"], 1)
+    foreign = directory / "notes.log"
+    foreign.write_text("x")
+    ding.os.utime(foreign, (0, 0))
+    record = directory / f"{ding.uuid4()}.jsonl"
+    record.write_text("{}")
+    ding.os.utime(record, (0, 0))
+    calls = []
+    monkeypatch.setattr(ding.subprocess, "run", lambda argv, **kwargs: calls.append(argv) or SimpleNamespace(
+        returncode=0, stdout="cloudflare_ssh\nding-still-open\n", stderr=""))
+    ding.prune_launch_logs(directory, 14, "/fake/bin/tmux")
+    assert calls == [["/fake/bin/tmux", "list-sessions", "-F", "#{session_name}"]]
+    assert not old_done.exists()
+    assert old_open.exists() and fresh.exists() and foreign.exists() and record.exists()
+
+
+def test_prune_launch_logs_without_a_tmux_server_deletes_old_logs(tmp_path, monkeypatch):
+    (old,) = launch_logs(tmp_path, ["done"], 20)
+    monkeypatch.setattr(ding.subprocess, "run", lambda argv, **kwargs: SimpleNamespace(
+        returncode=1, stdout="", stderr="no server running on /tmp/tmux-0/default"))
+    ding.prune_launch_logs(tmp_path, 14, "/fake/bin/tmux")
+    assert not old.exists()
+
+
+@pytest.mark.parametrize("outcome", ["error", "timeout"])
+def test_prune_launch_logs_keeps_everything_when_tmux_cannot_answer(tmp_path, monkeypatch, capsys, outcome):
+    (old,) = launch_logs(tmp_path, ["done"], 20)
+
+    def run(argv, **kwargs):
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired(argv, 10)
+        return SimpleNamespace(returncode=1, stdout="", stderr="permission denied")
+
+    monkeypatch.setattr(ding.subprocess, "run", run)
+    ding.prune_launch_logs(tmp_path, 14, "/fake/bin/tmux")
+    assert old.exists()
+    assert "launch logs not pruned" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("keep_days,age", [(0, 1000), (14, 1)])
+def test_prune_launch_logs_asks_tmux_only_when_a_log_is_due(tmp_path, monkeypatch, keep_days, age):
+    (log,) = launch_logs(tmp_path, ["done"], age)
+    monkeypatch.setattr(ding.subprocess, "run", lambda argv, **kwargs: pytest.fail("tmux was asked"))
+    ding.prune_launch_logs(tmp_path, keep_days, "/fake/bin/tmux")
+    assert log.exists()
+
+
+def test_launch_prunes_old_logs_with_configured_keep_days(tmp_path, monkeypatch, fake_tmux):
+    monkeypatch.setenv("CODEX_THREAD_ID", THREAD_ID)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".dkitchen.toml").write_text("[launch]\nkeep_days = 30\n")
+    directory = ding.run_registry().parent / "launch-records"
+    (recent,) = launch_logs(directory, ["recent"], 20)
+    (old,) = launch_logs(directory, ["old"], 40)
+    assert ding.main(["launch", "job", "--", "task"]) == 0
+    assert [argv[1] for argv, _ in fake_tmux] == ["list-sessions", "new-session"]
+    assert recent.exists() and not old.exists()
 
 
 def audit_process(pid, ppid=1, argv=None, age=1000, cpu=50, uid=None, state="S"):
