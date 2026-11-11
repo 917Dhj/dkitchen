@@ -4,12 +4,12 @@
     "name": "917Dhj",
     "url": "https://github.com/917Dhj"
   },
-  "description": "dkitchen: a multi-agent workflow for research repos, installable as a Claude Code plugin.",
+  "description": "dkitchen: DIY your own multi-agent workflow with Claude Code and Codex, as a Claude Code plugin.",
   "plugins": [
     {
       "name": "dkitchen",
       "source": "./",
-      "description": "Install the dkitchen multi-agent workflow (roles, house rules, and repo scripts) into your repo with /setup-dkitchen.",
+      "description": "DIY your own multi-agent workflow with Claude Code and Codex: /setup-dkitchen walks you through the roles, house rules, and repo scripts for your repo.",
       "category": "productivity",
       "keywords": ["multi-agent", "workflow", "research", "codex", "claude-code"]
     }

@@ -9,7 +9,7 @@ ding launch issue42-stage1 --message "$message" --record /absolute/path/task-exi
 After launching, end your turn: the job's exit wakes you. Look at progress only when the user asks.
 
 - **Environment**: tmux carries over only `PATH`, `HOME`, `PYTHONPATH`, `XDG_STATE_HOME`, and the session ID. Pass anything else the job needs as `env K=V` in the command.
-- **After exit**: the pane stays open so you can read the output and errors. The executor that launched it closes it with `tmux kill-session -t =ding-NAME` when done.
+- **After exit**: the tmux session closes itself, however the job ended. Its output and errors are in the log the wake-up names; read it there.
 - **Unwrapped jobs**: the end of `ding board` lists tmux jobs on this host that have run for over 10 minutes without `ding`. The orchestrator asks the executor that owns one to relaunch it with `ding launch`.
 - **Missed wake-ups**: the wrapper killed with SIGKILL, a host reboot, or a job that hangs. The wake-up comes once, when the job exits, so follow-up messages are never queued in advance.
 - **Several App Servers**: add `--socket PATH` before the `--`. For another host, SSH there first.

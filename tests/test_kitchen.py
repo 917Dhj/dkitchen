@@ -1002,6 +1002,8 @@ def test_launch_config_preserves_argv_and_defaults(tmp_path):
     loaded = settings(tmp_path, '[launch]\npreflight = ["python", "", "two words"]')
     assert loaded.launch.preflight == ("python", "", "two words")
     assert loaded.launch.preflight_timeout == 300
+    assert loaded.launch.keep_days == 14
+    assert settings(tmp_path, "[launch]\nkeep_days = 0").launch.keep_days == 0
 
 
 @pytest.mark.parametrize("text, error", [
@@ -1016,6 +1018,10 @@ def test_launch_config_preserves_argv_and_defaults(tmp_path):
     ('preflight_timeout = "300"', "positive finite"),
     ('preflight_timeout = inf', "positive finite"),
     ('preflight_timeout = nan', "positive finite"),
+    ('keep_days = -1', "nonnegative finite"),
+    ('keep_days = true', "nonnegative finite"),
+    ('keep_days = "14"', "nonnegative finite"),
+    ('keep_days = inf', "nonnegative finite"),
     ('prefligth = ["python"]', "unknown keys"),
 ])
 def test_bad_launch_config_is_refused(tmp_path, text, error):

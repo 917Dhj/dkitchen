@@ -264,14 +264,14 @@ ding launch train -- python train.py --config big.yaml
 ```
 
 ```text
-ding: created ding-train/train; record: /home/you/.local/state/ding/launch-records/<id>.jsonl
+ding: created ding-train/train; log: /home/you/.local/state/ding/launch-records/train-<id>.log; record: /home/you/.local/state/ding/launch-records/<id>.jsonl
 ```
 
 This:
 
 1. creates a new tmux session `ding-train` in your current directory;
-2. runs the command there, wrapped by [`ding run`](#wrap-a-command-yourself-run);
-3. when the command exits, wakes the Codex session that launched it with `Task train exited; inspect <record path>`.
+2. runs the command there, wrapped by [`ding run`](#wrap-a-command-yourself-run), and copies everything the pane shows to a log;
+3. when the command exits, wakes the Codex session that launched it with `Task train exited; log: <log path>; record: <record path>`, and the tmux session closes.
 
 Then end your turn. The wake-up will come.
 
@@ -284,14 +284,15 @@ Options:
 
 Things to know:
 
-- **Names** are 1 to 64 letters, digits, `_`, or `-`, starting with a letter or digit. A name already in use is an error; `ding` never reuses or replaces a tmux session.
+- **Names** are 1 to 64 letters, digits, `_`, or `-`, starting with a letter or digit. A name in use by a running job is an error; `ding` never reuses or replaces a tmux session. Once the job exits, its name is free again.
 - **The environment** inside tmux carries only `PATH`, `HOME`, `XDG_STATE_HOME`, `PYTHONPATH`, and the session ID from your shell. Anything else may come from tmux's own environment, so pass what the job needs explicitly:
 
   ```bash
   ding launch train -- env CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=8 python train.py
   ```
 
-- **The pane stays open** after the job exits, so you can read the output. Watch it with `tmux attach -t ding-train`, and close it when you are done with `tmux kill-session -t =ding-train`.
+- **The session closes when the job exits**, whether it finished, failed, or was killed. Watch it while it runs with `tmux attach -t ding-train`; afterwards, read the log. The log is the pane's raw output, so progress bars appear as the carriage returns they print.
+- **Old logs are deleted** at the next `launch` once untouched for 14 days, except a log whose `ding-NAME` session is still open. Set `[launch] keep_days` in `.dkitchen.toml` to change that, or `0` to keep every log. Records and message files are kept, so `ding board` still shows how old jobs ended.
 - **A successful launch** means the tmux session was created, not that the job finished.
 - **If `launch` times out,** creation is unconfirmed. Check `tmux ls` and the record before trying again.
 - `launch` needs `CODEX_THREAD_ID`, which Codex sets in its shells. From anywhere else, use `run`.
@@ -304,6 +305,7 @@ Configure a command in the repository root's `.dkitchen.toml` to check a launch 
 [launch]
 preflight = ["python", "/abs/path/check.py"]
 preflight_timeout = 300  # seconds; default 300
+keep_days = 14           # days a launch log is kept; 0 keeps every log; default 14
 ```
 
 `preflight` is an argv list, executed without a shell in the launch working directory. Its stdout and stderr pass through. It inherits the caller's environment plus:
@@ -642,6 +644,7 @@ Everything lives under `${XDG_STATE_HOME:-~/.local/state}/ding/`, readable only 
 | `runs.jsonl` | One `run_start` line per wrapped job, used by `board` to find jobs |
 | `launch-records/<id>.jsonl` | Default record for each `launch`: optional `preflight`, then `task_exit` and `notification` events |
 | `launch-records/<id>.message.txt` | The wake-up message for that launch |
+| `launch-records/<name>-<id>.log` | Everything the launch's pane showed; deleted after `[launch] keep_days` |
 | `watch/OWNER-REPO.json` | Where `ding watch` left off |
 | `run-locks/<run id>.lock` | Held while a wrapper is alive; this is how `board` tells `running` from `lost` |
 
