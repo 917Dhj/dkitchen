@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dkitchen"
-version = "0.6.2"
+version = "0.6.3.dev1"
 description = "DIY your own multi-agent workflow with Claude Code and Codex; includes the ding CLI for messaging and waking agent sessions"
 readme = "README.md"
 requires-python = ">=3.10"
