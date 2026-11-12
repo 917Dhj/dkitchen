@@ -74,7 +74,7 @@ You own ticket 917Dhj/my-repo#57. Before anything else, run `ding claim 917Dhj/m
 
 Until the session has claimed it, `'#57'` does not resolve to the new session; pass its UUID instead.
 
-A ticket has one executor. `--issue N` reads the ticket's owner lines first and refuses while any of those sessions is still working: a Codex session that is not archived, or a Claude Code session whose inbox waiter is running. Give each run its own sub-ticket instead, or pass `--replace` when the ticket really changes hands (the new owner line then wins).
+A ticket has one executor. `--issue N` reads the ticket's owner lines first and refuses while any of those sessions is still working: a Codex session that is not archived, or a Claude Code session whose inbox waiter is running, or that claimed the ticket, started a waiter, or read its inbox in the last 30 minutes. When the Codex App Server cannot be reached, `ding` warns and checks only the Claude Code owners. Give each run its own sub-ticket instead, or pass `--replace` when the ticket really changes hands (the new owner line then wins).
 
 `--parent N` opens that sub-ticket for you: a new ticket titled `--title` (default: `--name`), whose body is the `[sessions] parent` line (default `Parent: #N`), attached to `#N` as a GitHub sub-issue. The new session then owns the sub-ticket exactly as with `--issue`. This is the one form of `new` that writes to GitHub. If the ticket opens but cannot be attached, no session starts, and the error names the new ticket.
 
@@ -130,7 +130,7 @@ Claude owner: local_…          # the same, for a Claude Code executor
 
 When a name matches several sessions, or none, `ding` shows the candidates instead of guessing.
 
-A bare UUID is a Codex session unless a Claude Code inbox waiter has run under that id. `read`, `status`, `info` and `rename` work on Codex sessions only.
+A bare UUID is a Codex session unless a Claude Code inbox waiter has run under that id or recorded it as its transcript id. `read`, `status`, `info` and `rename` work on Codex sessions only.
 
 ## Claude Code executors: `claim` and `inbox`
 
@@ -154,7 +154,7 @@ ding inbox --all            # every message, read or not
 
 `relay` leaves its ticket comment only on `inbox_queued`. `--supersede` withdraws the sender's earlier unread messages. A Claude Code session reads its inbox between turns, so `--steer` queues there, and `--interrupt` is refused.
 
-Run the waiter alone: no `&`, no redirection, nothing chained before it, the same as `ding watch`. Only one waiter runs per session; a second exits at once.
+Run the waiter alone: no `&`, no redirection, nothing chained before it, the same as `ding watch`. Only one waiter runs per session; a second exits at once. The waiter marks messages read only after printing them, so a waiter killed in between prints them again rather than losing them.
 
 ## Rename a session: `rename`
 

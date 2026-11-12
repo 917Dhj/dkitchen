@@ -275,3 +275,55 @@ def test_launch_from_claude_session_records_it_as_the_wake_target(monkeypatch, t
 def test_read_refuses_a_claude_session(capsys):
     assert ding.main(["read", f"claude:{CLAUDE_ID}"]) == 1
     assert "Claude Code session" in capsys.readouterr().err
+
+
+def test_a_claude_owner_stays_working_between_waits(monkeypatch):
+    monkeypatch.setattr(ding, "ticket_owners", lambda repo, number: [f"claude:{CLAUDE_ID}"])
+    inbox.deliver(CLAUDE_ID, "relay", "Orchestrator")
+    inbox.take(CLAUDE_ID)
+    assert [owner["id"] for owner in ding.live_ticket_owners("example/project", 42, None)] == [f"claude:{CLAUDE_ID}"]
+    assert not inbox.active(CLAUDE_ID, minutes=0)
+
+
+def test_codex_owners_are_warned_about_when_app_server_is_missing(monkeypatch, capsys):
+    monkeypatch.setattr(ding, "ticket_owners", lambda repo, number: [THREAD_ID])
+    monkeypatch.setattr(ding, "socket_path", lambda path: (_ for _ in ()).throw(ValueError("no socket")))
+    assert ding.live_ticket_owners("example/project", 42, None) == []
+    assert "could not check the ticket's Codex owners" in capsys.readouterr().err
+
+
+def test_messages_stay_unread_if_printing_fails():
+    inbox.deliver(CLAUDE_ID, "keep me", "Orchestrator")
+
+    class Broken:
+        def write(self, text):
+            raise BrokenPipeError
+
+        def flush(self):
+            pass
+
+    with pytest.raises(BrokenPipeError):
+        inbox.wait(CLAUDE_ID, block=False, out=Broken())
+    assert [event["text"] for event in inbox.pending(CLAUDE_ID)] == ["keep me"]
+
+
+def test_waiter_survives_a_momentary_liveness_probe(capsys):
+    _, lock, _ = inbox.paths(CLAUDE_ID)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    probe = open(lock, "a+")  # noqa: SIM115 - released by the timer below
+    fcntl.flock(probe.fileno(), fcntl.LOCK_EX)
+    threading.Timer(0.2, probe.close).start()
+    inbox.deliver(CLAUDE_ID, "hi", "Orchestrator")
+    assert inbox.wait(CLAUDE_ID, block=True, poll=0.01) == 0
+    assert "hi" in capsys.readouterr().out
+
+
+def test_transcript_uuid_resolves_to_its_desktop_session(waiter):
+    waiter()
+    assert ding.resolve_target(TRANSCRIPT_ID, None, None) == f"claude:{CLAUDE_ID}"
+
+
+def test_a_claim_counts_as_working_before_the_first_waiter():
+    assert not inbox.active(CLAUDE_ID)
+    inbox.note_claim(CLAUDE_ID)
+    assert inbox.active(CLAUDE_ID)

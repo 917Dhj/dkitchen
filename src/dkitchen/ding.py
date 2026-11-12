@@ -395,11 +395,16 @@ def live_ticket_owners(repo: str, number: int, path: str | None) -> list[dict]:
     found = []
     codex = [owner for owner in owners if not inbox.is_target(owner)]
     if codex:
-        with app_server(socket_path(path)) as call:
-            found += [{"id": thread["id"], "name": thread.get("name")} for thread in live_owners(call, codex)]
+        try:
+            with app_server(socket_path(path)) as call:
+                found += [{"id": thread["id"], "name": thread.get("name")} for thread in live_owners(call, codex)]
+        except (ValueError, OSError) as exc:
+            print(f"ding: could not check the ticket's Codex owners ({', '.join(codex)}): {exc}; "
+                  "if one of them still works the ticket, stop", file=sys.stderr)
     for owner in owners:
-        if inbox.is_target(owner) and inbox.listener(owner) is not None:
-            found.append({"id": owner, "name": "Claude Code session with a live inbox waiter"})
+        if inbox.is_target(owner) and inbox.active(owner):
+            found.append({"id": owner, "name": f"Claude Code session, waiting or active in the last "
+                                               f"{inbox.ACTIVE_MINUTES} minutes"})
     return found
 
 
@@ -565,8 +570,11 @@ def resolve_target(target: str | None, issue: int | None, path: str | None) -> s
     except (ValueError, TypeError, AttributeError):
         pass
     else:
-        # A bare UUID is a Codex thread unless a Claude Code waiter has run under it.
-        return inbox.target(thread_id) if inbox.paths(thread_id)[2].exists() else thread_id
+        # A bare UUID is a Codex thread unless a Claude Code waiter has run under it or recorded it as its transcript.
+        if inbox.paths(thread_id)[2].exists():
+            return inbox.target(thread_id)
+        session = inbox.by_transcript(thread_id)
+        return inbox.target(session) if session else thread_id
     if target and (match := re.fullmatch(rf"({ISSUE_REPOSITORY})#([1-9][0-9]*)", target)):
         return issue_session(int(match[2]), path, repo=match[1])
     with app_server(socket_path(path)) as call:
@@ -1124,7 +1132,10 @@ def show_board(path: str | None, *, all_threads: bool = False, status: tuple[str
                     continue
                 thread = {"id": thread_id, "name": thread_id, "cwd": run["cwd"],
                           "status": {"type": "unavailable"}}
-                if call:
+                if inbox.is_target(thread_id):
+                    # A Claude Code session: App Server knows nothing about it.
+                    thread["status"]["type"] = "waiting" if inbox.listener(thread_id) is not None else "no-waiter"
+                elif call:
                     try:
                         thread = thread_metadata(call("thread/read", {"threadId": thread_id, "includeTurns": False}).get("thread"))
                         if thread["id"] != thread_id:
@@ -1136,7 +1147,7 @@ def show_board(path: str | None, *, all_threads: bool = False, status: tuple[str
             rows = []
             for thread in threads:
                 head = ""
-                if call:
+                if call and not inbox.is_target(thread["id"]):
                     try:
                         head = reply_head(read_reply(call, thread["id"]))
                     except NoFinalReply:
@@ -1388,7 +1399,7 @@ def new_task(args) -> int:
     thread_id = None
     stage = "validation"
     try:
-        executor = getattr(args, "executor", None) or "codex"
+        executor = args.executor
         printing = getattr(args, "print", False) or executor == "claude"
         cwd = Path(args.cwd).expanduser().resolve() if args.cwd else None
         if (cwd is None and not printing) or (cwd is not None and not cwd.is_dir()):
@@ -1830,6 +1841,8 @@ def claim_task(args) -> int:
                             input=body, capture_output=True, text=True, timeout=60, check=False)
     if result.returncode:
         raise ValueError(f"could not post the owner line: {result.stderr.strip() or result.returncode}")
+    if kind == "claude":
+        inbox.note_claim(session_id)
     print(f"ding: claimed {repo}#{number} as {label} owner {session_id}: {result.stdout.strip()}", file=sys.stderr)
     if kind == "claude":
         print("Next: run `ding inbox --wait` as a background task, on its own (no &, no redirection, nothing "

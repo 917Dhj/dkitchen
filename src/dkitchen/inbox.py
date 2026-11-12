@@ -26,6 +26,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 PREFIX = "claude:"
+ACTIVE_MINUTES = 30  # a Claude owner without a waiter still counts as working this long after its last read
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
@@ -161,12 +162,74 @@ def deliver(session_id: str, text: str, sender: str | None, *, message_id: str |
 
 def take(session_id: str, root: Path | None = None) -> list[dict]:
     """Return unread messages and mark them read."""
+    found = pending(session_id, root)
+    mark_read(session_id, [event["id"] for event in found], root)
+    return found
+
+
+def pending(session_id: str, root: Path | None = None) -> list[dict]:
     inbox, _, _ = paths(session_id, root)
     with _locked(inbox):
-        found = unread(inbox)
-        if found:
-            _append(inbox, {"event": "read", "ids": [event["id"] for event in found], "time_ns": time.time_ns()})
-    return found
+        return unread(inbox)
+
+
+def mark_read(session_id: str, ids: list[str], root: Path | None = None) -> None:
+    if not ids:
+        return
+    inbox, _, _ = paths(session_id, root)
+    with _locked(inbox):
+        _append(inbox, {"event": "read", "ids": ids, "time_ns": time.time_ns()})
+
+
+def show(session_id: str, messages: list[dict], out, root: Path | None = None) -> None:
+    """Print, then mark read: a waiter killed in between repeats the messages rather than losing them."""
+    print(render(messages), file=out)
+    out.flush()
+    mark_read(session_id, [event["id"] for event in messages], root)
+
+
+def active(session_id: str, root: Path | None = None, minutes: float = ACTIVE_MINUTES) -> bool:
+    """A waiter runs now, or one started or delivered messages within the last `minutes`."""
+    if listener(session_id, root) is not None:
+        return True
+    _, _, info = paths(session_id, root)
+    stamps = [last_read(session_id, root) or 0]
+    try:
+        recorded = json.loads(info.read_text(encoding="utf-8"))
+        stamps += [recorded.get("started_ns") or 0, recorded.get("claimed_ns") or 0]
+    except (OSError, ValueError, AttributeError):
+        pass
+    return time.time_ns() - max(stamps) < minutes * 60e9
+
+
+def note_claim(session_id: str, root: Path | None = None) -> None:
+    """Record a claim, so the session counts as working before its first waiter starts."""
+    _, _, info = paths(session_id, root)
+    _ensure(info.parent)
+    try:
+        recorded = json.loads(info.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        recorded = {}
+    if not isinstance(recorded, dict):
+        recorded = {}
+    recorded["claimed_ns"] = time.time_ns()
+    temporary = info.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(recorded, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, info)
+
+
+def by_transcript(transcript_id: str, root: Path | None = None) -> str | None:
+    """The session whose waiter recorded this transcript id, newest first."""
+    root = root or state_root()
+    found = []
+    for info in root.glob("*.waiter.json"):
+        try:
+            recorded = json.loads(info.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(recorded, dict) and recorded.get("transcript_id") == transcript_id:
+            found.append((recorded.get("started_ns") or 0, info.name.removesuffix(".waiter.json")))
+    return max(found)[1] if found else None
 
 
 def last_read(session_id: str, root: Path | None = None) -> int | None:
@@ -197,27 +260,47 @@ def wait(session_id: str, *, block: bool = True, show_all: bool = False, poll: f
         print(render(messages) or "no messages", file=out)
         return 0
     if not block:
-        messages = take(session_id, root)
-        print(render(messages) or "no unread messages", file=out)
+        messages = pending(session_id, root)
+        if messages:
+            show(session_id, messages, out, root)
+        else:
+            print("no unread messages", file=out)
         return 0
     with os.fdopen(os.open(lock, os.O_CREAT | os.O_RDWR, 0o600), "r+") as handle:
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                # A sender's liveness probe holds the lock for an instant; only a waiter holds it for long.
+                if time.monotonic() >= deadline:
+                    print(f"ding: another `ding inbox --wait` already runs for {bare(session_id)}", file=sys.stderr)
+                    return 1
+                time.sleep(0.05)
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print(f"ding: another `ding inbox --wait` already runs for {bare(session_id)}", file=sys.stderr)
-            return 1
+            claimed = json.loads(info.read_text(encoding="utf-8")).get("claimed_ns")
+        except (OSError, ValueError, AttributeError):
+            claimed = None
         record = {"pid": os.getpid(), "transcript_id": environ.get("CLAUDE_CODE_SESSION_ID"),
-                  "cwd": os.getcwd(), "started_ns": time.time_ns()}
+                  "cwd": os.getcwd(), "started_ns": time.time_ns(), "claimed_ns": claimed}
         temporary = info.with_suffix(".json.tmp")
         temporary.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(temporary, info)
         try:
+            seen = None
             while True:
-                messages = take(session_id, root)
-                if messages:
-                    print(render(messages), file=out)
-                    out.flush()
-                    return 0
+                try:
+                    stat = inbox.stat()
+                    size = (stat.st_size, stat.st_mtime_ns)
+                except FileNotFoundError:
+                    size = None
+                if size != seen:
+                    seen = size
+                    messages = pending(session_id, root)
+                    if messages:
+                        show(session_id, messages, out, root)
+                        return 0
                 time.sleep(poll)
         except KeyboardInterrupt:
             return 130
