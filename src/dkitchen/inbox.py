@@ -209,12 +209,19 @@ def recorded(session_id: str, root: Path | None = None) -> dict:
 
 
 def _record(session_id: str, root: Path | None = None, **fields) -> None:
+    """Merge fields into the session's record; claims and the waiter's heartbeat must not overwrite each other."""
     _, _, info = paths(session_id, root)
-    _ensure(info.parent)
-    value = {**recorded(session_id, root), **fields}
-    temporary = info.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, info)
+    with _locked(info):
+        value = {**recorded(session_id, root), **fields}
+        temporary = info.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, info)
+
+
+def known(session_id: str, root: Path | None = None) -> bool:
+    """Whether ding has an inbox or a record for this session."""
+    inbox, _, info = paths(session_id, root)
+    return inbox.exists() or info.exists()
 
 
 def note_claim(session_id: str, root: Path | None = None, *, ticket: str | None = None,
@@ -280,30 +287,43 @@ def transcript(transcript_id: str, home: Path | None = None) -> Path | None:
     return found[-1] if found else None
 
 
+def _lines_backwards(path: Path, chunk: int = 1 << 16) -> Iterator[bytes]:
+    """The file's lines, last first, read from the end in chunks: transcripts grow to many megabytes."""
+    with path.open("rb") as handle:
+        position = handle.seek(0, os.SEEK_END)
+        rest = b""
+        while position > 0:
+            step = min(chunk, position)
+            position -= step
+            handle.seek(position)
+            lines = (handle.read(step) + rest).split(b"\n")
+            rest = lines.pop(0)
+            yield from reversed(lines)
+        yield rest
+
+
 def last_reply(transcript_id: str, home: Path | None = None) -> str | None:
-    """The text of the transcript's last assistant message that has text."""
+    """The text of the transcript's last assistant message that has text, leaving out subagent (sidechain) turns."""
     path = transcript(transcript_id, home)
     if path is None:
         return None
-    reply = None
-    with path.open(encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            if '"assistant"' not in line:
-                continue
-            try:
-                event = json.loads(line)
-            except ValueError:
-                continue
-            message = event.get("message") if isinstance(event, dict) else None
-            if event.get("type") != "assistant" or not isinstance(message, dict):
-                continue
-            content = message.get("content")
-            texts = ([content] if isinstance(content, str) else
-                     [item.get("text", "") for item in content or [] if isinstance(item, dict) and item.get("type") == "text"])
-            text = "\n".join(part for part in texts if part.strip())
-            if text.strip():
-                reply = text
-    return reply
+    for line in _lines_backwards(path):
+        if b'"assistant"' not in line:
+            continue
+        try:
+            event = json.loads(line.decode("utf-8", errors="replace"))
+        except ValueError:
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        if event.get("type") != "assistant" or event.get("isSidechain") or not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        texts = ([content] if isinstance(content, str) else
+                 [item.get("text", "") for item in content or [] if isinstance(item, dict) and item.get("type") == "text"])
+        text = "\n".join(part for part in texts if part.strip())
+        if text.strip():
+            return text
+    return None
 
 
 def by_transcript(transcript_id: str, root: Path | None = None) -> str | None:

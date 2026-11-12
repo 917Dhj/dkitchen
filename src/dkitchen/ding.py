@@ -1116,8 +1116,9 @@ def nonnegative_number(value: str) -> float:
 CLAUDE_BOARD_HOURS = 24  # a Claude Code session without a waiter stays on the board this long after its last activity
 
 
-def claude_rows(roots: list[Path], *, all_threads: bool) -> list[list[str]]:
-    """Board rows for Claude Code sessions that keep a ding inbox: waiting now, or active within a day."""
+def claude_rows(roots: list[Path], *, all_threads: bool) -> list[tuple[list[str], str]]:
+    """Board rows, each with its claimed ticket, for Claude Code sessions that keep a ding inbox: waiting now, or
+    active within a day."""
     rows = []
     cutoff = time.time_ns() - CLAUDE_BOARD_HOURS * 3600e9
     for entry in inbox.sessions():
@@ -1129,8 +1130,8 @@ def claude_rows(roots: list[Path], *, all_threads: bool) -> list[list[str]]:
         if not (all_threads or any(Path(cwd).resolve().is_relative_to(root) for root in roots)):
             continue
         reply = inbox.last_reply(entry.get("transcript_id") or "")
-        rows.append([inbox.target(entry["id"]), cwd, inbox.status(entry)["type"], inbox.target(entry["id"]),
-                     " ".join(reply_head(reply).splitlines()) if reply else "", entry.get("ticket") or ""])
+        rows.append(([inbox.target(entry["id"]), cwd, inbox.status(entry)["type"], inbox.target(entry["id"]),
+                      " ".join(reply_head(reply).splitlines()) if reply else ""], entry.get("ticket") or ""))
     return rows
 
 
@@ -1139,7 +1140,7 @@ def show_board(path: str | None, *, all_threads: bool = False, status: tuple[str
     roots = [] if all_threads else repository_roots()
     runs = latest_runs()
     claude = claude_rows(roots, all_threads=all_threads)
-    tickets = {row[3]: row.pop() for row in claude}
+    tickets = {row[3]: ticket for row, ticket in claude}
     try:
         server_path = socket_path(path)
     except (OSError, ValueError) as exc:
@@ -1191,7 +1192,7 @@ def show_board(path: str | None, *, all_threads: bool = False, status: tuple[str
                 for thread_id, run in runs.items()
                 if thread_id not in tickets
                 and (all_threads or any(Path(run["cwd"]).resolve().is_relative_to(root) for root in roots))]
-    rows += claude
+    rows += [row for row, _ in claude]
     from dkitchen import config
     settings = config.load()
     repo = settings.repository() if any(field == "repo" for _, field, _, _ in
@@ -1850,6 +1851,8 @@ def show_claude(args) -> int:
     if args.action == "rename":
         raise ValueError(f"rename works on Codex sessions only; rename the Claude Code session {session_id} "
                          "in Claude Code itself")
+    if not inbox.known(session_id):
+        raise ValueError(f"ding has no inbox or record for Claude Code session {session_id} on this host")
     entry = inbox.session(session_id)
     if args.action in {"status", "info"}:
         print(json.dumps(inbox.status(entry) if args.action == "status" else inbox.describe(entry),
@@ -1898,7 +1901,7 @@ def claim_task(args) -> int:
     if kind == "claude":
         print("Next: run `ding inbox --wait` as a background task, on its own (no &, no redirection, nothing "
               "chained before it). Messages and task-exit wakes for this ticket arrive through it. When it wakes "
-              "you, handle what it printed, then start it again; keep it running whenever you are working.")
+              "you, start it again at once, then handle what it printed; keep it running whenever you are working.")
     else:
         print("Next: nothing; ding delivers messages to this Codex session directly.")
     return 0

@@ -39,6 +39,7 @@ from dkitchen import inbox, truncate
 from dkitchen.config import Config, Sessions
 
 SHELLS = {"bash", "sh", "zsh", "dash", "fish"}
+WAITER_LOOKBACK_DAYS = 7  # older inbox records are not rechecked; a silent executor was reported long before
 
 
 def gh(path: str) -> list[dict]:
@@ -640,20 +641,25 @@ def missing_waiters(config: Config, repo: str, reported: set[int], skip: set[int
     for entry in inbox.sessions():
         minutes = inbox.silent_minutes(entry, moment)
         ticket = re.fullmatch(r"(.+)#([1-9][0-9]*)", entry.get("ticket") or "")
-        if (minutes is None or minutes <= config.watch.executor_listener_minutes or not ticket
-                or ticket[1].lower() != repo.lower() or int(ticket[2]) in skip):
+        if (minutes is None or not config.watch.executor_listener_minutes < minutes <= WAITER_LOOKBACK_DAYS * 1440
+                or not ticket or ticket[1].lower() != repo.lower() or int(ticket[2]) in skip):
             continue
-        issue = gh(f"repos/{repo}/issues/{ticket[2]}")
-        if (issue.get("state") != "open" or "pull_request" in issue or not issue["comments"]
-                or any(label["name"] == config.labels.awaiting_user for label in issue["labels"])):
+        try:
+            issue = gh(f"repos/{repo}/issues/{ticket[2]}")
+            if (issue.get("state") != "open" or "pull_request" in issue or not issue["comments"]
+                    or any(label["name"] == config.labels.awaiting_user for label in issue["labels"])):
+                continue
+            last, owner = None, None
+            for comment in comments_backwards(repo, issue):
+                if last is None and role(comment["body"], config) == config.stations.executor:
+                    last = comment
+                owner = owner or next(reversed(owner_references(comment["body"])), None)
+                if last is not None and owner is not None:
+                    break
+        except (RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+            # One unreadable ticket in an old record must not stop the watch.
+            print(f"ding: could not check #{ticket[2]} for Claude Code session {entry['id']}: {error}", file=sys.stderr)
             continue
-        last, owner = None, None
-        for comment in comments_backwards(repo, issue):
-            if last is None and role(comment["body"], config) == config.stations.executor:
-                last = comment
-            owner = owner or next(reversed(owner_references(comment["body"])), None)
-            if last is not None and owner is not None:
-                break
         owner = owner or next(reversed(owner_references(issue.get("body"))), None)
         if (last is None or owner != inbox.target(entry["id"]) or last["id"] in reported
                 or state_and_waiting(last["body"], config)[0] != config.status.in_progress

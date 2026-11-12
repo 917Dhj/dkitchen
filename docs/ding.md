@@ -134,7 +134,7 @@ A bare UUID is a Codex session unless a Claude Code inbox waiter has run under t
 
 ## Claude Code executors: `claim` and `inbox`
 
-`ding` cannot push a message into a Claude Code session, so the session pulls. It keeps `ding inbox --wait` running as a background task; when a message arrives, the waiter prints it and exits, and Claude Code wakes the session. The session handles what it read, then starts the waiter again.
+`ding` cannot push a message into a Claude Code session, so the session pulls. It keeps `ding inbox --wait` running as a background task; when a message arrives, the waiter prints it and exits, and Claude Code wakes the session. The session starts the waiter again at once, then handles what it read; a message that arrives meanwhile wakes it again.
 
 ```bash
 ding claim '#57'            # run by the executor itself, Codex or Claude Code

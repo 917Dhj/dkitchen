@@ -485,3 +485,36 @@ def test_watch_waiter_report_needs_every_condition(silent_owner, waiter, change)
         inbox.note_claim(CLAUDE_ID, ticket="o/other#26")
         inbox._record(CLAUDE_ID, claimed_ns=time.time_ns() - int(40 * 60e9))
     assert silent_owner.check() == []
+
+
+def test_last_reply_reads_backwards_across_chunks_and_skips_sidechains(claude_home):
+    path = transcript(claude_home, "first", "Final answer.")
+    with path.open("a") as handle:
+        handle.write(json.dumps({"type": "assistant", "isSidechain": True, "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "subagent report"}]}}) + "\n")
+    assert inbox.last_reply(TRANSCRIPT_ID) == "Final answer."
+    lines = path.read_bytes().split(b"\n")
+    assert list(inbox._lines_backwards(path, chunk=7)) == lines[::-1]
+
+
+def test_status_of_an_unknown_claude_session_is_an_error(capsys):
+    assert ding.main(["status", f"claude:{CLAUDE_ID}"]) == 1
+    assert "no inbox or record" in capsys.readouterr().err
+
+
+def test_record_updates_merge_instead_of_overwriting():
+    inbox.note_claim(CLAUDE_ID, ticket="o/r#26", cwd="/w")
+    inbox._record(CLAUDE_ID, seen_ns=5)
+    inbox.note_claim(CLAUDE_ID)
+    record = inbox.recorded(CLAUDE_ID)
+    assert record["ticket"] == "o/r#26" and record["cwd"] == "/w" and record["seen_ns"] == 5
+
+
+def test_watch_skips_an_unreadable_ticket_and_old_records(silent_owner, monkeypatch, capsys):
+    from dkitchen import watch
+    monkeypatch.setattr(watch, "gh", lambda path: (_ for _ in ()).throw(RuntimeError("HTTP 404")))
+    assert silent_owner.check() == []
+    assert "could not check #26" in capsys.readouterr().err
+    inbox._record(CLAUDE_ID, claimed_ns=time.time_ns() - int((watch.WAITER_LOOKBACK_DAYS * 1440 + 1) * 60e9))
+    monkeypatch.setattr(watch, "gh", lambda path: pytest.fail("old records are not rechecked"))
+    assert silent_owner.check() == []
