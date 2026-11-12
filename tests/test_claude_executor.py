@@ -272,9 +272,88 @@ def test_launch_from_claude_session_records_it_as_the_wake_target(monkeypatch, t
     assert f"run claude:{CLAUDE_ID}" in argv[-1]
 
 
-def test_read_refuses_a_claude_session(capsys):
+def transcript(tmp_path, *replies):
+    """Write a Claude Code transcript whose assistant messages carry these texts."""
+    path = tmp_path / "claude" / "projects" / "-w" / f"{TRANSCRIPT_ID}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [{"type": "user", "message": {"role": "user", "content": "go"}}]
+    for reply in replies:
+        lines.append({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Bash", "input": {}}, {"type": "text", "text": reply}]}})
+        lines.append({"type": "assistant", "message": {"role": "assistant", "content": [
+            {"type": "tool_use", "name": "Bash", "input": {}}]}})
+    path.write_text("\n".join(json.dumps(line) for line in lines) + "\nnot json\n")
+    return path
+
+
+@pytest.fixture
+def claude_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude"))
+    return tmp_path
+
+
+def test_read_status_and_info_of_a_claude_session(waiter, claude_home, capsys):
+    transcript(claude_home, "older", "Done: PR opened.\n\nDetails follow.")
+    waiter()
+    inbox.note_claim(CLAUDE_ID, ticket="example/project#42")
+    assert ding.main(["read", f"claude:{CLAUDE_ID}"]) == 0
+    assert capsys.readouterr().out == "Done: PR opened.\n\nDetails follow.\n"
+    assert ding.main(["read", "--head", f"claude:{CLAUDE_ID}"]) == 0
+    assert capsys.readouterr().out == "Done: PR opened.\n"
+    assert ding.main(["status", f"claude:{CLAUDE_ID}"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["type"] == "waiting" and status["waiter_pid"] == os.getpid()
+    assert ding.main(["info", f"claude:{CLAUDE_ID}"]) == 0
+    info = json.loads(capsys.readouterr().out)
+    assert info == {"id": f"claude:{CLAUDE_ID}", "name": None, "cwd": "/w", "status": info["status"],
+                    "ticket": "example/project#42", "transcript_id": TRANSCRIPT_ID}
+
+
+def test_read_of_a_claude_session_without_transcript_and_rename_refuse(capsys):
+    inbox.note_claim(CLAUDE_ID)
     assert ding.main(["read", f"claude:{CLAUDE_ID}"]) == 1
-    assert "Claude Code session" in capsys.readouterr().err
+    assert "no transcript recorded" in capsys.readouterr().err
+    assert ding.main(["rename", f"claude:{CLAUDE_ID}", "--name", "x"]) == 1
+    assert "rename works on Codex sessions only" in capsys.readouterr().err
+    assert ding.main(["status", f"claude:{CLAUDE_ID}"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["type"] == "no-waiter" and status["minutes_without_waiter"] < 1
+
+
+def test_waiter_records_its_stop_and_heartbeat(monkeypatch, capsys):
+    monkeypatch.setattr(inbox, "HEARTBEAT_SECONDS", 0)
+    threading.Timer(0.1, inbox.deliver, (CLAUDE_ID, "hi", "Orchestrator")).start()
+    assert inbox.wait(CLAUDE_ID, poll=0.01) == 0
+    record = inbox.recorded(CLAUDE_ID)
+    assert record["seen_ns"] >= record["started_ns"] and record["stopped_ns"] >= record["seen_ns"]
+    entry = inbox.session(CLAUDE_ID)
+    assert not entry["listening"] and inbox.silent_minutes(entry, record["stopped_ns"] + 120e9) == 2
+
+
+def test_board_lists_claude_sessions_under_the_repository(waiter, claude_home, monkeypatch, capsys):
+    transcript(claude_home, "Working on the tests.\n\nMore.")
+    waiter()
+    inbox.note_claim(CLAUDE_ID, ticket="example/project#42")
+    other = "local_aaaaaaaa-2222-4333-8444-555555555555"
+    inbox.note_claim(other, ticket="example/project#7", cwd="/elsewhere")
+    stale = "local_bbbbbbbb-2222-4333-8444-555555555555"
+    inbox.note_claim(stale, ticket="example/project#8", cwd="/w")
+    inbox._record(stale, claimed_ns=time.time_ns() - int(ding.CLAUDE_BOARD_HOURS * 3600e9) - 1)
+    (claude_home / ".dkitchen.toml").write_text('repo = "example/project"\n')
+    monkeypatch.setattr(ding, "repository_roots", lambda: [inbox.Path("/w")])
+    monkeypatch.setattr(ding, "socket_path", lambda path: (_ for _ in ()).throw(ValueError("no socket")))
+    monkeypatch.setattr(ding, "unwrapped_tasks", lambda **kwargs: [])
+    assert ding.main(["board", "--no-issue-lookup"]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[1].split("\t") == [f"claude:{CLAUDE_ID}", "/w", "waiting", "#42", "Working on the tests.", ""]
+    assert len(lines) == 2
+
+
+def test_board_without_app_server_or_claude_sessions_still_fails(monkeypatch, capsys):
+    monkeypatch.setattr(ding, "repository_roots", lambda: [inbox.Path("/w")])
+    monkeypatch.setattr(ding, "socket_path", lambda path: (_ for _ in ()).throw(ValueError("no socket")))
+    monkeypatch.setattr(ding, "unwrapped_tasks", lambda **kwargs: [])
+    assert ding.main(["board"]) == 1
 
 
 def test_a_claude_owner_stays_working_between_waits(monkeypatch):
@@ -353,3 +432,89 @@ def test_board_reads_a_claude_task_exit(waiter, tmp_path, capsys, listening, sta
     run = ding.latest_runs()[f"claude:{CLAUDE_ID}"]
     assert ding.run_state(run) == state
     assert "run evidence unavailable" not in capsys.readouterr().err
+
+
+@pytest.fixture
+def silent_owner(monkeypatch, tmp_path):
+    """A ticket an in-progress Claude executor claimed 40 minutes ago, with no waiter since."""
+    from dkitchen import config, watch
+    inbox.note_claim(CLAUDE_ID, ticket="o/r#26", cwd="/w")
+    inbox._record(CLAUDE_ID, claimed_ns=time.time_ns() - int(40 * 60e9))
+    claim = {"id": 2600, "body": f"Status: in progress\nWaiting on: none\n\nClaude owner: {CLAUDE_ID}\n\n"
+                                 f"Claude session: {CLAUDE_ID}\n", "created_at": "2026-11-12T10:00:00Z",
+             "html_url": "https://github.com/o/r/issues/26#issuecomment-2600"}
+    state = SimpleNamespace(issue={"number": 26, "state": "open", "comments": 1, "labels": [], "body": "Task"},
+                            comments=[claim], config=config.Config(root=tmp_path, repo="o/r"))
+
+    def gh(path):
+        if path == "repos/o/r/issues/26":
+            return state.issue
+        if "/issues/26/comments?" in path:
+            return state.comments
+        raise AssertionError(path)
+
+    monkeypatch.setattr(watch, "gh", gh)
+    state.check = lambda reported=(), skip=(): watch.missing_waiters(state.config, "o/r", set(reported), set(skip))
+    return state
+
+
+def test_watch_reports_a_claude_executor_without_a_waiter(silent_owner):
+    found = silent_owner.check()
+    assert len(found) == 1 and found[0][2] == 2600
+    assert f"#26 Claude Code executor {CLAUDE_ID} has run no `ding inbox --wait` for 40 minutes" in found[0][1]
+    assert silent_owner.check(reported={2600}) == []
+    assert silent_owner.check(skip={26}) == []
+
+
+@pytest.mark.parametrize("change", ["listening", "recent", "done", "other_owner", "closed", "disabled", "repo"])
+def test_watch_waiter_report_needs_every_condition(silent_owner, waiter, change):
+    if change == "listening":
+        waiter()
+    elif change == "recent":
+        inbox.note_claim(CLAUDE_ID)
+    elif change == "done":
+        silent_owner.comments[0]["body"] = silent_owner.comments[0]["body"].replace("in progress", "done")
+    elif change == "other_owner":
+        silent_owner.comments.append({"id": 2602, "body": f"Codex owner: {THREAD_ID}\n", "created_at": "x"})
+    elif change == "closed":
+        silent_owner.issue["state"] = "closed"
+    elif change == "disabled":
+        silent_owner.config = type(silent_owner.config)(root=silent_owner.config.root, repo="o/r",
+                                                        watch=type(silent_owner.config.watch)(executor_listener_minutes=0))
+    elif change == "repo":
+        inbox.note_claim(CLAUDE_ID, ticket="o/other#26")
+        inbox._record(CLAUDE_ID, claimed_ns=time.time_ns() - int(40 * 60e9))
+    assert silent_owner.check() == []
+
+
+def test_last_reply_reads_backwards_across_chunks_and_skips_sidechains(claude_home):
+    path = transcript(claude_home, "first", "Final answer.")
+    with path.open("a") as handle:
+        handle.write(json.dumps({"type": "assistant", "isSidechain": True, "message": {
+            "role": "assistant", "content": [{"type": "text", "text": "subagent report"}]}}) + "\n")
+    assert inbox.last_reply(TRANSCRIPT_ID) == "Final answer."
+    lines = path.read_bytes().split(b"\n")
+    assert list(inbox._lines_backwards(path, chunk=7)) == lines[::-1]
+
+
+def test_status_of_an_unknown_claude_session_is_an_error(capsys):
+    assert ding.main(["status", f"claude:{CLAUDE_ID}"]) == 1
+    assert "no inbox or record" in capsys.readouterr().err
+
+
+def test_record_updates_merge_instead_of_overwriting():
+    inbox.note_claim(CLAUDE_ID, ticket="o/r#26", cwd="/w")
+    inbox._record(CLAUDE_ID, seen_ns=5)
+    inbox.note_claim(CLAUDE_ID)
+    record = inbox.recorded(CLAUDE_ID)
+    assert record["ticket"] == "o/r#26" and record["cwd"] == "/w" and record["seen_ns"] == 5
+
+
+def test_watch_skips_an_unreadable_ticket_and_old_records(silent_owner, monkeypatch, capsys):
+    from dkitchen import watch
+    monkeypatch.setattr(watch, "gh", lambda path: (_ for _ in ()).throw(RuntimeError("HTTP 404")))
+    assert silent_owner.check() == []
+    assert "could not check #26" in capsys.readouterr().err
+    inbox._record(CLAUDE_ID, claimed_ns=time.time_ns() - int((watch.WAITER_LOOKBACK_DAYS * 1440 + 1) * 60e9))
+    monkeypatch.setattr(watch, "gh", lambda path: pytest.fail("old records are not rechecked"))
+    assert silent_owner.check() == []

@@ -1113,14 +1113,38 @@ def nonnegative_number(value: str) -> float:
     return number
 
 
+CLAUDE_BOARD_HOURS = 24  # a Claude Code session without a waiter stays on the board this long after its last activity
+
+
+def claude_rows(roots: list[Path], *, all_threads: bool) -> list[tuple[list[str], str]]:
+    """Board rows, each with its claimed ticket, for Claude Code sessions that keep a ding inbox: waiting now, or
+    active within a day."""
+    rows = []
+    cutoff = time.time_ns() - CLAUDE_BOARD_HOURS * 3600e9
+    for entry in inbox.sessions():
+        cwd = entry.get("cwd")
+        if not isinstance(cwd, str) or not os.path.isabs(cwd):
+            continue
+        if not (entry["listening"] or entry["last_activity_ns"] >= cutoff):
+            continue
+        if not (all_threads or any(Path(cwd).resolve().is_relative_to(root) for root in roots)):
+            continue
+        reply = inbox.last_reply(entry.get("transcript_id") or "")
+        rows.append(([inbox.target(entry["id"]), cwd, inbox.status(entry)["type"], inbox.target(entry["id"]),
+                      " ".join(reply_head(reply).splitlines()) if reply else ""], entry.get("ticket") or ""))
+    return rows
+
+
 def show_board(path: str | None, *, all_threads: bool = False, status: tuple[str, ...] | None = None,
                no_issue_lookup: bool = False) -> None:
     roots = [] if all_threads else repository_roots()
     runs = latest_runs()
+    claude = claude_rows(roots, all_threads=all_threads)
+    tickets = {row[3]: ticket for row, ticket in claude}
     try:
         server_path = socket_path(path)
     except (OSError, ValueError) as exc:
-        if not runs:
+        if not runs and not claude:
             raise
         print(f"ding: App Server unavailable: {exc}", file=sys.stderr)
         server_path = None
@@ -1128,7 +1152,7 @@ def show_board(path: str | None, *, all_threads: bool = False, status: tuple[str
         with ExitStack() as stack:
             call = stack.enter_context(app_server(server_path)) if server_path else None
             threads = (list_threads(call) if all_threads else board_threads(call, roots)) if call else []
-            known = {thread["id"] for thread in threads}
+            known = {thread["id"] for thread in threads} | set(tickets)
             for thread_id, run in runs.items():
                 if thread_id in known:
                     continue
@@ -1161,12 +1185,14 @@ def show_board(path: str | None, *, all_threads: bool = False, status: tuple[str
                 rows.append([thread["name"], thread["cwd"], thread["status"]["type"],
                              thread["id"], " ".join(head.splitlines())])
     except (AppServerUnavailable, OSError) as exc:
-        if not runs:
+        if not runs and not claude:
             raise
         print(f"ding: App Server unavailable: {exc}", file=sys.stderr)
         rows = [[thread_id, run["cwd"], "unavailable", thread_id, ""]
                 for thread_id, run in runs.items()
-                if all_threads or any(Path(run["cwd"]).resolve().is_relative_to(root) for root in roots)]
+                if thread_id not in tickets
+                and (all_threads or any(Path(run["cwd"]).resolve().is_relative_to(root) for root in roots))]
+    rows += [row for row, _ in claude]
     from dkitchen import config
     settings = config.load()
     repo = settings.repository() if any(field == "repo" for _, field, _, _ in
@@ -1175,6 +1201,9 @@ def show_board(path: str | None, *, all_threads: bool = False, status: tuple[str
     for name, cwd, _, thread_id, _ in rows:
         in_repo = not all_threads or Path(cwd).resolve().is_relative_to(settings.root.resolve())
         number = settings.sessions.issue_number(name, repo) if in_repo else None
+        ticket = re.fullmatch(r".+#([1-9][0-9]*)", tickets.get(thread_id) or "")
+        if number is None and ticket and in_repo:
+            number = int(ticket[1])
         if number is None:
             unmatched.append(thread_id)
         else:
@@ -1816,6 +1845,29 @@ def status_block(settings) -> str:
     return "\n".join(f"{name}{separator}{value}" for name, value in zip(names, values))
 
 
+def show_claude(args) -> int:
+    """`read`, `status`, and `info` for a Claude Code session, from its inbox record and transcript."""
+    session_id = inbox.bare(args.thread_id)
+    if args.action == "rename":
+        raise ValueError(f"rename works on Codex sessions only; rename the Claude Code session {session_id} "
+                         "in Claude Code itself")
+    if not inbox.known(session_id):
+        raise ValueError(f"no inbox or record for Claude Code session {session_id} on this host")
+    entry = inbox.session(session_id)
+    if args.action in {"status", "info"}:
+        print(json.dumps(inbox.status(entry) if args.action == "status" else inbox.describe(entry),
+                         ensure_ascii=False))
+        return 0
+    if not entry.get("transcript_id"):
+        raise NoFinalReply(f"no transcript recorded for Claude Code session {session_id}: "
+                           "it records one when it first runs `ding inbox --wait`")
+    reply = inbox.last_reply(entry["transcript_id"])
+    if reply is None:
+        raise NoFinalReply(f"no assistant reply found in the transcript of Claude Code session {session_id}")
+    print(reply_head(reply) if args.head else reply)
+    return 0
+
+
 def claim_task(args) -> int:
     """Post this session's owner line on a ticket, then say what to do next."""
     from dkitchen import config
@@ -1844,12 +1896,12 @@ def claim_task(args) -> int:
     if result.returncode:
         raise ValueError(f"could not post the owner line: {result.stderr.strip() or result.returncode}")
     if kind == "claude":
-        inbox.note_claim(session_id)
+        inbox.note_claim(session_id, ticket=f"{repo}#{number}", cwd=os.getcwd())
     print(f"ding: claimed {repo}#{number} as {label} owner {session_id}: {result.stdout.strip()}", file=sys.stderr)
     if kind == "claude":
         print("Next: run `ding inbox --wait` as a background task, on its own (no &, no redirection, nothing "
               "chained before it). Messages and task-exit wakes for this ticket arrive through it. When it wakes "
-              "you, handle what it printed, then start it again; keep it running whenever you are working.")
+              "you, start it again at once, then handle what it printed; keep it running whenever you are working.")
     else:
         print("Next: nothing; ding delivers messages to this Codex session directly.")
     return 0
@@ -2018,6 +2070,8 @@ def main(argv=None) -> int:
                                             "requests after [watch] design_answer_minutes (default 30; 0 disables it). "
                                             "With [merge] review_check, also watch PR readiness and review:<NAME> labels. "
                                             "[watch] unrouted_wait_minutes (default 30; 0 disables) reminds of unknown-station waits. "
+                                            "[watch] executor_listener_minutes (default 30; 0 disables) reports in-progress Claude Code "
+                                            "executors that have run no `ding inbox --wait` that long. "
                                             "Stdout /dev/null is refused with exit 3 before polling; pipes and files are allowed. "
                                             "Read-only; calls no model.")
     sub.add_argument("--for", dest="station", type=str.strip, metavar="NAME",
@@ -2206,8 +2260,7 @@ def main(argv=None) -> int:
         if args.action == "run":
             return run_task(args, command)
         if inbox.is_target(args.thread_id):
-            raise ValueError(f"{args.action} reads Codex sessions only; {inbox.bare(args.thread_id)} is a Claude Code "
-                             "session: read its ticket comments, or `ding inbox --all` for what was sent to it")
+            return show_claude(args)
         path = socket_path(args.socket)
         if args.action == "rename":
             with app_server(path) as call:

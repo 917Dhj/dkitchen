@@ -2,7 +2,7 @@
 
 `ding` is the bell in the kitchen. It creates Codex sessions, lets one agent session message another, and wakes a session when the long job it started has finished.
 
-It talks to Codex sessions through the Codex App Server. Claude Code sessions can use it to message Codex sessions, but `ding` cannot wake a Claude Code session.
+It talks to Codex sessions through the Codex App Server. A Claude Code session can message Codex sessions with it, and when it serves as an executor it receives messages and wake-ups through a file inbox it keeps listening on (see [Claude Code executors](#claude-code-executors-claim-and-inbox)).
 
 - [Before you start](#before-you-start)
 - [A quick tour](#a-quick-tour)
@@ -130,11 +130,11 @@ Claude owner: local_…          # the same, for a Claude Code executor
 
 When a name matches several sessions, or none, `ding` shows the candidates instead of guessing.
 
-A bare UUID is a Codex session unless a Claude Code inbox waiter has run under that id or recorded it as its transcript id. `read`, `status`, `info` and `rename` work on Codex sessions only.
+A bare UUID is a Codex session unless a Claude Code inbox waiter has run under that id or recorded it as its transcript id. `rename` works on Codex sessions only; `read`, `status` and `info` also read Claude Code sessions, as [below](#read-a-session-read-status-and-info).
 
 ## Claude Code executors: `claim` and `inbox`
 
-`ding` cannot push a message into a Claude Code session, so the session pulls. It keeps `ding inbox --wait` running as a background task; when a message arrives, the waiter prints it and exits, and Claude Code wakes the session. The session handles what it read, then starts the waiter again.
+`ding` cannot push a message into a Claude Code session, so the session pulls. It keeps `ding inbox --wait` running as a background task; when a message arrives, the waiter prints it and exits, and Claude Code wakes the session. The session starts the waiter again at once, then handles what it read; a message that arrives meanwhile wakes it again.
 
 ```bash
 ding claim '#57'            # run by the executor itself, Codex or Claude Code
@@ -155,6 +155,8 @@ ding inbox --all            # every message, read or not
 `relay` leaves its ticket comment only on `inbox_queued`. `--supersede` withdraws the sender's earlier unread messages. A Claude Code session reads its inbox between turns, so `--steer` queues there, and `--interrupt` is refused.
 
 Run the waiter alone: no `&`, no redirection, nothing chained before it, the same as `ding watch`. Only one waiter runs per session; a second exits at once. The waiter marks messages read only after printing them, so a waiter killed in between prints them again rather than losing them.
+
+**Seeing Claude Code executors.** `claim` records the ticket and working directory, and each waiter its transcript id, start, a heartbeat every minute, and its stop. From these, `board` lists a Claude Code session ([below](#see-what-everyone-is-doing-board)) while its waiter runs and for 24 hours after its last activity, `read` prints the last reply in its transcript, and the orchestrator's `ding watch` reports an in-progress executor whose waiter has been gone for `[watch] executor_listener_minutes`. All of this reads files on the host where the session runs.
 
 ## Rename a session: `rename`
 
@@ -185,14 +187,14 @@ data-cleanup      /work/repo/.wt/issue57  idle    #57    Merged the loader fix. 
 
 | Column | What it shows |
 | --- | --- |
-| `NAME` | Session name, or its UUID if it has none |
+| `NAME` | Session name, or its UUID if it has none; `claude:<id>` for a Claude Code session |
 | `CWD` | The session's working directory |
-| `STATUS` | `active` (working), `idle`, `notLoaded`, or `unavailable` if the App Server cannot be reached |
-| `ISSUE` | The ticket parsed from `[sessions] name`, otherwise tickets this session owns or has signed comments on |
-| `HEAD` | The first paragraph of its latest final reply |
+| `STATUS` | `active` (working), `idle`, `notLoaded`, or `unavailable` if the App Server cannot be reached; for a Claude Code session, `waiting` while its `ding inbox --wait` runs, else `no-waiter` |
+| `ISSUE` | The ticket parsed from `[sessions] name`, or the one a Claude Code session claimed, otherwise tickets this session owns or has signed comments on |
+| `HEAD` | The first paragraph of its latest final reply; for a Claude Code session, of the last reply in its transcript |
 | `RUN` | The state of its most recent wrapped job ([states below](#job-states)) |
 
-By default the board shows loaded sessions and sessions with registered jobs in the current Git repo and its worktrees (or the current directory outside Git). Options:
+By default the board shows loaded sessions and sessions with registered jobs in the current Git repo and its worktrees (or the current directory outside Git), and Claude Code sessions there that keep a `ding` inbox: those whose waiter runs, and those active (claimed, waiting, or reading) in the last 24 hours. Claude Code sessions show even when the App Server cannot be reached. Options:
 
 - `--all` shows every non-archived session in every directory. It is slower.
 - `--status` replaces `HEAD` with the status block from the session's latest issue comment. Otherwise it falls back to the final reply.
@@ -254,6 +256,12 @@ ding info '#42'            # the session's ID, name, working directory, and stat
 ```
 
 `name` is `null` for a session that has never been named. `info` only reads: it starts no model turn and writes nothing to GitHub.
+
+For a Claude Code session (`claude:<id>`, a bare id with an inbox record, or a ticket whose latest owner line is `Claude owner:`), the three read its inbox record and transcript instead of the App Server. `read` prints the text of the last assistant message in the transcript (`$CLAUDE_CONFIG_DIR`, default `~/.claude`, under `projects/*/<transcript id>.jsonl`), which needs a waiter to have recorded the transcript id. `status` prints `{"type": "waiting", "waiter_pid": …}` while a waiter runs, otherwise `{"type": "no-waiter", "minutes_without_waiter": …}`, both with `last_read`, the UTC time it last read its inbox. `info` adds the claimed ticket and the transcript id; its `name` is `null`, since `ding` cannot see a Claude Code session's title:
+
+```json
+{"id": "claude:local_…", "name": null, "cwd": "/work/wt-42", "status": {"type": "waiting", "waiter_pid": 4242, "last_read": "2026-11-12T08:15:02Z"}, "ticket": "OWNER/REPO#42", "transcript_id": "…"}
+```
 
 ## Send a message: `send`
 
@@ -417,7 +425,7 @@ These commands carry out the kitchen's routine steps, as the house rules in [kit
 | `ding check [--base REF]` | Executor before hand-over; CI on every PR | Runs the repo checks set in `[check]`: layout rules on the files added since `--base` (default `origin/main`), then Ruff, import-linter and the repo's own checks on the whole tree, and the guard-change trailer rule. See [Repo checks](#repo-checks). |
 | `ding map [FOLDER…]` | Any role | Lists each Python module under the library areas, or the given folders, with the first line of its docstring. |
 | `ding check-refs draft.md` | Verifier | Checks every `file:line` in a draft comment, in backticks or not (a name written right next to it must appear on that line), and every `sha256`, against `origin/main` or `--root DIR`. It also asks GitHub that each `#N` ticket, `PR#N`, issue or PR link, and comment link exists, that a `PR#N` or `/pull/` link is a PR, and that a comment link's comment belongs to the ticket in the link (`--repo` for bare `#N`, `--offline` to skip). It prints how many references of each kind it checked, and lists every wrong one and every one it could not check, also in its JSON line. Exits 1 when something is wrong. Give several drafts to check them one by one: each line then names its file, the JSON lines carry a `draft` key, and the exit status is nonzero (1 for a wrong reference, 2 for an unreadable file) if any draft fails. |
-| `ding rule 42 draft.md [--reply-to LINK_OR_ID] [--notify SESSION] [--force]`<br>`ding rule 42 body.md --edit-body --base base.md` | Designer | Posts the designer's ruling on ticket #42. Nothing is sent unless the draft's line 1 starts with one of `[rule] signatures`, line 2 with the `[rule] type_label` and one of `[rule] types`, and `check-refs` finds nothing wrong (it takes `--ref`, `--root`, `--tolerance`, `--repo`, `--offline`). With `--reply-to`, it stops and lists the link and first line of every comment that came after the one answered; `--force` posts anyway. Without it, it shows the latest comment's time and first line as a hint. It posts with `gh issue comment` and prints only the comment URL on stdout. `--notify SESSION` then sends `[rule] notify` plus the draft's complete stripped first nonempty line to a Codex session with `ding send`; if that fails, the error says so and the comment stays. `ding` cannot message Claude Code sessions, so `--notify` refuses a `uds:` or `local_` address before posting; tell those with `SendMessage`, using the printed URL. `--edit-body` replaces the ticket body instead: it stops unless the current body equals the `--base` file (line endings and trailing newlines aside), edits with `gh issue edit`, then reads the body back and fails unless it matches the draft byte for byte, ignoring trailing newlines. The line 1 and 2 check applies to comments only. |
+| `ding rule 42 draft.md [--reply-to LINK_OR_ID] [--notify SESSION] [--force]`<br>`ding rule 42 body.md --edit-body --base base.md` | Designer | Posts the designer's ruling on ticket #42. Nothing is sent unless the draft's line 1 starts with one of `[rule] signatures`, line 2 with the `[rule] type_label` and one of `[rule] types`, and `check-refs` finds nothing wrong (it takes `--ref`, `--root`, `--tolerance`, `--repo`, `--offline`). With `--reply-to`, it stops and lists the link and first line of every comment that came after the one answered; `--force` posts anyway. Without it, it shows the latest comment's time and first line as a hint. It posts with `gh issue comment` and prints only the comment URL on stdout. `--notify SESSION` then sends `[rule] notify` plus the draft's complete stripped first nonempty line with `ding send`, to a Codex session or a Claude Code executor's inbox; if that fails, the error says so and the comment stays. A `SendMessage` address (`uds:`, `bridge:`, `did:`) is not a `ding` session, so `--notify` refuses it before posting; tell those with `SendMessage`, using the printed URL. `--edit-body` replaces the ticket body instead: it stops unless the current body equals the `--base` file (line endings and trailing newlines aside), edits with `gh issue edit`, then reads the body back and fails unless it matches the draft byte for byte, ignoring trailing newlines. The line 1 and 2 check applies to comments only. |
 
 Every merge checks the repository's current default branch against the PR base. A stacked PR targeting another branch is refused with both branch names; there is no bypass.
 
@@ -490,6 +498,8 @@ Each alias value must be a nonempty list of nonempty names. Thus `训练设计` 
 The orchestrator's watch checks each ticket's latest executor comment for unanswered designer or verifier requests on the idle-check cadence, using the same query as `ding waits`. After `[watch] design_answer_minutes` (default 30), it reports that comment if its state is waiting on design or its waiting field names a designer or verifier. Verifier requests clear when a verifier comment follows; existing designer reminders still clear on a reply from any designer role. The line names the unanswered roles and links to the executor comment. Configured paused requests are excluded. Reported comment IDs remain in `design_reported`, including verifier requests, so restarting does not repeat them. Set the threshold to 0 to disable the backstop; it remains enabled when only idle wakes are disabled. Existing open requests can be reported even when older than `--since`.
 
 The orchestrator also reports an unknown-role wait once per executor comment after `[watch] unrouted_wait_minutes` (default 30; 0 disables it), on the idle-check cadence. The latest executor status must be in progress, its waiting field nonempty and not `none`, and no configured role or alias may match. Any newer comment restarts the silence interval; a live `ding run` or tmux job suppresses the reminder, using the same job test as stale checks. Reported IDs persist in `unrouted_reported`.
+
+It also reports a Claude Code executor that has kept no `ding inbox --wait` running for `[watch] executor_listener_minutes` (default 30; 0 disables it), on the same cadence, once per executor comment: without a waiter, messages wait unread and task-exit wakes reach no one. Only sessions that ran `ding claim` on this host are checked, through the ticket the claim recorded; the ticket must be open and not awaiting the user, its latest owner line must name the session, and its latest executor comment must be in progress. The silence counts from the waiter's stop or last heartbeat, or from the claim when no waiter has run. Reported IDs persist in `waiter_reported`.
 
 `ding watch` refuses to start with stdout redirected to `/dev/null`: it prints an error on stderr and exits 3 before polling, creating locks/directories, or reading/writing the state file. Pipes and regular files are allowed, including the files used by background tasks. Keep the printed batch until every item is handled; `ding waits` can recover unanswered waits after a prior batch has already advanced the watch cursor.
 
@@ -646,6 +656,7 @@ default = "codex"                    # what `ding new` dispatches to: "codex" or
 idle_minutes = 45                    # 0 disables idle-executor wakes
 design_answer_minutes = 30           # 0 disables unanswered-role and PR backstops
 unrouted_wait_minutes = 30           # 0 disables unknown-role wait reminders
+executor_listener_minutes = 30       # 0 disables wakes for a Claude Code executor without `ding inbox --wait`
 handoff = ["hand to "]               # written right before a role name to hand it work, e.g. ["交"]
 
 [check]                              # repo checks for `ding check` and `ding map`; see Repo checks. Absent by default.
@@ -655,7 +666,7 @@ handoff = ["hand to "]               # written right before a role name to hand 
 
 `[sessions] name` may use `{issue}`, `{name}` (the `--name` text), and `{repo}` (`OWNER/REPO`), with an optional format spec such as `{issue:04d}`. Any other field is an error when the file is read. The `--name` text is filled in as is, so braces in it are kept. `ding new` without `--issue` and `ding rename` use `--name` unchanged.
 
-`[watch] idle_minutes`, `design_answer_minutes`, and `unrouted_wait_minutes` must be nonnegative finite numbers of minutes; unknown `[watch]` keys are errors.
+`[watch] idle_minutes`, `design_answer_minutes`, `unrouted_wait_minutes`, and `executor_listener_minutes` must be nonnegative finite numbers of minutes; unknown `[watch]` keys are errors.
 
 `[rule] signatures` lists the full first-line prefixes accepted as designer signatures by both `ding rule` and `ding watch`. It must be a nonempty list of nonempty strings. `ding rule` matches prefixes verbatim, including spaces; `ding watch` also recognizes width-normalized forms and configured aliases. When omitted, it defaults to `[stations] designer` plus `[stations] separator`.
 
@@ -684,7 +695,7 @@ Everything lives under `${XDG_STATE_HOME:-~/.local/state}/ding/`, readable only 
 | `watch/OWNER-REPO.json` | Where `ding watch` left off |
 | `run-locks/<run id>.lock` | Held while a wrapper is alive; this is how `board` tells `running` from `lost` |
 | `inbox/<session>.jsonl` | A Claude Code session's inbox: `message`, `read`, and `withdrawn` events |
-| `inbox/<session>.lock`, `inbox/<session>.waiter.json` | Held by the live `ding inbox --wait`, and what it recorded: pid, transcript id, working directory |
+| `inbox/<session>.lock`, `inbox/<session>.waiter.json` | Held by the live `ding inbox --wait`; and what `claim` and the waiters recorded: ticket, claim time, pid, transcript id, working directory, start, heartbeat, stop |
 
 A `runs.jsonl` line looks like this:
 

@@ -9,7 +9,8 @@ Each session has, under ``$XDG_STATE_HOME/ding/inbox`` (default ``~/.local/state
 - ``<id>.jsonl``: append-only events: ``message``, ``read`` (ids the waiter printed), ``withdrawn`` (ids a sender
   superseded before they were read).
 - ``<id>.lock``: held with ``flock`` by the live waiter, so liveness needs no pid check.
-- ``<id>.waiter.json``: what the latest waiter recorded: pid, transcript id, working directory, start time.
+- ``<id>.waiter.json``: what the session recorded: the ticket it claimed and when, and its latest waiter's pid,
+  transcript id, working directory, start, last heartbeat, and stop.
 """
 
 from __future__ import annotations
@@ -27,6 +28,8 @@ from uuid import UUID, uuid4
 
 PREFIX = "claude:"
 ACTIVE_MINUTES = 30  # a Claude owner without a waiter still counts as working this long after its last read
+HEARTBEAT_SECONDS = 60  # how often a live waiter stamps its record, so a killed waiter's last moment is known
+STAMPS = ("claimed_ns", "started_ns", "seen_ns", "stopped_ns")  # moments the session had, or took, a waiter
 SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
@@ -189,33 +192,138 @@ def show(session_id: str, messages: list[dict], out, root: Path | None = None) -
 
 
 def active(session_id: str, root: Path | None = None, minutes: float = ACTIVE_MINUTES) -> bool:
-    """A waiter runs now, or one started or delivered messages within the last `minutes`."""
+    """A waiter runs now, or the session claimed, had a waiter, or read messages within the last `minutes`."""
     if listener(session_id, root) is not None:
         return True
-    _, _, info = paths(session_id, root)
-    stamps = [last_read(session_id, root) or 0]
-    try:
-        recorded = json.loads(info.read_text(encoding="utf-8"))
-        stamps += [recorded.get("started_ns") or 0, recorded.get("claimed_ns") or 0]
-    except (OSError, ValueError, AttributeError):
-        pass
-    return time.time_ns() - max(stamps) < minutes * 60e9
+    return time.time_ns() - session(session_id, root)["last_activity_ns"] < minutes * 60e9
 
 
-def note_claim(session_id: str, root: Path | None = None) -> None:
-    """Record a claim, so the session counts as working before its first waiter starts."""
+def recorded(session_id: str, root: Path | None = None) -> dict:
+    """What claims and waiters recorded for the session, or {}."""
     _, _, info = paths(session_id, root)
-    _ensure(info.parent)
     try:
-        recorded = json.loads(info.read_text(encoding="utf-8"))
+        value = json.loads(info.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        recorded = {}
-    if not isinstance(recorded, dict):
-        recorded = {}
-    recorded["claimed_ns"] = time.time_ns()
-    temporary = info.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(recorded, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, info)
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _record(session_id: str, root: Path | None = None, **fields) -> None:
+    """Merge fields into the session's record; claims and the waiter's heartbeat must not overwrite each other."""
+    _, _, info = paths(session_id, root)
+    with _locked(info):
+        value = {**recorded(session_id, root), **fields}
+        temporary = info.with_suffix(".json.tmp")
+        temporary.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(temporary, info)
+
+
+def known(session_id: str, root: Path | None = None) -> bool:
+    """Whether ding has an inbox or a record for this session."""
+    inbox, _, info = paths(session_id, root)
+    return inbox.exists() or info.exists()
+
+
+def note_claim(session_id: str, root: Path | None = None, *, ticket: str | None = None,
+               cwd: str | None = None) -> None:
+    """Record a claim, so the session counts as working before its first waiter starts, and which ticket it owns."""
+    fields = {key: value for key, value in (("ticket", ticket), ("cwd", cwd)) if value}
+    _record(session_id, root, claimed_ns=time.time_ns(), **fields)
+
+
+def session(session_id: str, root: Path | None = None) -> dict:
+    """The session's record plus its id, whether a waiter listens, its last read, and its last activity."""
+    value = recorded(session_id, root)
+    read = last_read(session_id, root)
+    activity = max([read or 0, *(value.get(key) or 0 for key in STAMPS)])
+    return {**value, "id": session_id, "listening": listener(session_id, root) is not None,
+            "last_read_ns": read, "last_activity_ns": activity}
+
+
+def sessions(root: Path | None = None) -> list[dict]:
+    """Every session with a record, newest activity first."""
+    root = root or state_root()
+    found = [session(path.name.removesuffix(".waiter.json"), root) for path in root.glob("*.waiter.json")
+             if valid_id(path.name.removesuffix(".waiter.json"))]
+    return sorted(found, key=lambda item: item["last_activity_ns"], reverse=True)
+
+
+def silent_minutes(entry: dict, now_ns: int | None = None) -> float | None:
+    """Minutes since the session last had a waiter (or claimed), or None while a waiter runs or nothing is known."""
+    if entry.get("listening"):
+        return None
+    since = max(entry.get(key) or 0 for key in STAMPS)
+    return ((now_ns or time.time_ns()) - since) / 60e9 if since else None
+
+
+def _iso(stamp_ns: int | None) -> str | None:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(stamp_ns / 1e9)) if stamp_ns else None
+
+
+def status(entry: dict, now_ns: int | None = None) -> dict:
+    """What `ding status` prints for a Claude Code session."""
+    value = {"type": "waiting" if entry.get("listening") else "no-waiter"}
+    if entry.get("listening"):
+        value["waiter_pid"] = entry.get("pid")
+    minutes = silent_minutes(entry, now_ns)
+    if minutes is not None:
+        value["minutes_without_waiter"] = round(minutes, 1)
+    value["last_read"] = _iso(entry.get("last_read_ns"))
+    return value
+
+
+def describe(entry: dict, now_ns: int | None = None) -> dict:
+    """What `ding info` prints for a Claude Code session; `name` is None, since ding cannot see the title."""
+    return {"id": target(entry["id"]), "name": None, "cwd": entry.get("cwd"), "status": status(entry, now_ns),
+            "ticket": entry.get("ticket"), "transcript_id": entry.get("transcript_id")}
+
+
+def transcript(transcript_id: str, home: Path | None = None) -> Path | None:
+    """The Claude Code transcript file for this id, wherever its project folder is."""
+    if not transcript_id or not valid_id(transcript_id):
+        return None
+    base = home or Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+    found = sorted((base / "projects").glob(f"*/{transcript_id}.jsonl"), key=lambda path: path.stat().st_mtime)
+    return found[-1] if found else None
+
+
+def _lines_backwards(path: Path, chunk: int = 1 << 16) -> Iterator[bytes]:
+    """The file's lines, last first, read from the end in chunks: transcripts grow to many megabytes."""
+    with path.open("rb") as handle:
+        position = handle.seek(0, os.SEEK_END)
+        rest = b""
+        while position > 0:
+            step = min(chunk, position)
+            position -= step
+            handle.seek(position)
+            lines = (handle.read(step) + rest).split(b"\n")
+            rest = lines.pop(0)
+            yield from reversed(lines)
+        yield rest
+
+
+def last_reply(transcript_id: str, home: Path | None = None) -> str | None:
+    """The text of the transcript's last assistant message that has text, leaving out subagent (sidechain) turns."""
+    path = transcript(transcript_id, home)
+    if path is None:
+        return None
+    for line in _lines_backwards(path):
+        if b'"assistant"' not in line:
+            continue
+        try:
+            event = json.loads(line.decode("utf-8", errors="replace"))
+        except ValueError:
+            continue
+        message = event.get("message") if isinstance(event, dict) else None
+        if event.get("type") != "assistant" or event.get("isSidechain") or not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        texts = ([content] if isinstance(content, str) else
+                 [item.get("text", "") for item in content or [] if isinstance(item, dict) and item.get("type") == "text"])
+        text = "\n".join(part for part in texts if part.strip())
+        if text.strip():
+            return text
+    return None
 
 
 def by_transcript(transcript_id: str, root: Path | None = None) -> str | None:
@@ -253,7 +361,7 @@ def wait(session_id: str, *, block: bool = True, show_all: bool = False, poll: f
     """Print unread messages and mark them read; with block, first wait until one arrives."""
     out = out or sys.stdout
     environ = os.environ if environ is None else environ
-    inbox, lock, info = paths(session_id, root)
+    inbox, lock, _ = paths(session_id, root)
     _ensure(inbox.parent)
     if show_all:
         messages = [event for event in events(inbox) if event.get("event") == "message"]
@@ -278,18 +386,14 @@ def wait(session_id: str, *, block: bool = True, show_all: bool = False, poll: f
                     print(f"ding: another `ding inbox --wait` already runs for {bare(session_id)}", file=sys.stderr)
                     return 1
                 time.sleep(0.05)
+        _record(session_id, root, pid=os.getpid(), transcript_id=environ.get("CLAUDE_CODE_SESSION_ID"),
+                cwd=os.getcwd(), started_ns=time.time_ns(), stopped_ns=None)
         try:
-            claimed = json.loads(info.read_text(encoding="utf-8")).get("claimed_ns")
-        except (OSError, ValueError, AttributeError):
-            claimed = None
-        record = {"pid": os.getpid(), "transcript_id": environ.get("CLAUDE_CODE_SESSION_ID"),
-                  "cwd": os.getcwd(), "started_ns": time.time_ns(), "claimed_ns": claimed}
-        temporary = info.with_suffix(".json.tmp")
-        temporary.write_text(json.dumps(record, sort_keys=True) + "\n", encoding="utf-8")
-        os.replace(temporary, info)
-        try:
-            seen = None
+            seen, beat = None, time.monotonic()
             while True:
+                if time.monotonic() - beat >= HEARTBEAT_SECONDS:
+                    beat = time.monotonic()
+                    _record(session_id, root, seen_ns=time.time_ns())
                 try:
                     stat = inbox.stat()
                     size = (stat.st_size, stat.st_mtime_ns)
@@ -304,3 +408,5 @@ def wait(session_id: str, *, block: bool = True, show_all: bool = False, poll: f
                 time.sleep(poll)
         except KeyboardInterrupt:
             return 130
+        finally:
+            _record(session_id, root, stopped_ns=time.time_ns())
