@@ -49,6 +49,9 @@ Every key is optional. The defaults match the English templates in kitchen/:
     types = ["actionable", "proposal, awaiting user", "record"]
     notify = "#{ticket} answered, see the ticket {url}"   # message `--notify` sends; also {first_line}
 
+    [executor]
+    default = "codex"                    # `ding new` dispatches to this kind: "codex" or "claude"; --executor overrides
+
     [watch]
     idle_minutes = 45                    # 0 disables idle-executor wakes
     design_answer_minutes = 30           # 0 disables unanswered-station and PR backstops
@@ -195,6 +198,14 @@ class Launch:
 
 
 @dataclass(frozen=True)
+class Executor:
+    default: str = "codex"
+
+
+EXECUTOR_KINDS = ("codex", "claude")
+
+
+@dataclass(frozen=True)
 class Watch:
     idle_minutes: float = 45
     design_answer_minutes: float = 30
@@ -311,6 +322,7 @@ class Config:
     relay: Relay = Relay()
     rule: Rule = Rule()
     launch: Launch = Launch()
+    executor: Executor = Executor()
     watch: Watch = Watch()
     merge: Merge = Merge()
     check: Check | None = None
@@ -404,6 +416,9 @@ def section(cls, values: object, name: str):
                 value.format(parent=1)
             except (ValueError, KeyError, IndexError) as exc:
                 raise ValueError(f"{FILE}: [sessions] parent is not a valid template: {exc}") from exc
+        elif key == "default" and cls is Executor:
+            if value not in EXECUTOR_KINDS:
+                raise ValueError(f"{FILE}: [executor] default must be one of: {', '.join(EXECUTOR_KINDS)}")
         elif key == "issue":
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{FILE}: [{name}] issue must be a positive issue number")
@@ -432,7 +447,7 @@ def load(cwd: Path | None = None) -> Config:
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(f"{path}: {exc}") from exc
     sections = {"stations": Stations, "status": Status, "labels": Labels, "log": Log, "sessions": Sessions, "relay": Relay,
-                "rule": Rule, "launch": Launch, "watch": Watch, "night": Night, "merge": Merge}
+                "rule": Rule, "launch": Launch, "executor": Executor, "watch": Watch, "night": Night, "merge": Merge}
     unknown = sorted(set(data) - {"repo", "check", "build", *sections})
     if unknown:
         raise ValueError(f"{FILE}: unknown keys: {', '.join(unknown)}")

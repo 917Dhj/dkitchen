@@ -404,8 +404,8 @@ def test_new_issue_formats_name_and_asks_for_owner_line(tmp_path, monkeypatch, c
                       "--message", "Brief", "--socket", "/test.sock"]) == 0
     assert requests[1] == ("thread/name/set", {"threadId": THREAD_ID, "name": expected})
     assert requests[2][1]["input"] == [{"type": "text", "text":
-        f"You own ticket example/project#57. Before anything else, post a comment on it "
-        f"with the line `Codex owner: {THREAD_ID}`.\n\nBrief"}]
+        "You own ticket example/project#57. Before anything else, run `ding claim example/project#57` "
+        "and do what it prints.\n\nBrief"}]
     assert capsys.readouterr().out == THREAD_ID + "\n"
 
 
@@ -986,7 +986,7 @@ def test_issue_latest_owner_across_all_comment_pages(monkeypatch):
     assert "--slurp" in calls[-1]
     assert calls[-1][-1].endswith("/42/comments?per_page=100")
     monkeypatch.setattr(ding, "gh_records", lambda *a: [{"body": "Codex owner: invalid"}])
-    with pytest.raises(ValueError, match="last Codex owner line"):
+    with pytest.raises(ValueError, match="last owner line"):
         ding.issue_session(42)
 
 
@@ -1024,7 +1024,7 @@ def test_latest_invalid_owner_refuses_without_session_fallback(issue_data, value
     issue, comments = issue_data
     issue["body"] += f"\nCodex owner: {THREAD_ID}"
     comments.append({"body": f"Codex owner: {value}\nCodex session: {OTHER_ID}"})
-    with pytest.raises(ValueError, match="last Codex owner line"):
+    with pytest.raises(ValueError, match="last owner line"):
         ding.issue_session(42)
 
 
@@ -1297,7 +1297,7 @@ def test_issue_map_omits_invalid_latest_owner_without_losing_other_issues(monkey
     assert ding.issue_map() == {THREAD_ID: {1}, OTHER_ID: {3}}
     warning = capsys.readouterr().err
     assert len(warning.splitlines()) == 1
-    assert "issue #2" in warning and "invalid Codex owner" in warning
+    assert "issue #2" in warning and "invalid owner line" in warning
 
 
 def test_board_issue_column_uses_owner_attribution(monkeypatch, capsys):

@@ -66,20 +66,27 @@ ding new --cwd /work/worktree-57 --issue 57 --name 'Ablation' --message-file bri
 
 `--cwd`, `--name`, and one of `--message` or `--message-file` are required. The working directory must exist. `ding` resolves its path and uses that directory, including a subdirectory or a directory outside Git. The title and first message must contain non-whitespace text; their text is sent unchanged. `--message -` reads the first message from stdin, and `--message-file PATH` reads it from a UTF-8 file. `--socket PATH` selects an existing App Server socket.
 
-`--issue N` starts the session for ticket `#N` in the repository of `--cwd`. `--name` is still required and should be a short title; `ding` fills it into the `[sessions] name` template from [.dkitchen.toml](#dkitchentoml), by default `【#{issue}】{name}`, so `--issue 57 --name 'Ablation'` names the session `【#57】Ablation`. `ding` writes nothing to GitHub. Instead, the first message opens with one paragraph asking the new session to claim the ticket:
+`--issue N` starts the session for ticket `#N` in the repository of `--cwd`. `--name` is still required and should be a short title; `ding` fills it into the `[sessions] name` template from [.dkitchen.toml](#dkitchentoml), by default `【#{issue}】{name}`, so `--issue 57 --name 'Ablation'` names the session `【#57】Ablation`. `ding` writes nothing to GitHub. Instead, the first message opens with one paragraph asking the new session to claim the ticket with [`ding claim`](#claude-code-executors-claim-and-inbox):
 
 ```text
-You own ticket 917Dhj/my-repo#57. Before anything else, post a comment on it with the line `Codex owner: 019a2b3c-...`.
+You own ticket 917Dhj/my-repo#57. Before anything else, run `ding claim 917Dhj/my-repo#57` and do what it prints.
 ```
 
-Until that comment is posted, `'#57'` does not resolve to the new session; pass its UUID instead.
+Until the session has claimed it, `'#57'` does not resolve to the new session; pass its UUID instead.
 
-A ticket has one executor. `--issue N` reads the ticket's `Codex owner:` lines first and refuses when any of those sessions is not archived. Give each run its own sub-ticket instead, or pass `--replace` when the ticket really changes hands (the new owner line then wins).
+A ticket has one executor. `--issue N` reads the ticket's owner lines first and refuses while any of those sessions is still working: a Codex session that is not archived, or a Claude Code session whose inbox waiter is running, or that claimed the ticket, started a waiter, or read its inbox in the last 30 minutes. When the Codex App Server cannot be reached, `ding` warns and checks only the Claude Code owners. Give each run its own sub-ticket instead, or pass `--replace` when the ticket really changes hands (the new owner line then wins).
 
 `--parent N` opens that sub-ticket for you: a new ticket titled `--title` (default: `--name`), whose body is the `[sessions] parent` line (default `Parent: #N`), attached to `#N` as a GitHub sub-issue. The new session then owns the sub-ticket exactly as with `--issue`. This is the one form of `new` that writes to GitHub. If the ticket opens but cannot be attached, no session starts, and the error names the new ticket.
 
 ```bash
 ding new --cwd /work/worktree-57 --parent 57 --title '27B v9 run' --name '27B v9' --message-file brief.md
+```
+
+**Which executor.** `[executor] default` in [.dkitchen.toml](#dkitchentoml) names the kind `new` dispatches to, `codex` (the default) or `claude`; `--executor codex|claude` overrides it for one dispatch. `ding` cannot open a Claude Code session, so for `claude`, and for any dispatch with `--print`, `new` runs the owner check, prints the complete first message to stdout, and creates nothing. Open a Claude Code session with that message, or hand it to the user to open. `--cwd` and `--name` are then optional; with `--cwd`, the message also says which directory to work in.
+
+```bash
+ding new --issue 57 --message-file brief.md                     # [executor] default = "claude": prints the message
+ding new --issue 57 --executor claude --cwd /work/wt-57 --message-file brief.md
 ```
 
 After the App Server accepts the first turn, `new` prints only the session UUID to stdout and exits with code 0. It does not wait for the reply. Use that UUID to continue or inspect the session:
@@ -99,6 +106,7 @@ Every command that talks to one session (`read`, `status`, `info`, `rename`, `se
 | Target | Example |
 | --- | --- |
 | Session UUID | `019a2b3c-...` |
+| Claude Code session id | `local_…`, or `claude:<id>` for any id |
 | Exact session name, as shown by `board` | `'Evaluation runner'` |
 | Issue in the current repo | `'#42'` or `--issue 42` |
 | Issue in any repo | `917Dhj/my-repo#42` |
@@ -111,17 +119,42 @@ Quote `'#42'`, or your shell will treat it as a comment. Links to `/pull/42` wor
 ```text
 Codex owner: 019a2b3c-...      # "this ticket is mine"
 Codex session: 019a2b3c-...    # "this comment came from me"
+Claude owner: local_…          # the same, for a Claude Code executor
 ```
 
-`ding` looks at the issue body and every comment:
+`ding claim` posts the owner line, so executors do not write it by hand. `ding` looks at the issue body and every comment:
 
-1. If any `Codex owner:` line exists, the **latest** one wins. When a ticket changes hands, the new executor posts its own owner line.
+1. If any owner line exists, `Codex owner:` or `Claude owner:`, the **latest** one wins. When a ticket changes hands, the new executor posts its own owner line.
 2. Otherwise, all `Codex session:` lines must name the same session.
 3. If they name different sessions, `ding` refuses and lists the candidates with their status and latest comment. Pick one by UUID or name.
 
 When a name matches several sessions, or none, `ding` shows the candidates instead of guessing.
 
-A Claude Code session working as the executor signs with `Claude session: <name>`. `ding watch` and `ding merge` count such a comment as an executor comment, but `ding` never delivers messages to it.
+A bare UUID is a Codex session unless a Claude Code inbox waiter has run under that id or recorded it as its transcript id. `read`, `status`, `info` and `rename` work on Codex sessions only.
+
+## Claude Code executors: `claim` and `inbox`
+
+`ding` cannot push a message into a Claude Code session, so the session pulls. It keeps `ding inbox --wait` running as a background task; when a message arrives, the waiter prints it and exits, and Claude Code wakes the session. The session handles what it read, then starts the waiter again.
+
+```bash
+ding claim '#57'            # run by the executor itself, Codex or Claude Code
+ding inbox --wait           # Claude Code: a background task, on its own
+ding inbox                  # print unread messages without waiting
+ding inbox --all            # every message, read or not
+```
+
+**`claim`** reads the calling session's identity (`CODEX_THREAD_ID`; else `CLAUDE_CODE_HOST_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`) and posts on the ticket a status block saying work has started, the owner line, and the session line. It refuses while another working executor owns the ticket, unless `--replace`. Then it prints the next step: for a Claude Code session, starting the waiter.
+
+**Delivery.** `send`, `relay`, `rule --notify`, and the exit wake of `launch` reach a Claude Code session by appending to its inbox:
+
+| Outcome | Meaning | Exit |
+| --- | --- | --- |
+| `inbox_queued` | A waiter is running; the session reads the message when the waiter wakes it | 0 |
+| `no_listener` | No waiter is running; the message stays in the inbox for the next `ding inbox --wait` | 1 |
+
+`relay` leaves its ticket comment only on `inbox_queued`. `--supersede` withdraws the sender's earlier unread messages. A Claude Code session reads its inbox between turns, so `--steer` queues there, and `--interrupt` is refused.
+
+Run the waiter alone: no `&`, no redirection, nothing chained before it, the same as `ding watch`. Only one waiter runs per session; a second exits at once. The waiter marks messages read only after printing them, so a waiter killed in between prints them again rather than losing them.
 
 ## Rename a session: `rename`
 
@@ -257,7 +290,7 @@ Every send is written to `~/.local/state/ding/sent.jsonl` before delivery, with 
 
 ## Run a long job: `launch`
 
-From inside a Codex session:
+From inside a Codex or Claude Code session:
 
 ```bash
 ding launch train -- python train.py --config big.yaml
@@ -606,6 +639,9 @@ review_check = ""                   # e.g. "review": the status `ding review` wr
 review_pass = "Reviewed {sha}: pass"                              # first line of a passing review
 review_changes = "Reviewed {sha}: changes requested, see below"   # first line of a failing review
 
+[executor]
+default = "codex"                    # what `ding new` dispatches to: "codex" or "claude"; --executor overrides
+
 [watch]
 idle_minutes = 45                    # 0 disables idle-executor wakes
 design_answer_minutes = 30           # 0 disables unanswered-role and PR backstops
@@ -647,6 +683,8 @@ Everything lives under `${XDG_STATE_HOME:-~/.local/state}/ding/`, readable only 
 | `launch-records/<name>-<id>.log` | Everything the launch's pane showed; deleted after `[launch] keep_days` |
 | `watch/OWNER-REPO.json` | Where `ding watch` left off |
 | `run-locks/<run id>.lock` | Held while a wrapper is alive; this is how `board` tells `running` from `lost` |
+| `inbox/<session>.jsonl` | A Claude Code session's inbox: `message`, `read`, and `withdrawn` events |
+| `inbox/<session>.lock`, `inbox/<session>.waiter.json` | Held by the live `ding inbox --wait`, and what it recorded: pid, transcript id, working directory |
 
 A `runs.jsonl` line looks like this:
 
