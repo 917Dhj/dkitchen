@@ -2586,7 +2586,8 @@ def test_unrouted_watch_persists_once_per_comment(idle_ticket, monkeypatch, caps
 
 
 @pytest.mark.parametrize('key, value', [('review_check', 'true'), ('review_check', '" "'),
-    ('unrouted_wait_minutes', '-1'), ('unrouted_wait_minutes', 'nan'), ('unrouted_wait_minutes', 'true')])
+    ('unrouted_wait_minutes', '-1'), ('unrouted_wait_minutes', 'nan'), ('unrouted_wait_minutes', 'true'),
+    ('executor_listener_minutes', '-1'), ('executor_listener_minutes', 'true')])
 def test_new_config_validation(tmp_path, key, value):
     section = 'merge' if key == 'review_check' else 'watch'
     with pytest.raises(ValueError, match=key):

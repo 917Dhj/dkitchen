@@ -3,6 +3,7 @@
 ## Unreleased (develop)
 
 - **Claude Code sessions as executors.** `ding` reaches a Claude Code session through a file inbox the session reads with `ding inbox --wait`, kept running as a background task: `send`, `relay`, `rule --notify`, and the exit wake of `launch` deliver there, reporting `inbox_queued` when a waiter runs and `no_listener` (exit 1) when none does. `ding launch` works from a Claude Code session. `ding claim` posts the owner line, `Codex owner:` or the new `Claude owner:`, with a status block, and every ticket lookup reads both. `ding new` asks the session to run `ding claim` instead of writing the owner line by hand, takes `--print` to print the first message without opening a session, and dispatches to `[executor] default` (`codex` or `claude`, overridden by `--executor`); for `claude` it prints the message for whoever opens the session.
+- **Seeing Claude Code executors.** `ding board` lists Claude Code sessions that keep a `ding` inbox in the repository, with `waiting` or `no-waiter`, the ticket they claimed, and the first paragraph of their last reply; `read`, `status`, and `info` read a Claude Code session from its inbox record and transcript. The orchestrator's `ding watch` reports an in-progress Claude Code executor whose `ding inbox --wait` has been gone for the new `[watch] executor_listener_minutes` (default 30; 0 disables it).
 
 ## 0.6.2
 

@@ -56,6 +56,7 @@ Every key is optional. The defaults match the English templates in kitchen/:
     idle_minutes = 45                    # 0 disables idle-executor wakes
     design_answer_minutes = 30           # 0 disables unanswered-station and PR backstops
     unrouted_wait_minutes = 30           # 0 disables unknown-station wait reminders
+    executor_listener_minutes = 30       # 0 disables wakes for a Claude Code executor without `ding inbox --wait`
     handoff = ["hand to "]               # written right before a station name to hand it work, e.g. ["交"]
 
     [merge]
@@ -210,6 +211,7 @@ class Watch:
     idle_minutes: float = 45
     design_answer_minutes: float = 30
     unrouted_wait_minutes: float = 30
+    executor_listener_minutes: float = 30
     handoff: tuple[str, ...] = ("hand to ",)
 
 
@@ -388,7 +390,7 @@ def section(cls, values: object, name: str):
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or value < 0):
                 raise ValueError(f"{FILE}: [launch] keep_days must be a nonnegative finite number of days")
-        elif key in {"idle_minutes", "design_answer_minutes", "unrouted_wait_minutes"}:
+        elif key in {"idle_minutes", "design_answer_minutes", "unrouted_wait_minutes", "executor_listener_minutes"}:
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or value < 0):
                 raise ValueError(f"{FILE}: [watch] {key} must be a nonnegative finite number of minutes")

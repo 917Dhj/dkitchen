@@ -3,6 +3,8 @@
 Wakes on:
 - executor comments whose status is not "in progress", or whose "waiting on" names a station or the user;
 - idle executors still marked "in progress", after [watch] idle_minutes with no running job;
+- Claude Code executors still marked "in progress" whose `ding inbox --wait` has been gone for
+  [watch] executor_listener_minutes, once per executor comment;
 - unanswered designer/verifier requests older than [watch] design_answer_minutes, once per executor comment;
 - comments from the user (no station signature);
 - status labels being added, and newly opened PRs;
@@ -33,7 +35,7 @@ import time
 import unicodedata
 from urllib.parse import quote
 
-from dkitchen import truncate
+from dkitchen import inbox, truncate
 from dkitchen.config import Config, Sessions
 
 SHELLS = {"bash", "sh", "zsh", "dash", "fish"}
@@ -624,6 +626,46 @@ def idle(config: Config, repo: str, checkout: Path, observed: dict, reported: se
     return found, pending
 
 
+def missing_waiters(config: Config, repo: str, reported: set[int], skip: set[int]) -> list[tuple[str, str, int]]:
+    """In-progress tickets whose latest owner is a Claude Code session that has kept no inbox waiter for a while.
+
+    Without a waiter, ding messages wait unread and task-exit wakes reach no one. Only sessions that claimed a ticket
+    on this host are checked, through the ticket `ding claim` recorded; the watch cannot see waiters elsewhere.
+    """
+    if not config.watch.executor_listener_minutes:
+        return []
+    from dkitchen.ding import owner_references
+    moment = time.time_ns()
+    found = []
+    for entry in inbox.sessions():
+        minutes = inbox.silent_minutes(entry, moment)
+        ticket = re.fullmatch(r"(.+)#([1-9][0-9]*)", entry.get("ticket") or "")
+        if (minutes is None or minutes <= config.watch.executor_listener_minutes or not ticket
+                or ticket[1].lower() != repo.lower() or int(ticket[2]) in skip):
+            continue
+        issue = gh(f"repos/{repo}/issues/{ticket[2]}")
+        if (issue.get("state") != "open" or "pull_request" in issue or not issue["comments"]
+                or any(label["name"] == config.labels.awaiting_user for label in issue["labels"])):
+            continue
+        last, owner = None, None
+        for comment in comments_backwards(repo, issue):
+            if last is None and role(comment["body"], config) == config.stations.executor:
+                last = comment
+            owner = owner or next(reversed(owner_references(comment["body"])), None)
+            if last is not None and owner is not None:
+                break
+        owner = owner or next(reversed(owner_references(issue.get("body"))), None)
+        if (last is None or owner != inbox.target(entry["id"]) or last["id"] in reported
+                or state_and_waiting(last["body"], config)[0] != config.status.in_progress
+                or label_suppresses(config, repo, issue, last)):
+            continue
+        line = (f"#{issue['number']} Claude Code executor {entry['id']} has run no `ding inbox --wait` for "
+                f"{minutes:.0f} minutes while in progress, so ding messages and task-exit wakes cannot reach it "
+                f"until it starts one: {summary(last['body'], config)} {last['html_url']}")
+        found.append((now(), line, last["id"]))
+    return found
+
+
 def default_state(repo: str, station: str | None = None) -> Path:
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
     suffix = ".for-" + quote(station, safe="") if station is not None else ""
@@ -660,6 +702,7 @@ def watch(args, config: Config) -> int:
     observed, idle_reported = state.get("idle_observed", {}), set(state.get("idle_reported", []))
     design_reported = set(state.get("design_reported", []))
     unrouted_reported = set(state.get("unrouted_reported", []))
+    waiter_reported = set(state.get("waiter_reported", []))
     pr_reported, pr_observed = set(state.get("pr_reported", [])), state.get("pr_observed", {})
     skip = set(args.skip_issue) | ({config.log.issue} if config.log.issue else set())
     # Label changes made while the orchestrator was handling the last batch are its own; skip them.
@@ -669,7 +712,8 @@ def watch(args, config: Config) -> int:
     print(f"Watching {repo}: {detail}", file=sys.stderr)
     errors = 0
     next_stale = next_idle = 0.0 if station is None else float("inf")
-    threshold = config.watch.idle_minutes or config.watch.design_answer_minutes or config.watch.unrouted_wait_minutes
+    threshold = (config.watch.idle_minutes or config.watch.design_answer_minutes or config.watch.unrouted_wait_minutes
+                 or config.watch.executor_listener_minutes)
     idle_every = min(threshold * 20, 900) if station is None and threshold else float("inf")
     while True:
         polled = now()
@@ -677,7 +721,7 @@ def watch(args, config: Config) -> int:
             found = collect(config, repo, since, labels_since, seen, skip, **collect_options)
             pr_found, pr_pending = pr_wakes(config, repo, station, pr_reported, pr_observed, skip)
             quiet, idle_found, design_found, pending, stale_ids = [], [], [], observed, set()
-            unrouted_found = []
+            unrouted_found, waiter_found = [], []
             checked_at = time.monotonic()
             checked_stale, checked_idle = checked_at >= next_stale, checked_at >= next_idle
             if checked_stale:
@@ -690,6 +734,8 @@ def watch(args, config: Config) -> int:
                 quiet += design_found
                 unrouted_found = unrouted_waits(config, repo, checkout, unrouted_reported, skip)
                 quiet += unrouted_found
+                waiter_found = missing_waiters(config, repo, waiter_reported, skip)
+                quiet += waiter_found
             quiet += pr_found
             if any(wakes for _, _, wakes in found) or quiet:
                 if found:
@@ -726,6 +772,7 @@ def watch(args, config: Config) -> int:
                          idle_reported=sorted(idle_reported | {id_ for _, _, id_ in idle_found}),
                          design_reported=sorted(design_reported | {id_ for _, _, id_ in design_found}),
                          unrouted_reported=sorted(unrouted_reported | {id_ for _, _, id_ in unrouted_found}),
+                         waiter_reported=sorted(waiter_reported | {id_ for _, _, id_ in waiter_found}),
                          pr_reported=sorted(pr_reported | {key for _, _, key in pr_found}))
         if changed and not wakes:
             state["labels_since"] = labels_since
