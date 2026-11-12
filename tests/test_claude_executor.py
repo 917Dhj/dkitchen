@@ -327,3 +327,9 @@ def test_a_claim_counts_as_working_before_the_first_waiter():
     assert not inbox.active(CLAUDE_ID)
     inbox.note_claim(CLAUDE_ID)
     assert inbox.active(CLAUDE_ID)
+
+
+def test_new_with_replace_tells_the_session_to_claim_with_replace(kitchen, capsys):
+    kitchen("claude")
+    assert ding.main(["new", "--issue", "42", "--message", "Go", "--replace"]) == 0
+    assert "`ding claim example/project#42 --replace`" in capsys.readouterr().out

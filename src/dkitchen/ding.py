@@ -339,8 +339,9 @@ def github_repository() -> str:
     return repo
 
 
-def ownership_note(repo: str, number: int) -> str:
-    return (f"You own ticket {repo}#{number}. Before anything else, run `ding claim {repo}#{number}` "
+def ownership_note(repo: str, number: int, *, replace: bool = False) -> str:
+    claim = f"ding claim {repo}#{number}" + (" --replace" if replace else "")
+    return (f"You own ticket {repo}#{number}. Before anything else, run `{claim}` "
             "and do what it prints.\n\n")
 
 
@@ -1418,7 +1419,7 @@ def new_task(args) -> int:
                                  f"Open a sub-ticket for the new run with --parent {args.issue}, "
                                  "or pass --replace to hand the ticket to a new session")
         if args.issue is not None:
-            note = ownership_note(args.repo, args.issue)
+            note = ownership_note(args.repo, args.issue, replace=getattr(args, "replace", False))
             if printing and cwd is not None:
                 note += f"Work in {cwd}.\n\n"
             message = note + message
