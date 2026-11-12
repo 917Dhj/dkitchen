@@ -1852,7 +1852,7 @@ def show_claude(args) -> int:
         raise ValueError(f"rename works on Codex sessions only; rename the Claude Code session {session_id} "
                          "in Claude Code itself")
     if not inbox.known(session_id):
-        raise ValueError(f"ding has no inbox or record for Claude Code session {session_id} on this host")
+        raise ValueError(f"no inbox or record for Claude Code session {session_id} on this host")
     entry = inbox.session(session_id)
     if args.action in {"status", "info"}:
         print(json.dumps(inbox.status(entry) if args.action == "status" else inbox.describe(entry),
