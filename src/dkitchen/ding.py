@@ -640,7 +640,7 @@ def latest_runs() -> dict[str, dict]:
             if (not isinstance(run, dict) or run.get("event") != "run_start"
                     or any(not isinstance(run.get(key), str) for key in ("run_id", "thread_id", "record", "cwd"))
                     or str(UUID(run["run_id"])) != run["run_id"]
-                    or str(UUID(run["thread_id"])) != run["thread_id"]
+                    or valid_owner(run["thread_id"]) != run["thread_id"]
                     or not Path(run["record"]).is_absolute() or not Path(run["cwd"]).is_absolute()
                     or type(run.get("pid")) is not int or run["pid"] <= 0
                     or type(run.get("started_ns")) is not int or run["started_ns"] <= 0
@@ -695,7 +695,7 @@ def run_state(run: dict) -> str:
             elif event.get("event") == "notification":
                 if not isinstance(event.get("outcome"), str) or event["outcome"] not in {
                         "started", "queued_behind_active", "skipped_active", "queue_failed",
-                        "failed", "unknown", "queued"}:
+                        "failed", "unknown", "queued", "inbox_queued", "no_listener"}:
                     raise ValueError("invalid notification outcome")
                 notification = event
         if task_exit is None:
@@ -703,7 +703,8 @@ def run_state(run: dict) -> str:
                 raise ValueError("notification without task_exit")
             return "running" if alive else "lost"
         if notification is not None:
-            if notification["outcome"] in {"queue_failed", "failed", "unknown", "queued"}:
+            # no_listener: the wake waits in the Claude Code session's inbox, but nothing was there to read it.
+            if notification["outcome"] in {"queue_failed", "failed", "unknown", "queued", "no_listener"}:
                 return "notify_failed"
         elif not alive:
             return "notify_failed"

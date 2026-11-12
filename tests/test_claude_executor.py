@@ -333,3 +333,23 @@ def test_new_with_replace_tells_the_session_to_claim_with_replace(kitchen, capsy
     kitchen("claude")
     assert ding.main(["new", "--issue", "42", "--message", "Go", "--replace"]) == 0
     assert "`ding claim example/project#42 --replace`" in capsys.readouterr().out
+
+
+def test_run_registry_accepts_a_claude_session(tmp_path, capsys):
+    record = tmp_path / "exit.jsonl"
+    with ding.registered_run(f"claude:{CLAUDE_ID}", record):
+        runs = ding.latest_runs()
+    assert list(runs) == [f"claude:{CLAUDE_ID}"]
+    assert "invalid run registry row" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("listening,state", [(True, "exited(0)"), (False, "notify_failed")])
+def test_board_reads_a_claude_task_exit(waiter, tmp_path, capsys, listening, state):
+    if listening:
+        waiter()
+    args = SimpleNamespace(record=str(tmp_path / "exit.jsonl"), thread_id=f"claude:{CLAUDE_ID}",
+                           message="Task job exited", socket=None, progress=None)
+    ding.run_task(args, ["true"])
+    run = ding.latest_runs()[f"claude:{CLAUDE_ID}"]
+    assert ding.run_state(run) == state
+    assert "run evidence unavailable" not in capsys.readouterr().err
