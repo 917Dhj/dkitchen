@@ -897,7 +897,7 @@ def test_rule_notifies_a_codex_session_and_keeps_stdout_clean(ruling, capsys):
 
 def test_rule_refuses_a_claude_session_before_posting(ruling, capsys):
     assert ruling.run([], "--notify", "uds:/tmp/cc-socks/1.sock") == 1
-    assert "cannot message a Claude Code session" in capsys.readouterr().err
+    assert "SendMessage address" in capsys.readouterr().err
     assert ruling.calls == [] and ruling.sends == []
 
 

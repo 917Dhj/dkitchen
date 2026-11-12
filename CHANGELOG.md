@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased (develop)
+
+- **Claude Code sessions as executors.** `ding` reaches a Claude Code session through a file inbox the session reads with `ding inbox --wait`, kept running as a background task: `send`, `relay`, `rule --notify`, and the exit wake of `launch` deliver there, reporting `inbox_queued` when a waiter runs and `no_listener` (exit 1) when none does. `ding launch` works from a Claude Code session. `ding claim` posts the owner line, `Codex owner:` or the new `Claude owner:`, with a status block, and every ticket lookup reads both. `ding new` asks the session to run `ding claim` instead of writing the owner line by hand, takes `--print` to print the first message without opening a session, and dispatches to `[executor] default` (`codex` or `claude`, overridden by `--executor`); for `claude` it prints the message for whoever opens the session.
+
 ## 0.6.2
 
 - **`ding launch` no longer leaves tmux sessions behind.** The pane's output goes to `launch-records/<name>-<id>.log`, and the session closes when the job exits, however it exits. The wake-up message and the launch line name the log. A job's name is free again once it exits. Logs untouched for `[launch] keep_days` (default 14) are deleted at the next launch, except those of a session still open; records stay, so `ding board` is unchanged. Sessions left by earlier versions stay until you close them. Run `/setup-dkitchen` or `build-team` again to update `docs/agents/long-running-jobs.md`, which told executors to close panes by hand.

@@ -22,7 +22,7 @@ from dkitchen import ding, refs, truncate
 from dkitchen.config import Config
 from dkitchen.orchestrate import call, fail
 
-CLAUDE_ADDRESS = re.compile(r"^(?:uds|bridge|did):|^local_")
+CLAUDE_ADDRESS = re.compile(r"^(?:uds|bridge|did):")
 COMMENT_URL = re.compile(r"^https://\S+#issuecomment-\d+$")
 COMMENT_ID = re.compile(r"(?:#issuecomment-)?(\d+)$")
 
@@ -148,8 +148,8 @@ def edit_body(config: Config, repo: str, ticket: int, args, draft: str) -> int:
 def rule(args, config: Config) -> int:
     ticket = args.ticket
     if args.notify and CLAUDE_ADDRESS.search(args.notify):
-        return fail(f"--notify {args.notify}: ding cannot message a Claude Code session; use SendMessage for it. "
-                    "Nothing posted")
+        return fail(f"--notify {args.notify}: that is a SendMessage address; give the ticket or the Claude Code "
+                    "session id, whose inbox ding can reach. Nothing posted")
     try:
         with open(args.draft, encoding="utf-8") as handle:
             draft = handle.read()

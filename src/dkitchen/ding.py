@@ -1,4 +1,5 @@
-"""Message agent sessions and wake them after tasks via Codex App Server."""
+"""Message agent sessions and wake them after tasks: Codex sessions via Codex App Server, Claude Code sessions
+via a file inbox their background `ding inbox --wait` reads."""
 
 import argparse
 import ast
@@ -25,6 +26,8 @@ from datetime import datetime
 from typing import Iterator
 
 import fcntl
+
+from dkitchen import inbox
 
 
 ISSUE_REPOSITORY = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
@@ -336,21 +339,41 @@ def github_repository() -> str:
     return repo
 
 
-def ownership_note(repo: str, number: int, thread_id: str) -> str:
-    return (f"You own ticket {repo}#{number}. Before anything else, post a comment on it "
-            f"with the line `Codex owner: {thread_id}`.\n\n")
+def ownership_note(repo: str, number: int) -> str:
+    return (f"You own ticket {repo}#{number}. Before anything else, run `ding claim {repo}#{number}` "
+            "and do what it prints.\n\n")
+
+
+OWNER_LINE = re.compile(r"(?m)^[ \t]*(Codex|Claude) owner:[ \t]*([^\r\n]*)$")
+
+
+def owner_references(body: str | None) -> list[str]:
+    """Owner lines in order: a Codex thread id as written, or `claude:<id>` for a Claude Code session."""
+    if body is None:
+        return []
+    if not isinstance(body, str):
+        raise ValueError("Malformed gh issue body.")  # noqa: TRY004 - callers handle malformed gh data as ValueError
+    return [value.strip().strip("`") if kind == "Codex" else inbox.PREFIX + value.strip().strip("`")
+            for kind, value in OWNER_LINE.findall(body.replace("\r\n", "\n"))]
+
+
+def valid_owner(value: str) -> str:
+    """The owner as a canonical target, or ValueError."""
+    if inbox.is_target(value):
+        return inbox.target(inbox.bare(value))
+    return str(UUID(value))
 
 
 def ticket_owners(repo: str, number: int) -> list[str]:
-    """Every distinct session a `Codex owner:` line on the ticket has named, oldest first."""
+    """Every distinct session an owner line on the ticket has named, oldest first."""
     issue = gh_json(["api", f"repos/{repo}/issues/{number}"])
     if not isinstance(issue, dict):
         raise ValueError("Malformed gh issue.")
     owners = []
     for record in [issue, *gh_records(f"repos/{repo}/issues/{number}/comments?per_page=100")]:
-        for value in session_references(record.get("body"), "owner"):
+        for value in owner_references(record.get("body")):
             try:
-                owner = str(UUID(value))
+                owner = valid_owner(value)
             except ValueError:
                 continue
             if owner not in owners:
@@ -364,6 +387,20 @@ def live_owners(call, owners: list[str]) -> list[dict]:
         return []
     live = {thread["id"]: thread for thread in list_threads(call)}
     return [live[owner] for owner in owners if owner in live]
+
+
+def live_ticket_owners(repo: str, number: int, path: str | None) -> list[dict]:
+    """The ticket's owners still working: unarchived Codex sessions, Claude Code sessions with a live waiter."""
+    owners = ticket_owners(repo, number)
+    found = []
+    codex = [owner for owner in owners if not inbox.is_target(owner)]
+    if codex:
+        with app_server(socket_path(path)) as call:
+            found += [{"id": thread["id"], "name": thread.get("name")} for thread in live_owners(call, codex)]
+    for owner in owners:
+        if inbox.is_target(owner) and inbox.listener(owner) is not None:
+            found.append({"id": owner, "name": "Claude Code session with a live inbox waiter"})
+    return found
 
 
 def create_sub_issue(repo: str, parent: int, title: str, first_line: str) -> int:
@@ -392,7 +429,7 @@ def session_references(body: str | None, label: str = "session") -> list[str]:
 def issue_references(issue: dict, comments: list[dict]) -> tuple[str | None, dict, bool]:
     owner, candidates, malformed = None, {}, False
     for index, record in enumerate([issue, *comments]):
-        owners = session_references(record.get("body"), "owner")
+        owners = owner_references(record.get("body"))
         if owners:
             owner = owners[-1]
         references = set()
@@ -419,9 +456,9 @@ def issue_session(number: int, path: str | None = None, repo: str | None = None)
         issue, gh_records(f"repos/{repo}/issues/{number}/comments?per_page=100"))
     if owner is not None:
         try:
-            return str(UUID(owner))
+            return valid_owner(owner)
         except ValueError as exc:
-            raise ValueError(f"The last Codex owner line in issue #{number} is not a valid UUID.") from exc
+            raise ValueError(f"The last owner line in issue #{number} is not a valid session id.") from exc
     if malformed:
         raise ValueError(f"A Codex session line in issue #{number} is not a valid UUID.")
     if not candidates:
@@ -475,9 +512,9 @@ def issue_map() -> dict[str, set[int]]:
             owner, candidates, _ = issue_references(issue, comments)
             if owner is not None:
                 try:
-                    candidates = [str(UUID(owner))]
+                    candidates = [valid_owner(owner)]
                 except ValueError:
-                    print(f"ding: issue #{number} has an invalid Codex owner; omitted from board.",
+                    print(f"ding: issue #{number} has an invalid owner line; omitted from board.",
                           file=sys.stderr)
                     continue
             for thread_id in candidates:
@@ -521,10 +558,15 @@ def normalize_target(target: str | None, issue: int | None) -> str | None:
 
 def resolve_target(target: str | None, issue: int | None, path: str | None) -> str:
     target = normalize_target(target, issue)
+    if target and (inbox.is_target(target) or target.startswith("local_")):
+        return inbox.target(inbox.bare(target))
     try:
-        return str(UUID(target))
+        thread_id = str(UUID(target))
     except (ValueError, TypeError, AttributeError):
         pass
+    else:
+        # A bare UUID is a Codex thread unless a Claude Code waiter has run under it.
+        return inbox.target(thread_id) if inbox.paths(thread_id)[2].exists() else thread_id
     if target and (match := re.fullmatch(rf"({ISSUE_REPOSITORY})#([1-9][0-9]*)", target)):
         return issue_session(int(match[2]), path, repo=match[1])
     with app_server(socket_path(path)) as call:
@@ -1346,22 +1388,37 @@ def new_task(args) -> int:
     thread_id = None
     stage = "validation"
     try:
+        executor = getattr(args, "executor", None) or "codex"
+        printing = getattr(args, "print", False) or executor == "claude"
         cwd = Path(args.cwd).expanduser().resolve() if args.cwd else None
-        if cwd is None or not cwd.is_dir():
+        if (cwd is None and not printing) or (cwd is not None and not cwd.is_dir()):
             raise ValueError("--cwd must name an existing directory.")
+        if not printing and not (args.name or "").strip():
+            raise ValueError("--name is required to create a Codex session.")
         message = message_text(args.message, args.message_file, None)
         if not message.strip():
             raise ValueError("The first message (--message or --message-file) must not be empty.")
+        if args.issue is not None and not getattr(args, "replace", False):
+            stage = "owner check"
+            owners = live_ticket_owners(args.repo, args.issue, args.socket)
+            if owners:
+                named = ", ".join(f"{owner['id']} ({owner.get('name') or 'unnamed'})" for owner in owners)
+                raise ValueError(f"#{args.issue} already has an executor that is still working: {named}. "
+                                 f"Open a sub-ticket for the new run with --parent {args.issue}, "
+                                 "or pass --replace to hand the ticket to a new session")
+        if args.issue is not None:
+            note = ownership_note(args.repo, args.issue)
+            if printing and cwd is not None:
+                note += f"Work in {cwd}.\n\n"
+            message = note + message
+        if printing:
+            if executor == "claude":
+                print("ding: the executor is a Claude Code session, which ding cannot open: open a session with "
+                      "the message below, or hand it to the user to open; nothing was created", file=sys.stderr)
+            sys.stdout.write(message if message.endswith("\n") else message + "\n")
+            return 0
         stage = "connection"
         with app_server(socket_path(args.socket)) as call:
-            if args.issue is not None and not getattr(args, "replace", False):
-                stage = "owner check"
-                owners = live_owners(call, ticket_owners(args.repo, args.issue))
-                if owners:
-                    named = ", ".join(f"{owner['id']} ({owner.get('name') or 'unnamed'})" for owner in owners)
-                    raise ValueError(f"#{args.issue} already has an executor that is not archived: {named}. "
-                                     f"Open a sub-ticket for the new run with --parent {args.issue}, "
-                                     "or pass --replace to hand the ticket to a new session")
             stage = "thread/start"
             thread = call(stage, {"cwd": str(cwd), "ephemeral": False}).get("thread")
             try:
@@ -1370,8 +1427,6 @@ def new_task(args) -> int:
                 raise ValueError("Malformed App Server thread ID.") from exc
             stage = "thread/name/set"
             call(stage, {"threadId": thread_id, "name": args.name})
-            if args.issue is not None:
-                message = ownership_note(args.repo, args.issue, thread_id) + message
             stage = "turn/start"
             turn = call(stage, {"threadId": thread_id,
                                 "input": [{"type": "text", "text": message}]}).get("turn")
@@ -1450,10 +1505,15 @@ def send_task(args) -> int:
     }
     modes = {name: True for name in ("steer", "supersede", "interrupt") if getattr(args, name, False)}
     event.update(modes)
+    path = None
     try:
         event["target"] = normalize_target(args.thread_id, args.issue)
         event["thread_id"] = resolve_target(event["target"], None, args.socket)
-        path = socket_path(args.socket)
+        if inbox.is_target(event["thread_id"]):
+            if modes.get("interrupt"):
+                raise ValueError("--interrupt cannot stop a Claude Code session's turn; send without it")
+        else:
+            path = socket_path(args.socket)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         event["error"] = str(exc) or type(exc).__name__
     if event["error"] is None:
@@ -1464,6 +1524,8 @@ def send_task(args) -> int:
     if event["error"]:
         print(f"ding: {event['error']}", file=sys.stderr)
         return 1
+    if inbox.is_target(event["thread_id"]):
+        return send_to_inbox(args, event, record, modes)
     if modes.pop("supersede", False):
         superseded = {"event": "superseded", "client_message_id": event["client_message_id"],
                       "sender": args.sender, "thread_id": event["thread_id"], "removed": [], "error": None}
@@ -1495,6 +1557,32 @@ def send_task(args) -> int:
     print(f"ding: {event['outcome']}{warning}{detail}; record: {record}", file=sys.stderr)
     return 0 if event["outcome"] in {"started", "steered", "queued_behind_active"} else (
         130 if event["error"] == "KeyboardInterrupt" else 1)
+
+
+def send_to_inbox(args, event: dict, record: Path, modes: dict) -> int:
+    """Deliver to a Claude Code session's inbox; succeed only when its waiter is there to read it."""
+    if modes.get("steer"):
+        print("ding: a Claude Code session reads its inbox between turns; --steer queues the message there",
+              file=sys.stderr)
+    try:
+        delivery = inbox.deliver(event["thread_id"], args.message, args.sender,
+                                 message_id=event["client_message_id"], supersede=bool(modes.get("supersede")))
+    except (OSError, ValueError) as exc:
+        delivery = {"outcome": "failed", "error": str(exc) or type(exc).__name__}
+    event.update(delivery, event="send_result", timestamp_ns=time.time_ns())
+    try:
+        with writer(record, blocking=True):
+            append_jsonl(record, event)
+    except OSError as exc:
+        print(f"ding: sent log failed ({record}); delivery outcome: {event['outcome']}; "
+              f"do not blindly resend: {exc}", file=sys.stderr)
+        return 1
+    if event.get("withdrawn"):
+        print(f"ding: withdrew {len(event['withdrawn'])} earlier unread message(s) from {args.sender}",
+              file=sys.stderr)
+    detail = f"; {event['error']}" if event.get("error") else ""
+    print(f"ding: {event['outcome']}{detail}; inbox: {event.get('inbox')}; record: {record}", file=sys.stderr)
+    return 0 if event["outcome"] == "inbox_queued" else 1
 
 
 def task_exit_code(command: list[str], *, env: dict | None = None) -> tuple[int, str | None]:
@@ -1533,8 +1621,11 @@ def run_task(args, command: list[str]) -> int:
             "client_message_id": client_id, "outcome": "failed", "error": None,
         }
         try:
-            path = socket_path(args.socket)
-            notification.update(deliver_message(args.thread_id, args.message, path, client_id))
+            if inbox.is_target(args.thread_id):
+                notification.update(inbox.deliver(args.thread_id, args.message, "ding run", message_id=client_id))
+            else:
+                path = socket_path(args.socket)
+                notification.update(deliver_message(args.thread_id, args.message, path, client_id))
         except (OSError, ValueError, KeyboardInterrupt) as exc:
             notification["error"] = str(exc) or type(exc).__name__
         notification["timestamp_ns"] = time.time_ns()
@@ -1637,10 +1728,12 @@ def prune_launch_logs(directory: Path, keep_days: float, tmux: str) -> None:
 def launch_task(args, command: list[str]) -> int:
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", args.name):
         raise ValueError("launch name must be 1-64 letters, digits, underscores or hyphens, starting with a letter or digit")
-    try:
-        thread_id = str(UUID(os.environ.get("CODEX_THREAD_ID", "")))
-    except ValueError as exc:
-        raise ValueError("launch requires a valid CODEX_THREAD_ID in the calling session") from exc
+    caller = inbox.current_session()
+    if caller is None:
+        raise ValueError("launch must run inside a Codex session (CODEX_THREAD_ID) or a Claude Code session "
+                         "(CLAUDE_CODE_SESSION_ID), which it wakes when the task exits")
+    kind, caller_id = caller
+    thread_id = caller_id if kind == "codex" else inbox.target(caller_id)
     tmux = shutil.which("tmux")
     if tmux is None:
         raise ValueError("tmux executable not found in the caller's PATH")
@@ -1674,7 +1767,7 @@ def launch_task(args, command: list[str]) -> int:
         inner.extend(["--socket", str(Path(args.socket).resolve())])
     inner.extend(["--", *command])
     environment = {
-        "CODEX_THREAD_ID": thread_id, "PATH": os.environ.get("PATH", os.defpath),
+        **({"CODEX_THREAD_ID": thread_id} if kind == "codex" else {}), "PATH": os.environ.get("PATH", os.defpath),
         "HOME": os.environ.get("HOME") or str(Path.home()),
         "XDG_STATE_HOME": str(run_registry().parent.parent.resolve()),
         "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
@@ -1697,6 +1790,53 @@ def launch_task(args, command: list[str]) -> int:
     if result.returncode:
         raise ValueError(f"tmux launch failed: {result.stderr.strip() or result.returncode}")
     print(f"ding: created ding-{args.name}/{args.name}; log: {log}; record: {record}")
+    if kind == "claude" and inbox.listener(caller_id) is None:
+        print("ding: the exit wake goes to this session's inbox; keep `ding inbox --wait` running as a background "
+              "task to receive it", file=sys.stderr)
+    return 0
+
+
+def status_block(settings) -> str:
+    """A status block saying work has started, in the kitchen's words."""
+    names, separator = settings.status.fields, settings.stations.separator
+    values = [settings.status.in_progress, *([settings.status.none] * (len(names) - 1))]
+    return "\n".join(f"{name}{separator}{value}" for name, value in zip(names, values))
+
+
+def claim_task(args) -> int:
+    """Post this session's owner line on a ticket, then say what to do next."""
+    from dkitchen import config
+    settings = config.load()
+    caller = inbox.current_session()
+    if caller is None:
+        raise ValueError("claim must run inside the executor's own session: a Codex session (CODEX_THREAD_ID) "
+                         "or a Claude Code session (CLAUDE_CODE_SESSION_ID)")
+    kind, session_id = caller
+    target = normalize_target(args.ticket, None)
+    match = re.fullmatch(rf"({ISSUE_REPOSITORY})#([1-9][0-9]*)", target or "")
+    if not match:
+        raise ValueError("claim takes a ticket: '#NUMBER', OWNER/REPO#NUMBER, or the issue URL")
+    repo, number = match[1], int(match[2])
+    me = session_id if kind == "codex" else inbox.target(session_id)
+    if not args.replace:
+        others = [owner for owner in live_ticket_owners(repo, number, args.socket) if owner["id"] != me]
+        if others:
+            named = ", ".join(f"{owner['id']} ({owner.get('name') or 'unnamed'})" for owner in others)
+            raise ValueError(f"{repo}#{number} already has an executor that is still working: {named}; "
+                             "pass --replace only when this session is taking the ticket over")
+    label = "Codex" if kind == "codex" else "Claude"
+    body = f"{status_block(settings)}\n\n{label} owner: {session_id}\n\n{label} session: {session_id}\n"
+    result = subprocess.run(["gh", "issue", "comment", str(number), "--repo", repo, "--body-file", "-"],
+                            input=body, capture_output=True, text=True, timeout=60, check=False)
+    if result.returncode:
+        raise ValueError(f"could not post the owner line: {result.stderr.strip() or result.returncode}")
+    print(f"ding: claimed {repo}#{number} as {label} owner {session_id}: {result.stdout.strip()}", file=sys.stderr)
+    if kind == "claude":
+        print("Next: run `ding inbox --wait` as a background task, on its own (no &, no redirection, nothing "
+              "chained before it). Messages and task-exit wakes for this ticket arrive through it. When it wakes "
+              "you, handle what it printed, then start it again; keep it running whenever you are working.")
+    else:
+        print("Next: nothing; ding delivers messages to this Codex session directly.")
     return 0
 
 
@@ -1715,13 +1855,19 @@ def main(argv=None) -> int:
         installed = "unknown"
     parser.add_argument("--version", action="version", version=f"ding {installed}")
     commands = parser.add_subparsers(dest="action", required=True)
-    sub = commands.add_parser("new", help="Create a saved Codex session and start its first message")
-    sub.add_argument("--cwd", required=True, help="Existing working directory for the session")
-    sub.add_argument("--name", required=True, help="Session title; with --issue, filled into the "
-                                                   "[sessions] name template")
+    sub = commands.add_parser("new", help="Dispatch an executor: create a Codex session with its first message, "
+                                          "or print the first message for a Claude Code session")
+    sub.add_argument("--cwd", help="Existing working directory for the session (required to create a Codex session)")
+    sub.add_argument("--name", help="Session title; with --issue, filled into the [sessions] name template "
+                                    "(required to create a Codex session)")
+    sub.add_argument("--executor", choices=("codex", "claude"),
+                     help="Executor kind for this dispatch (default: [executor] default in .dkitchen.toml, else codex); "
+                          "claude implies --print")
+    sub.add_argument("--print", action="store_true",
+                     help="Check ownership and print the full first message; create no session")
     owned = sub.add_mutually_exclusive_group()
     owned.add_argument("--issue", type=int, help="Ticket this session owns: formats --name with the [sessions] "
-                                                 "name template and asks the session to post its Codex owner line; "
+                                                 "name template and asks the session to run `ding claim`; "
                                                  "refused while another unarchived session owns it")
     owned.add_argument("--parent", type=int, help="First open a sub-ticket of this ticket for the run, then own it "
                                                   "as with --issue")
@@ -1750,7 +1896,7 @@ def main(argv=None) -> int:
                             ("rename", "Change a session's name without starting a model turn"),
                             ("send", "Send a message to a session"),
                             ("run", "Run a command and message a session when it exits"),
-                            ("launch", "Run a command in a new tmux session and wake this Codex session when it exits")):
+                            ("launch", "Run a command in a new tmux session and wake this session when it exits")):
         sub = commands.add_parser(action, help=summary)
         if action == "launch":
             sub.add_argument("--skip-preflight", metavar="REASON", help="Skip the repository preflight and record why")
@@ -1758,7 +1904,7 @@ def main(argv=None) -> int:
         else:
             target = sub.add_mutually_exclusive_group(required=True)
             target.add_argument("thread_id", nargs="?", help="Session UUID, exact name, '#NUMBER', OWNER/REPO#NUMBER, or GitHub issue/pull URL")
-            target.add_argument("--issue", type=int, help="Issue's latest Codex owner, or its unique Codex session")
+            target.add_argument("--issue", type=int, help="Issue's latest owner line, or its unique Codex session")
         sub.add_argument("--socket", help="Existing local App Server Unix socket path")
         if action == "read":
             sub.add_argument("--head", action="store_true", help="Print only the first paragraph of the final reply")
@@ -1781,6 +1927,20 @@ def main(argv=None) -> int:
             sub.add_argument("--progress", help="The task's progress.json (progress-v1), shown by `ding board`")
             sub.epilog = ("Task command follows --, for example: launch NAME -- python task.py" if action == "launch" else
                           "Task command follows --, for example: run UUID --message TEXT --record exit.jsonl -- python task.py")
+    sub = commands.add_parser("claim", help="Post this session's owner line on a ticket and print the next step",
+                              description="Run by the executor itself. Posts `Codex owner:` or `Claude owner:` with a "
+                                          "status block, refusing while another working executor owns the ticket.")
+    sub.add_argument("ticket", help="'#NUMBER', OWNER/REPO#NUMBER, or the issue URL")
+    sub.add_argument("--replace", action="store_true", help="Take over a ticket another working session owns")
+    sub.add_argument("--socket", help="Existing local App Server Unix socket path")
+    sub = commands.add_parser("inbox", help="Print a Claude Code session's unread messages; --wait blocks until one arrives",
+                              description="Messages ding sends to a Claude Code session wait in its inbox. Keep "
+                                          "`ding inbox --wait` running as a background task: it exits when messages "
+                                          "arrive, which wakes the session; start it again after handling them.")
+    sub.add_argument("session", nargs="?", help="Claude Code session id (default: the calling session)")
+    reading = sub.add_mutually_exclusive_group()
+    reading.add_argument("--wait", action="store_true", help="Wait for a message; hold the session's listener lock")
+    reading.add_argument("--all", action="store_true", help="Print every message, read or not, and mark nothing")
     sub = commands.add_parser("relay", help="Send a message to a ticket's executor, then leave it on the ticket")
     sub.add_argument("ticket", type=int, help="Ticket number in this repository")
     message = sub.add_mutually_exclusive_group(required=True)
@@ -1788,7 +1948,7 @@ def main(argv=None) -> int:
     message.add_argument("--message-file", help="UTF-8 message file")
     sub.add_argument("--comment", help="Ticket comment (default: the message itself)")
     sub.add_argument("--no-comment", action="store_true", help="Send only; leave no ticket comment")
-    sub.add_argument("--to", help="Executor session UUID or name, when the ticket has no Codex owner line")
+    sub.add_argument("--to", help="Executor session id or name, when the ticket has no owner line")
     sub.add_argument("--queue", action="store_true",
                      help="Queue behind the executor's current turn and keep earlier queued relays "
                           "(default: insert into the current turn and delete them)")
@@ -1948,21 +2108,31 @@ def main(argv=None) -> int:
         parser.error(f"{args.action} requires a task command after --")
     try:
         if args.action == "new":
-            if not args.name.strip():
+            if args.name is not None and not args.name.strip():
                 parser.error("--name must contain non-whitespace text")
             if args.parent is None and (args.title is not None or args.replace and args.issue is None):
                 parser.error("--title goes with --parent, and --replace with --issue")
-            if (args.issue is not None or args.parent is not None) and args.cwd and Path(args.cwd).expanduser().is_dir():
-                from dkitchen import config
-                settings = config.load(Path(args.cwd).expanduser().resolve())
+            from dkitchen import config
+            where = Path(args.cwd).expanduser().resolve() if args.cwd and Path(args.cwd).expanduser().is_dir() else None
+            settings = config.load(where)
+            args.executor = args.executor or settings.executor.default
+            if args.executor == "codex" and not args.print:
+                for flag, value in (("--cwd", args.cwd), ("--name", args.name)):
+                    if value is None:
+                        parser.error(f"{flag} is required to create a Codex session (or pass --print)")
+            if args.issue is not None or args.parent is not None:
                 args.repo = settings.repository()
                 if args.parent is not None:
                     args.message, args.message_file = message_text(args.message, args.message_file, None), None
                     if not args.message.strip():
                         raise ValueError("The first message (--message or --message-file) must not be empty.")
-                    args.issue = create_sub_issue(args.repo, args.parent, (args.title or args.name).strip(),
+                    title = (args.title or args.name or "").strip()
+                    if not title:
+                        parser.error("--parent needs --title or --name for the sub-ticket's title")
+                    args.issue = create_sub_issue(args.repo, args.parent, title,
                                                   settings.sessions.parent.format(parent=args.parent))
-                args.name = settings.sessions.session_name(issue=args.issue, name=args.name, repo=args.repo)
+                if args.name is not None:
+                    args.name = settings.sessions.session_name(issue=args.issue, name=args.name, repo=args.repo)
             return new_task(args)
         if args.action == "rule":
             from dkitchen import config, rule
@@ -2001,6 +2171,16 @@ def main(argv=None) -> int:
             return 0
         if args.action == "launch":
             return launch_task(args, command)
+        if args.action == "claim":
+            return claim_task(args)
+        if args.action == "inbox":
+            session = args.session
+            if session is None:
+                caller = inbox.current_session()
+                if caller is None or caller[0] != "claude":
+                    raise ValueError("inbox needs a Claude Code session id outside a Claude Code session")
+                session = caller[1]
+            return inbox.wait(inbox.bare(session), block=args.wait, show_all=args.all)
         if args.action in {"send", "run"}:
             args.message = message_text(args.message, args.message_file, args.sender)
         if args.action == "send":
@@ -2010,6 +2190,9 @@ def main(argv=None) -> int:
         args.thread_id = resolve_target(args.thread_id, args.issue, args.socket)
         if args.action == "run":
             return run_task(args, command)
+        if inbox.is_target(args.thread_id):
+            raise ValueError(f"{args.action} reads Codex sessions only; {inbox.bare(args.thread_id)} is a Claude Code "
+                             "session: read its ticket comments, or `ding inbox --all` for what was sent to it")
         path = socket_path(args.socket)
         if args.action == "rename":
             with app_server(path) as call:
