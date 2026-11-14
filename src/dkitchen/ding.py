@@ -33,6 +33,7 @@ from dkitchen import inbox
 ISSUE_REPOSITORY = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
 STATUS_FIELDS = "Status,Waiting on,Key numbers,Next"
 SHELL_PROGRAMS = {"sh", "bash", "dash", "zsh", "fish", "ksh", "csh", "tcsh"}
+NO_LISTENER_EXIT = 3  # `ding send`: queued in a Claude Code inbox that no `ding inbox --wait` reads yet
 
 
 class AppServerError(ValueError):
@@ -1624,7 +1625,13 @@ def send_to_inbox(args, event: dict, record: Path, modes: dict) -> int:
               file=sys.stderr)
     detail = f"; {event['error']}" if event.get("error") else ""
     print(f"ding: {event['outcome']}{detail}; inbox: {event.get('inbox')}; record: {record}", file=sys.stderr)
-    return 0 if event["outcome"] == "inbox_queued" else 1
+    return {"inbox_queued": 0, "no_listener": NO_LISTENER_EXIT}.get(event["outcome"], 1)
+
+
+def no_listener_note(target: str) -> str:
+    """What a caller of `ding send` says when it exits NO_LISTENER_EXIT."""
+    return (f"queued in the inbox of {target}, but no `ding inbox --wait` is running there; the session reads it when "
+            "its waiter starts again, and `ding watch` reports the missing waiter. Do not resend")
 
 
 def task_exit_code(command: list[str], *, env: dict | None = None) -> tuple[int, str | None]:

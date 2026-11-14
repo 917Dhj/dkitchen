@@ -130,15 +130,15 @@ def fake_call(responses, calls):
     return call
 
 
-@pytest.mark.parametrize("sent, comments", [(0, 1), (1, 0)])
-def test_relay_comments_only_after_confirmed_delivery(tmp_path, monkeypatch, capsys, sent, comments):
+@pytest.mark.parametrize("sent, comments", [(0, 1), (3, 1), (1, 0)])
+def test_relay_comments_only_after_queued_delivery(tmp_path, monkeypatch, capsys, sent, comments):
     loaded = settings(tmp_path, 'repo = "o/r"')
     sends, calls = [], []
     monkeypatch.setattr(orchestrate.ding, "main", lambda argv: sends.append(argv) or sent)
     monkeypatch.setattr(orchestrate, "call", fake_call([(0, "https://comment")], calls))
     args = SimpleNamespace(ticket=42, message="Go ahead with stage 2.", message_file=None, comment=None,
                            no_comment=False, to=None, socket=None)
-    assert orchestrate.relay(args, loaded) == sent
+    assert orchestrate.relay(args, loaded) == (1 if sent == 1 else 0)
     assert sends == [["send", "o/r#42", "--from", "Orchestrator", "--message",
                       "Orchestrator: New decision; it replaces earlier relays not yet carried out.\n"
                       "Go ahead with stage 2.", "--steer", "--supersede"]]
@@ -146,6 +146,8 @@ def test_relay_comments_only_after_confirmed_delivery(tmp_path, monkeypatch, cap
     if comments:
         assert calls[0][:5] == ("gh", "issue", "comment", "42", "--repo")
         assert calls[0][-1] == "Orchestrator: Go ahead with stage 2."
+        err = capsys.readouterr().err
+        assert ("queued in the inbox of o/r#42" in err and "Do not resend" in err) == (sent == 3)
     else:
         assert "No comment was left" in capsys.readouterr().err
 
@@ -844,8 +846,17 @@ def test_a_failed_default_notification_keeps_the_comment_and_names_no_notify(rul
     captured = capsys.readouterr()
     assert captured.out == URL + "\n" and ruling.sends == [DEFAULT_SEND]
     assert f"posted {URL}, but the notification to #42 failed" in captured.err
-    assert "the comment stays" in captured.err and "no_listener" in captured.err and "--no-notify" in captured.err
-    assert "by hand" not in captured.err
+    assert "the comment stays" in captured.err and "--no-notify" in captured.err and "by hand" not in captured.err
+
+
+@pytest.mark.parametrize("options", [[], ["--notify", "#42"]])
+def test_a_ruling_queued_without_a_waiter_succeeds_and_says_not_to_resend(ruling, capsys, options):
+    ruling.send_code = ding.NO_LISTENER_EXIT
+    assert ruling.run([comment_pages("用户：请裁定"), (0, URL)], *options) == 0
+    captured = capsys.readouterr()
+    assert captured.out == URL + "\n" and ruling.sends == [DEFAULT_SEND]
+    assert f"posted {URL}; queued in the inbox of #42" in captured.err and "Do not resend" in captured.err
+    assert "failed" not in captured.err
 
 
 def test_rule_without_reply_to_shows_the_latest_comment(ruling, capsys):

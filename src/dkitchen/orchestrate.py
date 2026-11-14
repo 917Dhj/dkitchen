@@ -203,7 +203,10 @@ def relay(args, config: Config) -> int:
         send += ["--interrupt"]
     if args.socket:
         send += ["--socket", args.socket]
-    if ding.main(send):
+    code = ding.main(send)
+    if code == ding.NO_LISTENER_EXIT:
+        print(f"ding: {ding.no_listener_note(target)}", file=sys.stderr)
+    elif code:
         return fail("ding send did not confirm delivery; check ~/.local/state/ding/sent.jsonl before sending again. "
                     "No comment was left.")
     if args.no_comment:
