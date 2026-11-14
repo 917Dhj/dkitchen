@@ -14,8 +14,8 @@ Wakes on:
   no running `ding run` for the ticket, and no live tmux job whose session name holds issue<N>.
 On tickets labelled awaiting-user, executor comments wake only for blocked, done, and waiting on design,
 or when their "waiting on" names the orchestrator, designer, or verifier.
-In orchestrator mode, verifier comments never wake on their own, since the verifier also messages it;
-they are listed in the next batch for reference.
+In orchestrator mode, a verifier comment wakes only when it carries the `changes` verdict line of
+`ding review --ticket`; other verifier comments are listed in the next batch for reference.
 The state file keeps the time already reported, so rerunning the same command loses nothing.
 One watch runs per state file; a second one exits at once.
 With --for NAME, executor requests and explicit handoffs to that station wake; designer rulings do not.
@@ -161,6 +161,13 @@ def role(body: str, config: Config) -> str:
     return stations.executor if re.search(r"(?m)^[ \t]*(?:Codex|Claude) session:", body) else stations.user
 
 
+def changes_verdict(body: str, config: Config) -> bool:
+    """Whether a verifier comment carries the `changes` verdict line that `ding review --ticket` writes as line 2."""
+    lines = [line for line in body.splitlines() if line.strip()]
+    return (len(lines) > 1 and role(body, config) == config.stations.verifier
+            and normalized(lines[1]).strip() == normalized(config.review.verdict_changes).strip())
+
+
 def fields(body: str, config: Config) -> dict[str, str]:
     """The status block's fields, with half- or full-width colons."""
     count = len(config.status.fields)
@@ -248,9 +255,12 @@ def collect(config: Config, repo: str, since: str, labels_since: str, seen: set[
         elif not (who in {verifier, user} or (who == executor and executor_wakes(body, number in waiting, config))):
             continue
         kind = f"{who} comment" if comment["created_at"] >= since else f"{who} edited a comment"
-        note = f" ({verifier.lower()} reports separately; for reference)" if who == verifier and station is None else ""
+        listed = who == verifier and station is None
+        changes = listed and changes_verdict(body, config)
+        note = (f" ({config.review.verdict_changes})" if changes else
+                f" ({verifier.lower()} reports separately; for reference)" if listed else "")
         found.append((comment["updated_at"], f"#{number} {kind}{note}: {summary(body, config)} {comment['html_url']}",
-                      station is not None or who != verifier))
+                      changes or not listed))
     if station is None:
         for event in newer(f"repos/{repo}/issues/events?", "created_at", labels_since):
             label = (event.get("label") or {}).get("name", "")

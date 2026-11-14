@@ -66,6 +66,11 @@ Every key is optional. The defaults match the English templates in kitchen/:
     review_pass = "Reviewed {sha}: pass"                                 # first line of a passing review
     review_changes = "Reviewed {sha}: changes requested, see below"      # first line of a failing review
 
+    [review]                             # `ding review --ticket N`: a verdict on a ticket's run stage
+    verdict_pass = "Verdict: pass"                    # line 2 of a passing verdict, after the verifier's line 1
+    verdict_changes = "Verdict: changes requested"    # line 2 of a failing one; it wakes the orchestrator and design
+    notify = "#{ticket} {verdict}, see the ticket {url}"   # message to the ticket's executor; also {first_line}
+
     [check]                              # `ding check` and `ding map`; absent means no repo checks
     library = ["src/name"]               # areas: repo paths for each kind; see `ding check --help`
     tools = []
@@ -91,6 +96,7 @@ import re
 import string
 import subprocess
 import sys
+import unicodedata
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -230,6 +236,17 @@ class Merge:
     review_changes: str = "Reviewed {sha}: changes requested, see below"
 
 
+@dataclass(frozen=True)
+class Review:
+    verdict_pass: str = "Verdict: pass"
+    verdict_changes: str = "Verdict: changes requested"
+    notify: str = "#{ticket} {verdict}, see the ticket {url}"
+
+    def verdict(self, word: str) -> str:
+        """The verdict line for `pass` or `changes`."""
+        return self.verdict_pass if word == "pass" else self.verdict_changes
+
+
 AREAS = ("library", "tools", "experiments", "tests", "docs", "outputs", "assets", "vendor")
 
 
@@ -334,6 +351,7 @@ class Config:
     executor: Executor = Executor()
     watch: Watch = Watch()
     merge: Merge = Merge()
+    review: Review = Review()
     check: Check | None = None
 
     @property
@@ -414,12 +432,17 @@ def section(cls, values: object, name: str):
                 raise ValueError(f"{FILE}: [stations.aliases] must map station names to nonempty lists of names")
             value = {station.strip(): tuple(alias.strip() for alias in aliases) for station, aliases in value.items()}
         elif key == "notify":
-            if not isinstance(value, str) or "{url}" not in value:
-                raise ValueError(f"{FILE}: [rule] notify must be a string holding {{url}}")
+            needed = ("{url}", "{verdict}") if cls is Review else ("{url}",)
+            if not isinstance(value, str) or not all(field in value for field in needed):
+                raise ValueError(f"{FILE}: [{name}] notify must be a string holding {' and '.join(needed)}")
             try:
-                value.format(ticket=1, url="u", first_line="l")
+                value.format(ticket=1, url="u", first_line="l", verdict="v")
             except (ValueError, KeyError, IndexError) as exc:
-                raise ValueError(f"{FILE}: [rule] notify is not a valid template: {exc}") from exc
+                raise ValueError(f"{FILE}: [{name}] notify is not a valid template: {exc}") from exc
+        elif key in {"verdict_pass", "verdict_changes"}:
+            if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+                raise ValueError(f"{FILE}: [review] {key} must be one nonempty line")
+            value = value.strip()
         elif key == "name" and cls is Sessions:
             value = session_template(value)
         elif key == "parent" and cls is Sessions:
@@ -440,12 +463,19 @@ def section(cls, values: object, name: str):
         if cls is Night and ("\n" in value or "\r" in value):
             raise ValueError(f"{FILE}: [night] {key} must be a single line")
         result = replace(result, **{key: value})
+    if cls is Review and normalized_line(result.verdict_pass) == normalized_line(result.verdict_changes):
+        raise ValueError(f"{FILE}: [review] verdict_pass and verdict_changes must differ")
     if cls is Rule and result.notify_types is not None:
         unknown = [kind for kind in result.notify_types if kind not in result.types]
         if unknown:
             raise ValueError(f"{FILE}: [rule] notify_types {', '.join(unknown)} must be among types: "
                              f"{', '.join(result.types)}")
     return result
+
+
+def normalized_line(text: str) -> str:
+    """A one-line verdict as `ding watch` compares it: width-normalized and stripped."""
+    return unicodedata.normalize("NFKC", text).strip()
 
 
 def repository_root(cwd: Path | None = None) -> Path:
@@ -465,7 +495,8 @@ def load(cwd: Path | None = None) -> Config:
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(f"{path}: {exc}") from exc
     sections = {"stations": Stations, "status": Status, "labels": Labels, "log": Log, "sessions": Sessions, "relay": Relay,
-                "rule": Rule, "launch": Launch, "executor": Executor, "watch": Watch, "night": Night, "merge": Merge}
+                "rule": Rule, "launch": Launch, "executor": Executor, "watch": Watch, "night": Night, "merge": Merge,
+                "review": Review}
     unknown = sorted(set(data) - {"repo", "check", "build", *sections})
     if unknown:
         raise ValueError(f"{FILE}: unknown keys: {', '.join(unknown)}")
