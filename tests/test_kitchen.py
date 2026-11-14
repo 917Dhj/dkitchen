@@ -2888,9 +2888,10 @@ def issue(body):
 
 
 def test_a_passing_stage_verdict_is_posted_and_told_to_the_executor(verdict, capsys):
-    assert verdict.run("pass", [(0, STAGE_URL + "\n")]) == 0
+    assert verdict.run("pass", [issue("Design: Designer"), (0, STAGE_URL + "\n")]) == 0
     assert capsys.readouterr().out == STAGE_URL + "\n"
-    posted = verdict.calls[0]
+    assert verdict.calls[0] == ("gh", "api", "repos/o/r/issues/42")
+    posted = verdict.calls[1]
     assert posted[:6] == ("gh", "issue", "comment", "42", "--repo", "o/r")
     assert posted[7] == "Verifier: first batch matches the gates\nVerdict: pass\n\n| gate | ok |\n"
     assert verdict.sends == [["send", "#42", "--from", "Verifier", "--message",
@@ -2944,7 +2945,7 @@ def test_a_stage_verdict_without_the_verifier_signature_posts_nothing(verdict, c
 ])
 def test_a_stage_verdict_notification_outcome(verdict, capsys, code, exit_code, words):
     verdict.send_code = code
-    assert verdict.run("pass", [(0, STAGE_URL)]) == exit_code
+    assert verdict.run("pass", [issue(""), (0, STAGE_URL)]) == exit_code
     captured = capsys.readouterr()
     assert captured.out == STAGE_URL + "\n" and all(word in captured.err for word in words)
 
@@ -2970,3 +2971,12 @@ def test_review_arguments_must_fit_one_shape(argv, tmp_path, capsys):
 def test_review_config_is_checked(tmp_path, text, error):
     with pytest.raises(ValueError, match=error):
         settings(tmp_path, text)
+
+
+@pytest.mark.parametrize("word", ["pass", "changes"])
+def test_a_stage_verdict_on_a_pr_number_posts_nothing_and_names_the_pr_form(verdict, capsys, word):
+    pr = (0, json.dumps({"number": 42, "body": "Closes #40", "pull_request": {"url": "u"}}))
+    assert verdict.run(word, [pr]) == 1
+    error = capsys.readouterr().err
+    assert "#42 is a PR, not a ticket" in error and f"ding review 42 <SHA> {word}" in error
+    assert len(verdict.calls) == 1 and verdict.sends == []

@@ -2035,12 +2035,13 @@ def main(argv=None) -> int:
               "       %(prog)s --ticket N {pass,changes} --body-file FILE",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="With PR SHA: post a review comment and success/failure commit status using [merge] review_check.\n"
-                    "With --ticket N: post a verdict on a run stage of ticket N. The file's line 1 must start with the\n"
-                    "verifier's signature; the comment adds [review] verdict_pass or verdict_changes as line 2, and on\n"
-                    "changes a handoff to the ticket's design line (named in its first lines or its parent's; default:\n"
-                    "the designer), which wakes the orchestrator's watch and that designer's. Then [review] notify\n"
-                    "goes to the ticket's executor ('#N') with `ding send`; no_listener counts as queued. A failed\n"
-                    "notification exits 1, and the comment stays. stdout is only the comment URL.",
+                    "With --ticket N: post a verdict on a run stage of ticket N (a PR number is refused). The\n"
+                    "file's line 1 must start with the verifier's signature; the comment adds [review] verdict_pass\n"
+                    "or verdict_changes as line 2, and on changes a handoff to the ticket's design line (named in its\n"
+                    "first lines or its parent's; default: the designer), which wakes the orchestrator's watch and\n"
+                    "that designer's. Then [review] notify goes to the ticket's executor ('#N') with `ding send`;\n"
+                    "no_listener counts as queued. A failed notification exits 1, and the comment stays. stdout is\n"
+                    "only the comment URL.",
         epilog="examples:\n"
                "  ding review 12 3f2a9c1e pass --body-file review.md\n"
                "  ding review --ticket 42 changes --body-file verdict.md   # verdict.md opens with 'Verifier: '")

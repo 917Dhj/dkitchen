@@ -39,25 +39,25 @@ def named_designer(text: str, config: Config) -> str | None:
     return None
 
 
-def issue_body(config: Config, repo: str, ticket: int) -> str:
+def read_issue(config: Config, repo: str, ticket: int) -> dict:
     result = call(config, "gh", "api", f"repos/{repo}/issues/{ticket}")
     if result.returncode:
         raise RuntimeError(result.stderr.strip() or f"cannot read {repo}#{ticket}")
-    return json.loads(result.stdout).get("body") or ""
+    return json.loads(result.stdout)
 
 
-def design_line(config: Config, repo: str, ticket: int) -> str:
+def design_line(config: Config, repo: str, issue: dict) -> str:
     """The design line that owns the ticket: named in its first lines, else in its parent's, else the designer."""
     parent = re.compile(re.escape(config.sessions.parent).replace(re.escape("{parent}"), r"#?(\d+)"))
     for _ in range(2):
-        lines = [line for line in issue_body(config, repo, ticket).splitlines() if line.strip()][:FIRST_LINES]
+        lines = [line for line in (issue.get("body") or "").splitlines() if line.strip()][:FIRST_LINES]
         found = named_designer("\n".join(lines), config)
         if found is not None:
             return found
         up = parent.match(lines[0].strip()) if lines else None
         if up is None:
             break
-        ticket = int(up.group(1))
+        issue = read_issue(config, repo, int(up.group(1)))
     return config.stations.designer
 
 
@@ -75,7 +75,11 @@ def review_ticket(args, config: Config) -> int:
                     f"{truncate(draft.split(chr(10))[0], 40)!r}. Nothing posted")
     try:
         repo = config.repository()
-        design = design_line(config, repo, ticket) if verdict == "changes" else None
+        issue = read_issue(config, repo, ticket)
+        if "pull_request" in issue:
+            return fail(f"#{ticket} is a PR, not a ticket; review a PR with `ding review {ticket} <SHA> {verdict} "
+                        "--body-file FILE`, which also writes the commit status the merge needs. Nothing posted")
+        design = design_line(config, repo, issue) if verdict == "changes" else None
     except (RuntimeError, ValueError, KeyError, TypeError) as error:
         return fail(f"{error}. Nothing posted")
     body = comment_body(draft, verdict, config, design)
