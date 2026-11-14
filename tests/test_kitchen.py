@@ -2844,3 +2844,139 @@ def test_handoff_words_default_to_english_and_are_configurable(tmp_path):
 def test_pending_merge_key_is_refused(tmp_path):
     with pytest.raises(ValueError, match="unknown keys in \\[status\\]: pending_merge"):
         settings(tmp_path, '[status]\npending_merge = "Pending merge"')
+
+
+TWO_LINES = """repo = "o/r"
+[stations.aliases]
+"Training designer" = ["Training"]
+[rule]
+signatures = ["Designer: ", "Training designer: "]
+"""
+VERDICT = "Verifier: first batch matches the gates\n\n| gate | ok |\n"
+STAGE_URL = "https://github.com/o/r/issues/42#issuecomment-901"
+
+
+@pytest.fixture
+def verdict(tmp_path, monkeypatch):
+    """`ding review --ticket 42` offline: gh and `ding send` are doubles."""
+    (tmp_path / config.FILE).write_text(TWO_LINES, encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    state = SimpleNamespace(calls=[], sends=[], send_code=0, draft=tmp_path / "verdict.md")
+    state.draft.write_text(VERDICT, encoding="utf-8")
+    real_main = ding.main
+
+    def run(word, responses, text=None):
+        if text is not None:
+            state.draft.write_text(text, encoding="utf-8")
+        from dkitchen import verdict as module
+        monkeypatch.setattr(module, "call", fake_call(list(responses), state.calls))
+        return real_main(["review", "--ticket", "42", word, "--body-file", str(state.draft)])
+
+    def main(argv):
+        if argv[0] != "send":
+            return real_main(argv)
+        state.sends.append(argv)
+        return state.send_code
+
+    monkeypatch.setattr(ding, "main", main)
+    state.run = run
+    return state
+
+
+def issue(body):
+    return 0, json.dumps({"number": 42, "body": body})
+
+
+def test_a_passing_stage_verdict_is_posted_and_told_to_the_executor(verdict, capsys):
+    assert verdict.run("pass", [issue("Design: Designer"), (0, STAGE_URL + "\n")]) == 0
+    assert capsys.readouterr().out == STAGE_URL + "\n"
+    assert verdict.calls[0] == ("gh", "api", "repos/o/r/issues/42")
+    posted = verdict.calls[1]
+    assert posted[:6] == ("gh", "issue", "comment", "42", "--repo", "o/r")
+    assert posted[7] == "Verifier: first batch matches the gates\nVerdict: pass\n\n| gate | ok |\n"
+    assert verdict.sends == [["send", "#42", "--from", "Verifier", "--message",
+                              f"#42 Verdict: pass, see the ticket {STAGE_URL}\nVerifier: first batch matches the gates"]]
+
+
+@pytest.mark.parametrize("bodies, design", [
+    ([issue("Design: Training designer; reviewer: Designer\n\n## Problem")], "Training designer"),
+    ([issue("Parent: #40\n"), issue("Design: Training; reviewer: Verifier\n")], "Training designer"),
+    ([issue("## Problem\nno line named")], "Designer"),
+])
+def test_changes_hand_the_ticket_to_its_design_line(verdict, capsys, bodies, design):
+    assert verdict.run("changes", [*bodies, (0, STAGE_URL)]) == 0
+    reads = verdict.calls[:-1]
+    assert [call[2] for call in reads] == ["repos/o/r/issues/42", "repos/o/r/issues/40"][:len(reads)]
+    body = verdict.calls[-1][7]
+    assert body.split("\n")[:3] == ["Verifier: first batch matches the gates", "Verdict: changes requested",
+                                    f"hand to {design}"]
+    loaded = config.load()
+    assert watch.changes_verdict(body, loaded)
+    for name in watch.designer_stations(loaded):
+        assert watch.station_wakes(body, name, loaded) is (name == design)
+    assert verdict.sends[0][-1].startswith(f"#42 Verdict: changes requested, see the ticket {STAGE_URL}")
+
+
+def test_the_orchestrator_wakes_on_changes_and_only_lists_a_pass(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, TWO_LINES)
+    passed = "Verifier: ok\nVerdict: pass\n\ndetails"
+    changed = "Verifier: gate 2 fails\nVerdict: changes requested\nhand to Designer\n\ndetails"
+    comments = [comment(41, passed), comment(42, changed)]
+    monkeypatch.setattr(watch, "gh", lambda path: comments if "/issues/comments" in path and "page=1" in path else [])
+    found = watch.collect(loaded, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z", set(), set())
+    assert [(line.split(":")[0], wakes) for _, line, wakes in found] == [
+        ("#41 Verifier comment (verifier reports separately; for reference)", False),
+        ("#42 Verifier comment (Verdict", True)]
+    assert not watch.changes_verdict("User: x\nVerdict: changes requested", loaded)
+
+
+@pytest.mark.parametrize("text, message", [
+    ("Designer: x\n", "line 1 must start with 'Verifier: '"),
+    ("  \n", "is empty"),
+])
+def test_a_stage_verdict_without_the_verifier_signature_posts_nothing(verdict, capsys, text, message):
+    assert verdict.run("pass", [], text=text) == 1
+    assert message in capsys.readouterr().err and verdict.calls == [] and verdict.sends == []
+
+
+@pytest.mark.parametrize("code, exit_code, words", [
+    (ding.NO_LISTENER_EXIT, 0, ["queued in the inbox of #42", "Do not resend"]),
+    (1, 1, ["the notification to #42 failed", "the comment stays"]),
+])
+def test_a_stage_verdict_notification_outcome(verdict, capsys, code, exit_code, words):
+    verdict.send_code = code
+    assert verdict.run("pass", [issue(""), (0, STAGE_URL)]) == exit_code
+    captured = capsys.readouterr()
+    assert captured.out == STAGE_URL + "\n" and all(word in captured.err for word in words)
+
+
+@pytest.mark.parametrize("argv", [
+    ["review", "--ticket", "42", "7", "abc", "pass"],
+    ["review", "7", "pass"],
+    ["review", "--ticket", "42", "ok"],
+    ["review", "x", "abc", "pass"],
+])
+def test_review_arguments_must_fit_one_shape(argv, tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        ding.main([*argv, "--body-file", str(tmp_path / "b.md")])
+    assert "review" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("text, error", [
+    ("[review]\nnotify = '{url}'", "holding {url} and {verdict}"),
+    ("[review]\nnotify = '{verdict} {url} {oops}'", "not a valid template"),
+    ("[review]\nverdict_pass = ''", "verdict_pass must be one nonempty line"),
+    ("[review]\nverdict_changes = 'Verdict: pass'", "must differ"),
+])
+def test_review_config_is_checked(tmp_path, text, error):
+    with pytest.raises(ValueError, match=error):
+        settings(tmp_path, text)
+
+
+@pytest.mark.parametrize("word", ["pass", "changes"])
+def test_a_stage_verdict_on_a_pr_number_posts_nothing_and_names_the_pr_form(verdict, capsys, word):
+    pr = (0, json.dumps({"number": 42, "body": "Closes #40", "pull_request": {"url": "u"}}))
+    assert verdict.run(word, [pr]) == 1
+    error = capsys.readouterr().err
+    assert "#42 is a PR, not a ticket" in error and f"ding review 42 <SHA> {word}" in error
+    assert len(verdict.calls) == 1 and verdict.sends == []

@@ -2029,11 +2029,25 @@ def main(argv=None) -> int:
     sub.add_argument("--interrupt", action="store_true",
                      help="First stop the executor's current turn; only when that work is known to be obsolete")
     sub.add_argument("--socket", help="Existing local App Server Unix socket path")
-    sub = commands.add_parser("review", help="Record a review verdict on the PR HEAD",
-                              description="Post a review comment and success/failure commit status using [merge] review_check.")
-    sub.add_argument("pr", type=int, help="PR number")
-    sub.add_argument("sha", help="Reviewed HEAD (full SHA or prefix)")
-    sub.add_argument("verdict", choices=("pass", "changes"))
+    sub = commands.add_parser(
+        "review", help="Record a review verdict on the PR HEAD, or a verdict on a ticket's run stage",
+        usage="%(prog)s PR SHA {pass,changes} --body-file FILE\n"
+              "       %(prog)s --ticket N {pass,changes} --body-file FILE",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="With PR SHA: post a review comment and success/failure commit status using [merge] review_check.\n"
+                    "With --ticket N: post a verdict on a run stage of ticket N (a PR number is refused). The\n"
+                    "file's line 1 must start with the verifier's signature; the comment adds [review] verdict_pass\n"
+                    "or verdict_changes as line 2, and on changes a handoff to the ticket's design line (named in its\n"
+                    "first lines or its parent's; default: the designer), which wakes the orchestrator's watch and\n"
+                    "that designer's. Then [review] notify goes to the ticket's executor ('#N') with `ding send`;\n"
+                    "no_listener counts as queued. A failed notification exits 1, and the comment stays. stdout is\n"
+                    "only the comment URL.",
+        epilog="examples:\n"
+               "  ding review 12 3f2a9c1e pass --body-file review.md\n"
+               "  ding review --ticket 42 changes --body-file verdict.md   # verdict.md opens with 'Verifier: '")
+    sub.add_argument("words", nargs="+", metavar="PR SHA VERDICT",
+                     help="PR number, reviewed HEAD (full SHA or prefix), and pass or changes; with --ticket, only the verdict")
+    sub.add_argument("--ticket", type=int, help="Ticket whose run stage was verified, instead of a PR")
     sub.add_argument("--body-file", required=True, type=Path, help="UTF-8 review text")
     sub = commands.add_parser("merge", help="Merge a reviewed PR at the reviewed HEAD",
                               description="Merge only at the reviewed HEAD into the default branch. With [merge] review_check set, "
@@ -2230,6 +2244,18 @@ def main(argv=None) -> int:
         if args.action == "night":
             from dkitchen import config, night
             return night.night(args, config.load())
+        if args.action == "review":
+            shape = (["verdict"] if args.ticket is not None else ["pr", "sha", "verdict"])
+            if len(args.words) != len(shape) or args.words[-1] not in {"pass", "changes"}:
+                parser.error("review takes PR SHA pass|changes, or --ticket N pass|changes")
+            values = dict(zip(shape, args.words))
+            if "pr" in values and not values["pr"].isdigit():
+                parser.error(f"review: PR must be a number, not {values['pr']!r}")
+            args.pr = int(values["pr"]) if "pr" in values else None
+            args.sha, args.verdict = values.get("sha"), values["verdict"]
+            if args.ticket is not None:
+                from dkitchen import config, verdict
+                return verdict.review_ticket(args, config.load())
         if args.action in {"relay", "merge", "review", "log", "watch", "waits"}:
             from dkitchen import config, orchestrate, watch
             settings = config.load()
