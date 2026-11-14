@@ -82,12 +82,13 @@ Designer: <one-sentence conclusion>
 Type: actionable        (or: Type: proposal, awaiting user; or: Type: record)
 ```
 
-`ding rule <ticket> <draft.md> [--reply-to <comment>] [--notify <session>]` posts it: it checks the two lines and the references, stops if a comment came after the one answered, and prints the comment's URL (see `ding rule --help`). Who hears about it depends on the type:
+`ding rule <ticket> <draft.md> [--reply-to <comment>] [--notify <session> | --no-notify]` posts it: it checks the two lines and the references, stops if a comment came after the one answered, and prints the comment's URL (see `ding rule --help`). Who hears about it depends on the type:
 
-- **Actionable, carried out by the executor**: add `--notify '#N'`, which sends "#N answered, see the ticket" straight to the ticket's executor. The orchestrator does not relay it.
-- **Everything else**, such as a proposal, a record, or anything the orchestrator schedules or merges: tell the orchestrator in one line, "#N answered, see the ticket", without restating the answer.
+- **Actionable, carried out by the executor**: `ding rule` itself sends "#N answered, see the ticket" straight to the ticket's executor. The orchestrator does not relay it.
+- **Actionable, but for the orchestrator**, such as anything it schedules or merges: add `--no-notify`, then tell the orchestrator in one line, "#N answered, see the ticket", without restating the answer.
+- **Everything else**, a proposal or a record: `ding rule` tells nobody; tell the orchestrator in the same one line.
 
-When `--notify` reports a failed delivery, or the executor is a Claude Code session, which `ding` cannot reach, tell the orchestrator, which relays it.
+When `ding rule` reports a failed delivery, tell the orchestrator, which relays it. The exception is `no_listener`: the message already waits in the Claude Code executor's inbox, and the orchestrator's watch reports the missing waiter, so do not send it again.
 
 The orchestrator and executors act on the Type line alone: an actionable reply is carried out, and a proposal is left untouched until the user decides. With a proposal, the designer also labels the ticket `status:awaiting-user`.
 

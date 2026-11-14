@@ -786,7 +786,7 @@ def ruling(tree, tmp_path, monkeypatch):
     """`ding rule` run offline in a Chinese-vocabulary repo whose gh and ding send are doubles."""
     (tmp_path / config.FILE).write_text(RULING, encoding="utf-8")
     monkeypatch.chdir(tmp_path)
-    state = SimpleNamespace(calls=[], sends=[], send_code=0, draft=tmp_path / "draft.md")
+    state = SimpleNamespace(calls=[], sends=[], sent_after=[], send_code=0, draft=tmp_path / "draft.md")
     state.draft.write_text(REPLY, encoding="utf-8")
 
     def run(responses, *options, text=None):
@@ -801,6 +801,7 @@ def ruling(tree, tmp_path, monkeypatch):
         if argv[0] != "send":
             return real_main(argv)
         state.sends.append(argv)
+        state.sent_after.append(len(state.calls))
         print("started")
         return state.send_code
 
@@ -811,13 +812,40 @@ def ruling(tree, tmp_path, monkeypatch):
 
 
 def test_rule_posts_and_prints_only_the_url(ruling, capsys):
-    assert ruling.run([comment_pages("用户：请裁定", "核查：通过"), (0, URL + "\n")], "--reply-to", "101") == 0
+    assert ruling.run([comment_pages("用户：请裁定", "核查：通过"), (0, URL + "\n")], "--reply-to", "101",
+                      "--no-notify") == 0
     captured = capsys.readouterr()
     assert captured.out == URL + "\n"
     assert "latest comment" not in captured.err
     assert ruling.calls[0][:4] == ("gh", "api", "--paginate", "--slurp")
     assert ruling.calls[1] == ("gh", "issue", "comment", "42", "--repo", "o/r", "--body-file", str(ruling.draft))
     assert ruling.sends == []
+
+
+DEFAULT_SEND = ["send", "#42", "--from", "总设计", "--message", f"#42 已答复，见票 {URL}\n总设计：结论"]
+
+
+def test_an_actionable_ruling_tells_the_ticket_executor_after_posting(ruling, capsys):
+    assert ruling.run([comment_pages("用户：请裁定"), (0, URL)]) == 0
+    captured = capsys.readouterr()
+    assert captured.out == URL + "\n" and "started" in captured.err
+    assert ruling.sends == [DEFAULT_SEND] and ruling.sent_after == [2]
+    assert ruling.calls[1][:3] == ("gh", "issue", "comment")
+
+
+def test_no_notify_tells_nobody(ruling, capsys):
+    assert ruling.run([comment_pages("用户：请裁定"), (0, URL)], "--no-notify") == 0
+    assert capsys.readouterr().out == URL + "\n" and ruling.sends == []
+
+
+def test_a_failed_default_notification_keeps_the_comment_and_names_no_notify(ruling, capsys):
+    ruling.send_code = 1
+    assert ruling.run([comment_pages("用户：请裁定"), (0, URL)]) == 1
+    captured = capsys.readouterr()
+    assert captured.out == URL + "\n" and ruling.sends == [DEFAULT_SEND]
+    assert f"posted {URL}, but the notification to #42 failed" in captured.err
+    assert "the comment stays" in captured.err and "no_listener" in captured.err and "--no-notify" in captured.err
+    assert "by hand" not in captured.err
 
 
 def test_rule_without_reply_to_shows_the_latest_comment(ruling, capsys):
@@ -842,6 +870,19 @@ def test_rule_stops_when_the_first_two_lines_are_wrong(ruling, capsys, text, mes
 def test_rule_accepts_each_type(ruling, capsys):
     for kind in ("方案，等用户", "记录"):
         assert ruling.run([comment_pages("用户：问"), (0, URL)], text=f"总设计：结论\n类型：{kind}\n") == 0
+    assert ruling.sends == []
+
+
+@pytest.mark.parametrize("setting, kind, sends", [
+    ("notify_types = []", "可执行", 0),
+    ('notify_types = ["记录"]', "记录", 1),
+    ('notify_types = ["记录"]', "可执行", 0),
+    ('notify_types = ["可执行", "方案，等用户"]', "方案，等用户", 1),
+])
+def test_notify_types_choose_which_rulings_tell_the_executor(ruling, tmp_path, capsys, setting, kind, sends):
+    (tmp_path / config.FILE).write_text(RULING + setting + "\n", encoding="utf-8")
+    assert ruling.run([comment_pages("用户：问"), (0, URL)], text=f"总设计：结论\n类型：{kind}\n") == 0
+    assert len(ruling.sends) == sends and all(send[1] == "#42" for send in ruling.sends)
 
 
 def test_rule_stops_on_a_wrong_reference_and_posts_nothing(ruling, capsys):
@@ -892,7 +933,7 @@ def test_rule_notifies_a_codex_session_and_keeps_stdout_clean(ruling, capsys):
     assert ruling.run([comment_pages("用户：请裁定"), (0, URL)], "--notify", "00000000-0000-4000-8000-000000000001") == 0
     captured = capsys.readouterr()
     assert captured.out == URL + "\n" and "started" in captured.err
-    assert ruling.sends[0][:2] == ["send", "00000000-0000-4000-8000-000000000001"]
+    assert [send[:2] for send in ruling.sends] == [["send", "00000000-0000-4000-8000-000000000001"]]
 
 
 def test_rule_refuses_a_claude_session_before_posting(ruling, capsys):
@@ -918,8 +959,24 @@ def test_edit_body_writes_only_over_the_baseline_and_verifies(ruling, tmp_path, 
     responses = [(0, BODY.replace("\n", "\r\n") + "\n"), (0, "https://github.com/o/r/issues/42\n"), (0, new)]
     assert ruling.run(responses, "--edit-body", "--base", str(base), text=new) == 0
     assert capsys.readouterr().out == "https://github.com/o/r/issues/42\n"
+    assert ruling.sends == []
     assert ruling.calls[0] == ("gh", "api", "repos/o/r/issues/42", "--jq", ".body")
     assert ruling.calls[1] == ("gh", "issue", "edit", "42", "--repo", "o/r", "--body-file", str(ruling.draft))
+
+
+def test_edit_body_tells_only_an_explicit_notify(ruling, tmp_path, capsys):
+    base = tmp_path / "base.md"
+    base.write_text(BODY, encoding="utf-8")
+    new = REPLY
+    for options, sends in ((["--no-notify"], []), (["--notify", "#42"], ["#42"])):
+        ruling.sends.clear()
+        responses = [(0, BODY), (0, "https://github.com/o/r/issues/42\n"), (0, new)]
+        assert ruling.run(responses, "--edit-body", "--base", str(base), *options, text=new) == 0
+        assert [send[1] for send in ruling.sends] == sends
+    ruling.sends.clear()
+    responses = [(0, BODY), (0, "https://github.com/o/r/issues/42\n"), (0, new)]
+    assert ruling.run(responses, "--edit-body", "--base", str(base), text=new) == 0
+    assert ruling.sends == []
 
 
 def test_edit_body_stops_when_the_body_changed(ruling, tmp_path, capsys):
@@ -944,6 +1001,7 @@ def test_edit_body_reports_a_body_that_reads_back_differently(ruling, tmp_path, 
     (["--base", "x"], "--edit-body and --base go together"),
     (["--edit-body", "--base", "x", "--reply-to", "1"], "belong to comments"),
     (["--force"], "--force goes with --reply-to"),
+    (["--notify", "#42", "--no-notify"], "not allowed with argument --notify"),
 ])
 def test_rule_option_combinations(capsys, options, error):
     with pytest.raises(SystemExit) as exc:
@@ -955,7 +1013,8 @@ def test_rule_help_explains_the_steps(capsys):
     with pytest.raises(SystemExit):
         ding.main(["rule", "--help"])
     out = capsys.readouterr().out
-    for word in ("--reply-to", "--notify", "--edit-body", "--base", "--force", "check-refs", "SendMessage"):
+    for word in ("--reply-to", "--notify", "--no-notify", "notify_types", "--edit-body", "--base", "--force",
+                 "check-refs", "SendMessage"):
         assert word in out
 
 
@@ -985,8 +1044,14 @@ def test_check_refs_keeps_going_past_an_unreadable_draft(tree, capsys):
     ("[rule]\ntypes = []", "types must be a nonempty list"),
     ("[rule]\nnotify = 'no link'", "holding {url}"),
     ("[rule]\nnotify = '{url} {oops}'", "not a valid template"),
+    ("[rule]\nnotify_types = 'actionable'", "notify_types must be a list"),
+    ("[rule]\nnotify_types = ['urgent']", "notify_types urgent must be among types"),
+    ("[rule]\nnotify_types = ['record']\ntypes = ['actionable', 'record']", None),
 ])
 def test_rule_config_is_checked(tmp_path, text, error):
+    if error is None:
+        assert settings(tmp_path, text).rule.default_notify_types == ("record",)
+        return
     with pytest.raises(ValueError, match=error):
         settings(tmp_path, text)
 
@@ -994,6 +1059,7 @@ def test_rule_config_is_checked(tmp_path, text, error):
 def test_rule_defaults_are_english(tmp_path):
     loaded = settings(tmp_path)
     assert loaded.rule.type_label == "Type" and "actionable" in loaded.rule.types
+    assert loaded.rule.default_notify_types == ("actionable",)
     assert rule.format_problem("Designer: x\nType: record\n", loaded) is None
 
 

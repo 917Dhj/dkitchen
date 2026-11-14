@@ -48,6 +48,7 @@ Every key is optional. The defaults match the English templates in kitchen/:
     type_label = "Type"                  # then a line `<type_label><separator><one of types>`
     types = ["actionable", "proposal, awaiting user", "record"]
     notify = "#{ticket} answered, see the ticket {url}"   # message `--notify` sends; also {first_line}
+    # notify_types = ["actionable"]     # types that tell '#N' without --notify; default: the first type; [] for none
 
     [executor]
     default = "codex"                    # `ding new` dispatches to this kind: "codex" or "claude"; --executor overrides
@@ -189,6 +190,12 @@ class Rule:
     types: tuple[str, ...] = ("actionable", "proposal, awaiting user", "record")
     notify: str = "#{ticket} answered, see the ticket {url}"
     signatures: tuple[str, ...] = ()
+    notify_types: tuple[str, ...] | None = None
+
+    @property
+    def default_notify_types(self) -> tuple[str, ...]:
+        """Types whose ruling tells the ticket's executor when `ding rule` gets neither --notify nor --no-notify."""
+        return self.types[:1] if self.notify_types is None else self.notify_types
 
 
 @dataclass(frozen=True)
@@ -360,6 +367,10 @@ def section(cls, values: object, name: str):
                 kind = {"fields": "field names", "types": "words", "signatures": "signatures"}[key]
                 raise ValueError(f"{FILE}: [{name}] {key} must be a nonempty list of {kind}")
             value = tuple(value) if key == "signatures" else tuple(item.strip() for item in value)
+        elif key == "notify_types":
+            if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+                raise ValueError(f"{FILE}: [rule] notify_types must be a list of types (it may be empty)")
+            value = tuple(item.strip() for item in value)
         elif key == "required_checks":
             if (not isinstance(value, list)
                     or not all(isinstance(item, str) and item.strip() for item in value)):
@@ -429,6 +440,11 @@ def section(cls, values: object, name: str):
         if cls is Night and ("\n" in value or "\r" in value):
             raise ValueError(f"{FILE}: [night] {key} must be a single line")
         result = replace(result, **{key: value})
+    if cls is Rule and result.notify_types is not None:
+        unknown = [kind for kind in result.notify_types if kind not in result.types]
+        if unknown:
+            raise ValueError(f"{FILE}: [rule] notify_types {', '.join(unknown)} must be among types: "
+                             f"{', '.join(result.types)}")
     return result
 
 
