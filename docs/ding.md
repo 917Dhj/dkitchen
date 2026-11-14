@@ -145,7 +145,7 @@ ding inbox --all            # every message, read or not
 
 **`claim`** reads the calling session's identity (`CODEX_THREAD_ID`; else `CLAUDE_CODE_HOST_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`) and posts on the ticket a status block saying work has started, the owner line, and the session line. It refuses while another working executor owns the ticket, unless `--replace`. Then it prints the next step: for a Claude Code session, starting the waiter.
 
-**Delivery.** `send`, `relay`, the notification of `rule`, and the exit wake of `launch` reach a Claude Code session by appending to its inbox:
+**Delivery.** `send`, `relay`, the notifications of `rule` and `review --ticket`, and the exit wake of `launch` reach a Claude Code session by appending to its inbox:
 
 | Outcome | Meaning | Exit |
 | --- | --- | --- |
@@ -417,6 +417,7 @@ These commands carry out the kitchen's routine steps, as the house rules in [kit
 | --- | --- | --- |
 | `ding relay 42 --message TEXT [--comment TEXT]` | Orchestrator | Sends the message to ticket #42's executor and, only once the message is delivered or queued in a Claude Code inbox, leaves it (or `--comment`) on the ticket, signed. The message opens with the `[relay] superseding` line and is sent with `--steer --supersede`: it enters the executor's current turn and deletes the orchestrator's relays still queued for it. `--queue` queues it plainly instead; `--interrupt` also stops the current turn first. `--to SESSION` picks the executor when the ticket has no owner line; `--no-comment` only sends. |
 | `ding review 57 a1b2c3d pass --body-file review.md` | Reviewer | Posts the review comment and a commit status on the full PR HEAD, using `[merge] review_check`. Use `changes` for a failed review. |
+| `ding review --ticket 42 pass\|changes --body-file verdict.md` | Verifier | Posts a verdict on a run stage of ticket #42 and tells its executor. See [Stage verdicts](#stage-verdicts). |
 | `ding merge 57 a1b2c3d` | Orchestrator | Merges PR #57 only if its HEAD is still the reviewed `a1b2c3d`, it is open and not a draft, its base is the default branch, and the required checks and the review status pass on that HEAD. Then it confirms the merge and prints the merge commit. |
 | `ding log --item TEXT [--pending TEXT]` | Orchestrator | Posts a signed, UTC-stamped entry to the orchestrator log ticket: one line per `--item`, then the matters waiting for the user. |
 | `ding night open\|show\|close` | Orchestrator opens/closes; any role reads | Records night orders on `[log] issue`, shows the open orders and their link, or closes them. Orders expire at `--until`. Calls no model. |
@@ -452,6 +453,17 @@ ding review 57 a1b2c3d changes --body-file findings.md
 ```
 
 `review_check` defaults to `""` (disabled); a configured value must be a nonempty check name. `ding review` requires it, resolves the supplied SHA or prefix against the current PR HEAD, and refuses a mismatch before posting. The comment starts with `[merge] review_pass` or `review_changes`, `{sha}` replaced by the first 8 digits of the HEAD (by default `Reviewed <sha8>: pass` or `Reviewed <sha8>: changes requested, see below`), followed by the UTF-8 file. It then writes `success` or `failure` to the full SHA under that context, linking the status to the comment. Failure exits nonzero and identifies the failed call; if the status write fails, the comment remains and its URL is printed. A new HEAD has no inherited verdict.
+
+### Stage verdicts
+
+```bash
+ding review --ticket 42 pass --body-file verdict.md
+ding review --ticket 42 changes --body-file findings.md
+```
+
+A verdict on a run stage of a ticket, such as a first batch or a final state, goes on the ticket, not on a PR, and writes no commit status. The file's line 1 must start with the verifier's signature (`[stations] verifier` plus the separator, by default `Verifier: `), or nothing is posted. The comment is the file with `[review] verdict_pass` or `verdict_changes` inserted as line 2. On `changes` a third line hands the ticket to its design line, the first `[watch] handoff` word followed by its name (by default `hand to Designer`): the first designer role or alias named in the ticket body's first three nonempty lines, or, when they name none and the first is the `[sessions] parent` line, in the parent's; otherwise `[stations] designer`. It prints only the comment URL on stdout, then sends `[review] notify` plus the file's first nonempty line, unless the template holds `{first_line}`, to `'#42'`, the ticket's executor, with `ding send --from` the verifier. As with `ding rule`, `no_listener` exits 0 and says not to resend, and any other failed delivery exits 1 and keeps the comment.
+
+The orchestrator's `ding watch` wakes on a comment whose line 2 is `verdict_changes`, and the design line's `ding watch --for` wakes on its handoff. A `pass` verdict, like any other verifier comment, is listed in the orchestrator's next batch for reference without waking it. The verdict carries no release: whether the executor goes on after a pass is the repository's rule.
 
 With `review_check` configured, `merge`, `watch` and `waits` share the same readiness function: the PR must be open, non-draft, target the repository's default branch, and have every configured check plus the review check succeed on its exact HEAD. `merge` never reads executor comments. To hold a PR, mark it draft.
 
@@ -649,6 +661,11 @@ required_checks = []                # e.g. ["ci"]; only success permits merging
 review_check = ""                   # e.g. "review": the status `ding review` writes and `ding merge` requires
 review_pass = "Reviewed {sha}: pass"                              # first line of a passing review
 review_changes = "Reviewed {sha}: changes requested, see below"   # first line of a failing review
+
+[review]                             # `ding review --ticket N`: a verdict on a ticket's run stage
+verdict_pass = "Verdict: pass"                   # line 2 of a passing verdict
+verdict_changes = "Verdict: changes requested"   # line 2 of a failing one; wakes the orchestrator and the design line
+notify = "#{ticket} {verdict}, see the ticket {url}"   # message to the executor; `{first_line}` is also available
 
 [executor]
 default = "codex"                    # what `ding new` dispatches to: "codex" or "claude"; --executor overrides

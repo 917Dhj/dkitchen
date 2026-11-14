@@ -114,7 +114,16 @@ def notify(config: Config, args, target: str | None, ticket: int, url: str, draf
     message = config.rule.notify.format(ticket=ticket, url=url, first_line=first_line(draft))
     if "{first_line}" not in config.rule.notify:
         message += "\n" + first_line(draft)
-    send = ["send", target, "--from", config.stations.designer, "--message", message]
+    hint = ("" if args.notify is not None else
+            f" It went to {target} because the ruling's type notifies by default; when a ruling of this type is "
+            "not for the ticket's executor, pass --no-notify.")
+    return deliver(target, config.stations.designer, message, url, hint)
+
+
+def deliver(target: str, sender: str, message: str, url: str, hint: str = "") -> int:
+    """Send `message` about the comment at `url` with `ding send`; `no_listener` counts as queued, and a failure
+    leaves the comment and exits 1."""
+    send = ["send", target, "--from", sender, "--message", message]
     try:
         with contextlib.redirect_stdout(sys.stderr):
             code = ding.main(send)
@@ -124,9 +133,6 @@ def notify(config: Config, args, target: str | None, ticket: int, url: str, draf
         print(f"ding: posted {url}; {ding.no_listener_note(target)}", file=sys.stderr)
         return 0
     if code:
-        hint = ("" if args.notify is not None else
-                f" It went to {target} because the ruling's type notifies by default; when a ruling of this type is "
-                "not for the ticket's executor, pass --no-notify.")
         return fail(f"posted {url}, but the notification to {target} failed (ding send exit {code}); the comment "
                     f"stays. Tell the executor yourself.{hint}")
     return 0

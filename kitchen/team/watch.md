@@ -22,6 +22,7 @@ The watch exits about 5 minutes after the first of these appears, so related cha
 - a comment from the user;
 - a `status:*` label being added;
 - a new PR, a PR ready to merge, or a PR whose review failed;
+- a verifier's `changes` verdict on a run stage (`ding review --ticket`); a `pass` is only listed;
 - an executor gone quiet: `in progress` for over 6 hours without a comment, with no running `ding run` and no live tmux job whose session name contains `issue<ticket number>`;
 - a request to a designer or the verifier left unanswered for 30 minutes (`[watch] design_answer_minutes`). The orchestrator then sends that role one line, "#N is waiting on you, see <link>", without restating the request or answering it.
 
@@ -31,7 +32,7 @@ It skips the orchestrator log ticket set in `.dkitchen.toml`. One watch runs per
 
 - An executor comment whose *Waiting on* names the role or one of its aliases, or whose *Next* says "hand to <role>".
 - An executor in `waiting on design` that names no designer, which wakes the main designer.
-- A comment from the verifier, the orchestrator, or the user that writes `@<role>` or "hand to <role>", or has a line starting with the role's signature.
+- A comment from the verifier, the orchestrator, or the user that writes `@<role>` or "hand to <role>", or has a line starting with the role's signature. A `changes` verdict on a run stage hands the ticket to its design line this way.
 - For the reviewer of a PR: a non-draft PR whose current HEAD has no review yet ([reviewing.md](reviewing.md)).
 
 A role watch ignores labels, new PRs, and quiet executors. Requests for the verifier go from the executor straight to it; the orchestrator does not forward them.
