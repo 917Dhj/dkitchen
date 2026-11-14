@@ -2099,19 +2099,27 @@ def main(argv=None) -> int:
                     "    it, the time and first line of the latest comment are shown as a hint;\n"
                     "  - with --edit-body, the ticket body still equals the --base file.\n"
                     "Then it posts with gh. stdout is only the URL gh returns; everything else goes to stderr.\n"
-                    "With --notify it then sends the [rule] notify message (default: '#N answered, see the ticket "
-                    "URL')\nplus the draft's first line. A failed notification is reported, and the comment stays.",
+                    "Then it sends the [rule] notify message (default: '#N answered, see the ticket URL') plus the\n"
+                    "draft's first line: to the --notify session, or, for a comment whose type is among\n"
+                    "[rule] notify_types (default: the first type), to the ticket's executor ('#N') unless\n"
+                    "--no-notify is given. A failed notification is reported, exits 1, and the comment stays.",
         epilog="examples:\n"
                "  ding rule 42 reply.md --reply-to https://github.com/o/r/issues/42#issuecomment-123 --notify '#42'\n"
                "  gh api repos/o/r/issues/42 --jq .body > base.md   # take the baseline, edit a copy, then:\n"
                "  ding rule 42 new-body.md --edit-body --base base.md\n"
-               "--notify reaches Codex sessions (via `ding send`: UUID, name, '#N', ticket URL). ding cannot "
-               "message\nClaude Code sessions; tell them with SendMessage after the URL is printed.")
+               "  ding rule 42 reply.md --no-notify   # an actionable ruling meant for the orchestrator\n"
+               "--notify takes what `ding send` takes: a Codex session (UUID, name), '#N', or a ticket URL, which\n"
+               "also reach a Claude Code executor's inbox. A SendMessage address (uds:, bridge:, did:) is refused;\n"
+               "tell those sessions with SendMessage after the URL is printed.")
     sub.add_argument("ticket", type=int, help="Ticket number")
     sub.add_argument("draft", help="Draft file (UTF-8): the comment, or with --edit-body the new ticket body")
     sub.add_argument("--reply-to", help="Comment answered, as its link or id; stops when later comments exist")
     sub.add_argument("--force", action="store_true", help="With --reply-to: post although later comments exist")
-    sub.add_argument("--notify", help="Codex session to tell, as for `ding send` (UUID, name, '#N', ticket URL)")
+    tell = sub.add_mutually_exclusive_group()
+    tell.add_argument("--notify", help="Session to tell, as for `ding send` (UUID, name, '#N', ticket URL); "
+                                       "default for a type in [rule] notify_types: '#N'")
+    tell.add_argument("--no-notify", action="store_true",
+                      help="Tell nobody, although the type notifies the ticket's executor by default")
     sub.add_argument("--edit-body", action="store_true", help="Replace the ticket body, not add a comment; needs --base")
     sub.add_argument("--base", help="With --edit-body: file holding the body you started from; stops if the ticket's "
                                     "body differs from it")
