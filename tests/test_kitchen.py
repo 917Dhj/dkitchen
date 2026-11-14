@@ -2866,13 +2866,20 @@ def pr_states(monkeypatch, prs):
     monkeypatch.setattr(watch, "gh", gh)
 
 
-MERGED = {"state": "closed", "merged_at": "2026-11-02T00:00:00Z", "labels": []}
+MERGED = {"state": "closed", "merged_at": "2026-11-02T00:00:00Z", "labels": [], "body": "Closes #26",
+          "head": {"ref": "fix"}}
+OTHER = {**MERGED, "body": "Closes #25"}  # another ticket's PR
 
 
 @pytest.mark.parametrize("waiting, prs, stations", [
     ("核查、总编排、用户, PR #31", {31: MERGED}, ["用户"]),
-    ("核查审 PR＃31，总编排合入", {31: {"state": "closed", "merged_at": None, "labels": []}}, []),
+    ("核查审 PR＃31，总编排合入", {31: {**MERGED, "merged_at": None}}, []),
     ("核查、总编排 https://github.com/o/r/pull/31", {31: MERGED}, []),
+    ("核查审查PR31当前HEAD；总编排合入", {31: MERGED}, []),
+    ("核查、总编排 PR #31", {31: {**MERGED, "body": "修复#26的问题"}}, []),
+    ("核查、总编排 PR #31", {31: {**MERGED, "body": "see https://github.com/o/r/issues/26"}}, []),
+    ("核查、总编排 PR #31", {31: {**MERGED, "body": "", "head": {"ref": "codex/issue26-fix"}}}, []),
+    ("核查、总编排 PR #31", {31: {**MERGED, "body": "Closes #260"}}, ["核查", "总编排"]),
     ("核查、总编排 PR #31", {31: {"state": "open", "labels": []}}, ["核查", "总编排"]),
     ("核查、总编排 PR #31 PR #32", {31: MERGED, 32: {"state": "open", "labels": []}}, ["核查", "总编排"]),
     ("核查、总编排 https://github.com/x/y/pull/31", {}, ["核查", "总编排"]),
@@ -2881,18 +2888,28 @@ MERGED = {"state": "closed", "merged_at": "2026-11-02T00:00:00Z", "labels": []}
     ("总设计审 PR #31", {31: MERGED}, ["总设计"]),
     ("核查、总编排", {}, ["核查", "总编排"]),
 ])
-def test_waits_drop_review_and_merge_rows_once_the_named_pr_is_finished(verifier_wait, monkeypatch, capsys,
-                                                                       waiting, prs, stations):
+def test_waits_drop_review_and_merge_rows_once_the_tickets_own_pr_is_finished(verifier_wait, monkeypatch, capsys,
+                                                                             waiting, prs, stations):
     verifier_wait.last["body"] = executor(f"状态: 进行中\n在等: {waiting}\n关键数字: 1\n下一步: 等")
     pr_states(monkeypatch, prs)
     assert ding.main(["waits", "--json"]) == 0
     assert sorted(item["station"] for item in json.loads(capsys.readouterr().out)) == sorted(stations)
 
 
-def test_a_finished_pr_also_quiets_the_watch_backstop(verifier_wait, monkeypatch):
+def test_a_wait_on_another_tickets_merged_pr_keeps_its_rows_and_says_so(verifier_wait, monkeypatch, capsys):
+    # Human-centric-agents#1902: blocked on #1888's PR #1900 merging, asking the orchestrator to tell it.
+    verifier_wait.last["body"] = executor("状态: 阻塞\n在等: #25（PR #31）合入 main；合入后请总编排告诉我\n关键数字: 0\n下一步: 等")
+    pr_states(monkeypatch, {31: OTHER})
+    assert ding.main(["waits", "--json"]) == 0
+    [row] = json.loads(capsys.readouterr().out)
+    assert row["station"] == "总编排" and row["summary"].endswith("(PR #31 merged)")
+
+
+@pytest.mark.parametrize("prs, kept", [({31: MERGED}, False), ({31: OTHER}, True)])
+def test_a_finished_pr_also_quiets_the_watch_backstop(verifier_wait, monkeypatch, prs, kept):
     verifier_wait.last["body"] = executor("状态: 进行中\n在等: 核查审 PR #31\n关键数字: 1\n下一步: 等")
-    pr_states(monkeypatch, {31: MERGED})
-    assert watch.unanswered_design(verifier_wait.config, "o/r", set(), set()) == []
+    pr_states(monkeypatch, prs)
+    assert bool(watch.unanswered_design(verifier_wait.config, "o/r", set(), set())) is kept
 
 
 def pull(number, updated, draft=True, title="WIP"):
@@ -2944,6 +2961,17 @@ def test_stalled_skips_waits_other_states_and_other_stations(stalled_line, capsy
     assert "stalled" not in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("board, panes", [
+    ("NAME\tCWD\tSTATUS\tISSUE\tHEAD\tRUN\n【#26】worker\t/r\tactive\t#26\thead\trunning\n", ""),
+    ("NAME\tCWD\tSTATUS\tISSUE\tHEAD\tRUN\n", "issue26-occupy|0|python\n"),
+])
+def test_a_ticket_with_a_running_job_is_not_stalled(stalled_line, capsys, board, panes):
+    # Human-centric-agents#1451: a resident job, quiet for 198 hours by design.
+    stalled_line.pulls, stalled_line.board, stalled_line.panes = [], board, panes
+    assert ding.main(["waits"]) == 0
+    assert capsys.readouterr().out == ""
+
+
 def test_the_orchestrator_hears_of_each_stalled_item_once_a_day(stalled_line, monkeypatch, capsys):
     ticket = stalled_line
     monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
@@ -2959,7 +2987,7 @@ def test_the_orchestrator_hears_of_each_stalled_item_once_a_day(stalled_line, mo
     assert json.loads(path.read_text())["stalled_reported"] == {"#26": "2026-10-28T12:00:00Z",
                                                                 "PR #1350": "2026-10-28T12:00:00Z"}
     ticket.clock.moment += timedelta(hours=23)
-    found, current = watch.stalled_wakes(ticket.config, "o/r", 48, json.loads(path.read_text())["stalled_reported"], set())
+    found, current = watch.stalled_wakes(ticket.config, "o/r", ticket.config.root, 48, json.loads(path.read_text())["stalled_reported"], set())
     assert found == [] and current == {"#26", "PR #1350"}
     ticket.clock.moment += timedelta(hours=2)
     assert ding.main(arguments) == 0

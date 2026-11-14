@@ -2063,8 +2063,9 @@ def main(argv=None) -> int:
                                           "station or the user, with no later reply from that station. Uses watch's "
                                           "aliases, width normalization, longest-name matching, and paused-state exclusion. "
                                           "With [merge] review_check, also list PR readiness and review:<NAME> waits. "
-                                          "A wait naming PRs (PR #N or a /pull/ link) that are all merged or closed "
-                                          "drops its orchestrator, verifier and review:<NAME> rows. "
+                                          "A wait naming only the ticket's own PRs (PR #N, PRN or a /pull/ link), all merged or "
+                                          "closed, drops its orchestrator, verifier and review:<NAME> rows; another "
+                                          "ticket's finished PR is noted instead. "
                                           "Then a 'stalled:' section lists lines that name no wait (--stalled-hours). "
                                           "Read-only; calls no model; exits 0 even when empty.")
     sub.add_argument("--for", dest="station", type=str.strip, metavar="NAME", help="Keep only waits on NAME or its aliases")

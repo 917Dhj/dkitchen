@@ -41,7 +41,7 @@ from dkitchen import inbox, truncate
 from dkitchen.config import Config, Sessions
 
 SHELLS = {"bash", "sh", "zsh", "dash", "fish"}
-PR_NAMED = re.compile(r"\bPR\s*#\s*(\d+)|https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)", re.IGNORECASE)
+PR_NAMED = re.compile(r"(?<![A-Za-z])PR\s*#?\s*(\d+)|https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
 STALLED_EVERY_HOURS = 24  # the orchestrator's watch reports each stalled item at most once a day
 WAITER_LOOKBACK_DAYS = 7  # older inbox records are not rechecked; a silent executor was reported long before
 
@@ -367,7 +367,7 @@ def answered_by(body: str, station: str, config: Config) -> bool:
 
 
 def named_prs(waiting: str, repo: str) -> set[int]:
-    """The PRs of this repository a wait field names, as `PR #N` or a /pull/ link."""
+    """The PRs of this repository a wait field names, as `PR #N`, `PRN`, or a /pull/ link."""
     numbers = set()
     for match in PR_NAMED.finditer(normalized(waiting)):
         if match.group(1):
@@ -377,13 +377,25 @@ def named_prs(waiting: str, repo: str) -> set[int]:
     return numbers
 
 
-def finished_pr_stations(waiting: str, config: Config, repo: str, cache: dict[int, dict]) -> set[str]:
-    """When every PR the wait names is merged or closed, the stations that review and merge them: the orchestrator,
-    the verifier, and each PR's `review:<NAME>` reviewer. Otherwise none."""
-    numbers = named_prs(waiting, repo)
+def own_pr(pr: dict, ticket: int) -> bool:
+    """Whether the PR is the ticket's own: its body cites `#ticket` or the ticket's link, or its branch holds
+    `issue<ticket>`."""
+    body = pr.get("body") or ""
+    branch = (pr.get("head") or {}).get("ref") or ""
+    return bool(re.search(rf"(?<![0-9A-Za-z])#{ticket}(?!\d)|/issues/{ticket}(?!\d)", body)
+                or re.search(rf"issue-?{ticket}(?!\d)", branch, re.IGNORECASE))
+
+
+def finished_prs(waiting: str, ticket: int, config: Config, repo: str,
+                 cache: dict[int, dict]) -> tuple[set[str], str]:
+    """For a wait naming PRs: the stations whose rows it no longer needs, and a note for the rows it keeps.
+
+    When every PR named is merged or closed and is the ticket's own, the review and merge are over: the orchestrator,
+    the verifier, and each PR's `review:<NAME>` reviewer are dropped. When a finished PR belongs to another ticket,
+    the wait is a dependency that is now ready, so every row stays, noted with what happened to that PR."""
+    numbers = sorted(named_prs(waiting, repo))
     if not numbers:
-        return set()
-    stations = {config.stations.orchestrator, config.stations.verifier}
+        return set(), ""
     for number in numbers:
         if number not in cache:
             try:
@@ -392,12 +404,16 @@ def finished_pr_stations(waiting: str, config: Config, repo: str, cache: dict[in
                 if "404" not in str(error):
                     raise
                 cache[number] = {"state": "open"}  # `PR #N` naming no PR: keep the wait as written
-        pr = cache[number]
-        if pr.get("state") == "open":
-            return set()
-        stations.update(label["name"][7:].strip() for label in pr.get("labels", [])
-                        if label["name"].startswith("review:") and label["name"][7:].strip())
-    return stations
+    prs = {number: cache[number] for number in numbers}
+    finished = {number: pr for number, pr in prs.items() if pr.get("state") != "open"}
+    if len(finished) == len(prs) and all(own_pr(pr, ticket) for pr in prs.values()):
+        stations = {config.stations.orchestrator, config.stations.verifier}
+        for pr in prs.values():
+            stations.update(label["name"][7:].strip() for label in pr.get("labels", [])
+                            if label["name"].startswith("review:") and label["name"][7:].strip())
+        return stations, ""
+    return set(), "; ".join(f"PR #{number} {'merged' if pr.get('merged_at') else 'closed'}"
+                            for number, pr in finished.items())
 
 
 def unanswered_waits(config: Config, repo: str, minutes: float, skip: set[int], *,
@@ -426,12 +442,13 @@ def unanswered_waits(config: Config, repo: str, minutes: float, skip: set[int], 
             if elapsed > minutes:
                 waiting = [name for name in names
                            if name not in answered and (waiting_for(comment["body"], name, config) or name in implicit)]
-                done = finished_pr_stations(state_and_waiting(comment["body"], config)[1], config, repo,
-                                            prs) if waiting else set()
+                done, note = (finished_prs(state_and_waiting(comment["body"], config)[1], issue["number"], config,
+                                           repo, prs) if waiting else (set(), ""))
                 for name in waiting:
                     if not any(station_variants(name, config) & station_variants(other, config) for other in done):
                         found.append({"ticket": issue["number"], "station": name, "minutes": elapsed,
-                                      "summary": summary(comment["body"], config), "url": comment["html_url"],
+                                      "summary": summary(comment["body"], config) + (f" ({note})" if note else ""),
+                                      "url": comment["html_url"],
                                       "comment_id": comment["id"], "created_at": comment["created_at"]})
             break
     return sorted(found, key=lambda item: (item["created_at"], item["ticket"], item["station"]))
@@ -565,9 +582,10 @@ def unrouted_waits(config: Config, repo: str, checkout: Path, reported: set[int]
             for issue, comment in candidates if issue["number"] not in running]
 
 
-def stalled(config: Config, repo: str, hours: float, skip: set[int]) -> list[dict]:
+def stalled(config: Config, repo: str, checkout: Path, hours: float, skip: set[int]) -> list[dict]:
     """Lines that name no wait yet have not moved for `hours`: open draft PRs not updated, and open tickets whose
-    latest executor status is in progress with no wait and that nobody has updated since. Oldest first."""
+    latest executor status is in progress with no wait, that nobody has updated since, and that have no running
+    `ding run` or live tmux job (the same test as stale checks; a long job is quiet by design). Oldest first."""
     if not hours:
         return []
     moment = datetime.now(timezone.utc)
@@ -585,9 +603,13 @@ def stalled(config: Config, repo: str, hours: float, skip: set[int]) -> list[dic
         if fresh or len(pulls) < 100:
             break
         page += 1
-    for issue in open_issues(repo):
-        if ("pull_request" in issue or issue["number"] in skip or not issue["comments"] or issue["updated_at"] >= cutoff
-                or any(label["name"] == config.labels.awaiting_user for label in issue["labels"])):
+    candidates = [issue for issue in open_issues(repo)
+                  if "pull_request" not in issue and issue["number"] not in skip and issue["comments"]
+                  and issue["updated_at"] < cutoff
+                  and not any(label["name"] == config.labels.awaiting_user for label in issue["labels"])]
+    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes()) if candidates else set()
+    for issue in candidates:
+        if issue["number"] in running:
             continue
         last = next((comment for comment in comments_backwards(repo, issue)
                      if role(comment["body"], config) == config.stations.executor), None)
@@ -617,7 +639,7 @@ def waits(args, config: Config) -> int:
               if item["minutes"] > minutes and (args.station is None or
                  station_variants(args.station, config) & station_variants(item["station"], config))]
     found.sort(key=lambda item: (item["created_at"], item["ticket"], item["station"]))
-    quiet = (stalled(config, config.repository(), args.stalled_hours, set())
+    quiet = (stalled(config, config.repository(), config.root, args.stalled_hours, set())
              if args.station is None or station_variants(args.station, config)
              & station_variants(config.stations.orchestrator, config) else [])
     if args.json:
@@ -763,12 +785,12 @@ def missing_waiters(config: Config, repo: str, reported: set[int], skip: set[int
     return found
 
 
-def stalled_wakes(config: Config, repo: str, hours: float, reported: dict[str, str],
+def stalled_wakes(config: Config, repo: str, checkout: Path, hours: float, reported: dict[str, str],
                   skip: set[int]) -> tuple[list[tuple[str, str, str]], set[str]]:
     """Stalled items not reported in the last STALLED_EVERY_HOURS, and the keys of every item stalled now."""
     cutoff = stamp(datetime.now(timezone.utc) - timedelta(hours=STALLED_EVERY_HOURS))
     found, current = [], set()
-    for item in stalled(config, repo, hours, skip):
+    for item in stalled(config, repo, checkout, hours, skip):
         key = f"{'PR ' if item['pr'] else ''}#{item['ticket']}"
         current.add(key)
         if reported.get(key, "") < cutoff:
@@ -838,7 +860,7 @@ def watch(args, config: Config) -> int:
             if checked_stale:
                 quiet = stale(config, repo, checkout, args.stale_hours, reported, skip)
                 stale_ids = {id_ for _, _, id_ in quiet}
-                stalled_found, stalled_current = stalled_wakes(config, repo, args.stalled_hours, stalled_reported, skip)
+                stalled_found, stalled_current = stalled_wakes(config, repo, checkout, args.stalled_hours, stalled_reported, skip)
                 quiet += stalled_found
             if checked_idle:
                 idle_found, pending = idle(config, repo, checkout, observed, idle_reported, skip)
