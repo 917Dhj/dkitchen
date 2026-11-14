@@ -1233,7 +1233,7 @@ def test_watch_post_settle_timeout_is_retried_without_losing_batch(tmp_path, mon
         assert state.read_bytes() == original
         if "/issues/comments?" in path:
             return [comment(26, "User question")]
-        if "/pulls?" in path:
+        if "/pulls?state=all" in path:  # the new-PR listing; the stalled scan lists open PRs
             pulls.append(path)
             if len(pulls) % 2 == 0 and (not recover or len(pulls) == 2):
                 raise subprocess.TimeoutExpired(["gh", "api", path], 60)
@@ -1269,7 +1269,7 @@ def idle_ticket(tmp_path, monkeypatch):
             "html_url": "https://github.com/o/r/issues/26#issuecomment-2601"}
     issue = {"number": 26, "comments": 1, "labels": [], "updated_at": last["updated_at"]}
     state = SimpleNamespace(config=loaded, clock=Clock, last=last, issues=[issue], comments=[last],
-                            board="NAME\tCWD\tSTATUS\tISSUE\tHEAD\tRUN\n【#26】worker\t/r\tidle\t#26\thead\t\n", panes="")
+                            board="NAME\tCWD\tSTATUS\tISSUE\tHEAD\tRUN\n【#26】worker\t/r\tidle\t#26\thead\t\n", panes="", pulls=[])
     calls = []
 
     def gh(path):
@@ -1278,6 +1278,8 @@ def idle_ticket(tmp_path, monkeypatch):
             return state.comments
         if "/issues?state=open&per_page=100" in path:
             return state.issues
+        if "/pulls?state=open&sort=updated" in path:
+            return state.pulls
         raise AssertionError(path)
 
     monkeypatch.setattr(watch, "gh", gh)
@@ -1450,6 +1452,7 @@ def test_watch_bounds_errors_in_every_poll_phase(tmp_path, monkeypatch, capsys, 
     monkeypatch.setattr(watch, "idle", lambda *args: ([], {}))
     monkeypatch.setattr(watch, "unanswered_design", lambda *args: [])
     monkeypatch.setattr(watch, "unrouted_waits", lambda *args: [])
+    monkeypatch.setattr(watch, "stalled", lambda *args: [])
     attempts = []
 
     def fail_then_recover(*args):
@@ -1878,10 +1881,12 @@ def test_station_and_orchestrator_watches_run_concurrently_with_separate_default
     monkeypatch.setattr(watch, "idle", lambda *args: ([], {}))
     monkeypatch.setattr(watch, "unanswered_design", lambda *args: [])
     monkeypatch.setattr(watch, "unrouted_waits", lambda *args: [])
+    monkeypatch.setattr(watch, "stalled", lambda *args: [])
     monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
     def run(station):
         args = SimpleNamespace(state=None, checkout=None, since=None, skip_issue=[], station=station,
-                               interval=90, settle=0, stale_hours=6, stale_every=3600, max_errors=2)
+                               interval=90, settle=0, stale_hours=6, stale_every=3600, max_errors=2,
+                               stalled_hours=48)
         return watch.watch(args, loaded)
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert list(pool.map(run, [None, "Designer"])) == [0, 0]
@@ -2148,7 +2153,8 @@ def test_waits_query_failure_is_not_an_empty_success(verifier_wait, monkeypatch,
 def test_waits_sorts_oldest_first_and_ignores_prs(verifier_wait, monkeypatch, capsys):
     ticket = verifier_wait
     older = {**ticket.last, "id": 2701, "created_at": "2026-10-28T11:00:00Z", "html_url": "https://github.com/o/r/issues/27#issuecomment-2701"}
-    ticket.issues += [{"number": 27, "comments": 1}, {"number": 28, "comments": 1, "pull_request": {}}]
+    ticket.issues += [{"number": 27, "comments": 1, "labels": [], "updated_at": older["created_at"]},
+                      {"number": 28, "comments": 1, "pull_request": {}}]
     original = watch.gh
     monkeypatch.setattr(watch, "gh", lambda path: [older] if "/issues/27/comments?" in path else original(path))
     assert ding.main(["waits", "--json"]) == 0
@@ -2199,7 +2205,7 @@ def collect(*args, **kwargs):
     return [(watch.now(), "fixture wait", True)]
 watch.collect = collect
 watch.idle = lambda *args: ([], {})
-watch.stale = watch.unanswered_design = watch.unrouted_waits = lambda *args: []
+watch.stale = watch.unanswered_design = watch.unrouted_waits = watch.stalled = lambda *args: []
 sys.exit(ding.main(["watch", "--state", sys.argv[1], "--settle", "0"]))
 '''
     output_path = tmp_path / "output.txt"
@@ -2844,3 +2850,127 @@ def test_handoff_words_default_to_english_and_are_configurable(tmp_path):
 def test_pending_merge_key_is_refused(tmp_path):
     with pytest.raises(ValueError, match="unknown keys in \\[status\\]: pending_merge"):
         settings(tmp_path, '[status]\npending_merge = "Pending merge"')
+
+
+def pr_states(monkeypatch, prs):
+    """Answer `repos/o/r/pulls/N` from `prs`; a missing number is a 404."""
+    original = watch.gh
+
+    def gh(path):
+        if path.startswith("repos/o/r/pulls/"):
+            number = int(path.rsplit("/", 1)[1])
+            if number not in prs:
+                raise RuntimeError("gh: Not Found (HTTP 404)")
+            return prs[number]
+        return original(path)
+    monkeypatch.setattr(watch, "gh", gh)
+
+
+MERGED = {"state": "closed", "merged_at": "2026-11-02T00:00:00Z", "labels": []}
+
+
+@pytest.mark.parametrize("waiting, prs, stations", [
+    ("核查、总编排、用户, PR #31", {31: MERGED}, ["用户"]),
+    ("核查审 PR＃31，总编排合入", {31: {"state": "closed", "merged_at": None, "labels": []}}, []),
+    ("核查、总编排 https://github.com/o/r/pull/31", {31: MERGED}, []),
+    ("核查、总编排 PR #31", {31: {"state": "open", "labels": []}}, ["核查", "总编排"]),
+    ("核查、总编排 PR #31 PR #32", {31: MERGED, 32: {"state": "open", "labels": []}}, ["核查", "总编排"]),
+    ("核查、总编排 https://github.com/x/y/pull/31", {}, ["核查", "总编排"]),
+    ("核查、总编排 PR #33", {}, ["核查", "总编排"]),
+    ("总设计审 PR #31", {31: {**MERGED, "labels": [{"name": "review:总设计"}]}}, []),
+    ("总设计审 PR #31", {31: MERGED}, ["总设计"]),
+    ("核查、总编排", {}, ["核查", "总编排"]),
+])
+def test_waits_drop_review_and_merge_rows_once_the_named_pr_is_finished(verifier_wait, monkeypatch, capsys,
+                                                                       waiting, prs, stations):
+    verifier_wait.last["body"] = executor(f"状态: 进行中\n在等: {waiting}\n关键数字: 1\n下一步: 等")
+    pr_states(monkeypatch, prs)
+    assert ding.main(["waits", "--json"]) == 0
+    assert sorted(item["station"] for item in json.loads(capsys.readouterr().out)) == sorted(stations)
+
+
+def test_a_finished_pr_also_quiets_the_watch_backstop(verifier_wait, monkeypatch):
+    verifier_wait.last["body"] = executor("状态: 进行中\n在等: 核查审 PR #31\n关键数字: 1\n下一步: 等")
+    pr_states(monkeypatch, {31: MERGED})
+    assert watch.unanswered_design(verifier_wait.config, "o/r", set(), set()) == []
+
+
+def pull(number, updated, draft=True, title="WIP"):
+    return {"number": number, "draft": draft, "updated_at": updated, "title": title,
+            "html_url": f"https://github.com/o/r/pull/{number}"}
+
+
+@pytest.fixture
+def stalled_line(verifier_wait):
+    """Ticket #26 in progress with no wait, last touched 50 hours before the clock; drafts on either side of 48 h."""
+    ticket = verifier_wait
+    old = "2026-10-26T10:00:00Z"
+    ticket.last.update(created_at=old, updated_at=old, body=executor("状态: 进行中\n在等: 无\n关键数字: 1\n下一步: 跑"))
+    ticket.issues[0]["updated_at"] = old
+    ticket.pulls = [pull(1350, "2026-10-25T12:00:00Z"), pull(1351, old, draft=False),
+                    pull(1352, "2026-10-28T06:00:00Z")]
+    return ticket
+
+
+def test_waits_lists_stalled_drafts_and_tickets_that_name_no_wait(stalled_line, capsys):
+    assert ding.main(["waits"]) == 0
+    assert capsys.readouterr().out.splitlines() == [
+        "stalled:",
+        "PR #1350 stalled, not updated for 72 hours: draft: WIP https://github.com/o/r/pull/1350",
+        f"#26 stalled, not updated for 50 hours: 状态: 进行中; 在等: 无 {stalled_line.last['html_url']}",
+    ]
+    assert ding.main(["waits", "--json"]) == 0
+    found = json.loads(capsys.readouterr().out)
+    assert [(item["kind"], item["pr"], item["ticket"], item["station"]) for item in found] == [
+        ("stalled", True, 1350, "总编排"), ("stalled", False, 26, "总编排")]
+
+
+@pytest.mark.parametrize("options, change", [
+    (["--stalled-hours", "0"], None),
+    (["--for", "核查"], None),
+    (["--stalled-hours", "61"], None),
+    ([], "在等: 核查"),
+    ([], "状态: 阻塞\n在等: 无"),
+    ([], "awaiting"),
+])
+def test_stalled_skips_waits_other_states_and_other_stations(stalled_line, capsys, options, change):
+    ticket = stalled_line
+    ticket.pulls = []
+    if change == "awaiting":
+        ticket.issues[0]["labels"] = [{"name": ticket.config.labels.awaiting_user}]
+    elif change:
+        ticket.last["body"] = executor(f"状态: 进行中\n{change}\n关键数字: 1\n下一步: 跑".replace("状态: 进行中\n状态", "状态"))
+    assert ding.main(["waits", *options]) == 0
+    assert "stalled" not in capsys.readouterr().out
+
+
+def test_the_orchestrator_hears_of_each_stalled_item_once_a_day(stalled_line, monkeypatch, capsys):
+    ticket = stalled_line
+    monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
+    for name in ("collect",):
+        monkeypatch.setattr(watch, name, lambda *args, **kwargs: [])
+    for name in ("stale", "unanswered_design", "unrouted_waits", "missing_waiters"):
+        monkeypatch.setattr(watch, name, lambda *args: [])
+    monkeypatch.setattr(watch, "idle", lambda *args: ([], {}))
+    path = ticket.config.root / "watch.json"
+    arguments = ["watch", "--state", str(path), "--interval", "0", "--settle", "0"]
+    assert ding.main(arguments) == 0
+    assert capsys.readouterr().out.count("stalled, not updated") == 2
+    assert json.loads(path.read_text())["stalled_reported"] == {"#26": "2026-10-28T12:00:00Z",
+                                                                "PR #1350": "2026-10-28T12:00:00Z"}
+    ticket.clock.moment += timedelta(hours=23)
+    found, current = watch.stalled_wakes(ticket.config, "o/r", 48, json.loads(path.read_text())["stalled_reported"], set())
+    assert found == [] and current == {"#26", "PR #1350"}
+    ticket.clock.moment += timedelta(hours=2)
+    assert ding.main(arguments) == 0
+    assert capsys.readouterr().out.count("stalled, not updated") == 2
+
+
+def test_watch_and_waits_take_stalled_hours(capsys):
+    for command in ("watch", "waits"):
+        with pytest.raises(SystemExit):
+            ding.main([command, "--help"])
+        assert "--stalled-hours" in capsys.readouterr().out
+        with pytest.raises(SystemExit) as error:
+            ding.main([command, "--stalled-hours", "-1"])
+        assert error.value.code == 2

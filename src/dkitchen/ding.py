@@ -2063,10 +2063,17 @@ def main(argv=None) -> int:
                                           "station or the user, with no later reply from that station. Uses watch's "
                                           "aliases, width normalization, longest-name matching, and paused-state exclusion. "
                                           "With [merge] review_check, also list PR readiness and review:<NAME> waits. "
+                                          "A wait naming PRs (PR #N or a /pull/ link) that are all merged or closed "
+                                          "drops its orchestrator, verifier and review:<NAME> rows. "
+                                          "Then a 'stalled:' section lists lines that name no wait (--stalled-hours). "
                                           "Read-only; calls no model; exits 0 even when empty.")
     sub.add_argument("--for", dest="station", type=str.strip, metavar="NAME", help="Keep only waits on NAME or its aliases")
     sub.add_argument("--minutes", type=float, help="Nonnegative finite threshold (default: [watch] design_answer_minutes)")
-    sub.add_argument("--json", action="store_true", help="Print a JSON array instead of one line per wait")
+    sub.add_argument("--stalled-hours", type=nonnegative_number, default=48,
+                     help="List open draft PRs, and in-progress tickets whose status names no wait, not updated for "
+                          "this long, under 'stalled:' (default: 48; 0 disables)")
+    sub.add_argument("--json", action="store_true", help="Print a JSON array instead of one line per wait; "
+                                                         "stalled items carry \"kind\": \"stalled\"")
     sub = commands.add_parser("watch", help="Wait for GitHub activity the orchestrator must handle, then exit",
                                 description="Wait for GitHub activity the orchestrator must handle, print it, and exit. "
                                             "With --for NAME, watch executor comments waiting on that station, design requests, and explicit handoffs. "
@@ -2093,6 +2100,9 @@ def main(argv=None) -> int:
     sub.add_argument("--settle", type=float, default=300, help="After the first trigger, seconds to wait to batch more (default: 300)")
     sub.add_argument("--stale-hours", type=float, default=6, help="Executor silence that counts as stale (default: 6)")
     sub.add_argument("--stale-every", type=float, default=3600, help="Seconds between stale checks (default: 3600)")
+    sub.add_argument("--stalled-hours", type=nonnegative_number, default=48,
+                     help="Orchestrator only: on the stale check, report each open draft PR and each in-progress "
+                          "ticket naming no wait not updated for this long, once a day (default: 48; 0 disables)")
     sub.add_argument("--max-errors", type=int, default=10, help="Consecutive failed polls before exiting (default: 10)")
     sub = commands.add_parser(
         "rule", help="Post the designer's ruling on a ticket after checking it, and tell a session",
