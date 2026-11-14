@@ -104,7 +104,7 @@ def test_wait_blocks_until_a_message_arrives_and_records_itself(capsys):
 
 
 def test_send_to_claude_target(waiter, capsys):
-    assert ding.main(["send", CLAUDE_ID, "--from", "Orchestrator", "--message", "first"]) == 1
+    assert ding.main(["send", CLAUDE_ID, "--from", "Orchestrator", "--message", "first"]) == ding.NO_LISTENER_EXIT == 3
     assert "no_listener" in capsys.readouterr().err
     waiter()
     assert ding.main(["send", f"claude:{CLAUDE_ID}", "--from", "Orchestrator", "--message", "second",

@@ -88,7 +88,7 @@ Type: actionable        (or: Type: proposal, awaiting user; or: Type: record)
 - **Actionable, but for the orchestrator**, such as anything it schedules or merges: add `--no-notify`, then tell the orchestrator in one line, "#N answered, see the ticket", without restating the answer.
 - **Everything else**, a proposal or a record: `ding rule` tells nobody; tell the orchestrator in the same one line.
 
-When `ding rule` reports a failed delivery, tell the orchestrator, which relays it. The exception is `no_listener`: the message already waits in the Claude Code executor's inbox, and the orchestrator's watch reports the missing waiter, so do not send it again.
+When `ding rule` reports a failed delivery, tell the orchestrator, which relays it. When it says the message is queued but no waiter is running, do nothing: the Claude Code executor reads it when its waiter starts again, and the orchestrator's watch reports the missing waiter.
 
 The orchestrator and executors act on the Type line alone: an actionable reply is carried out, and a proposal is left untouched until the user decides. With a proposal, the designer also labels the ticket `status:awaiting-user`.
 

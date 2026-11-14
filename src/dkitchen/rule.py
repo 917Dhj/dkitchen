@@ -120,13 +120,15 @@ def notify(config: Config, args, target: str | None, ticket: int, url: str, draf
             code = ding.main(send)
     except SystemExit as error:
         code = error.code or 1
+    if code == ding.NO_LISTENER_EXIT:
+        print(f"ding: posted {url}; {ding.no_listener_note(target)}", file=sys.stderr)
+        return 0
     if code:
         hint = ("" if args.notify is not None else
                 f" It went to {target} because the ruling's type notifies by default; when a ruling of this type is "
                 "not for the ticket's executor, pass --no-notify.")
         return fail(f"posted {url}, but the notification to {target} failed (ding send exit {code}); the comment "
-                    "stays. If ding send said no_listener, the message already waits in the executor's inbox: do not "
-                    f"resend it. Otherwise tell the executor yourself.{hint}")
+                    f"stays. Tell the executor yourself.{hint}")
     return 0
 
 
