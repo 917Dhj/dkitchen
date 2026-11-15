@@ -3265,3 +3265,122 @@ def test_a_stage_verdict_on_a_pr_number_posts_nothing_and_names_the_pr_form(verd
     error = capsys.readouterr().err
     assert "#42 is a PR, not a ticket" in error and f"ding review 42 <SHA> {word}" in error
     assert len(verdict.calls) == 1 and verdict.sends == []
+
+
+ROLE_CONFIG = 'repo = "o/r"\n[stations]\ndesigner = "总设计师"\n[stations.aliases]\n"总设计师" = ["总设计"]\n'
+FIRST, SECOND = "local_11111111-aaaa", "local_22222222-bbbb"
+
+
+def as_session(monkeypatch, session):
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    if session is None:
+        monkeypatch.delenv("CLAUDE_CODE_HOST_SESSION_ID", raising=False)
+    else:
+        monkeypatch.setenv("CLAUDE_CODE_HOST_SESSION_ID", session)
+
+
+def role_main(tmp_path, monkeypatch, *words, text=ROLE_CONFIG):
+    loaded = settings(tmp_path, text)
+    monkeypatch.setattr(config, "load", lambda *args: loaded)
+    return ding.main(["role", *words])
+
+
+def test_role_take_records_the_caller_and_resolves_aliases(tmp_path, monkeypatch, capsys):
+    as_session(monkeypatch, FIRST)
+    assert role_main(tmp_path, monkeypatch, "take", "总设计") == 0
+    assert "no previous holder" in capsys.readouterr().out
+    for name in ("总设计师", "总设计"):
+        assert role_main(tmp_path, monkeypatch, name) == 0
+        assert capsys.readouterr().out == f"{FIRST}\n"
+    assert role_main(tmp_path, monkeypatch) == 0
+    assert capsys.readouterr().out.startswith(f"总设计师\tclaude\t{FIRST}\t")
+
+
+def test_second_take_replaces_the_holder_and_keeps_the_first_as_previous(tmp_path, monkeypatch, capsys):
+    as_session(monkeypatch, FIRST)
+    assert role_main(tmp_path, monkeypatch, "take", "总设计师") == 0
+    as_session(monkeypatch, SECOND)
+    assert role_main(tmp_path, monkeypatch, "take", "总设计") == 0
+    assert f"previous holder: claude session {FIRST}" in capsys.readouterr().out
+    from dkitchen import roles
+    records = [json.loads(line) for line in roles.registry("o/r").read_text().splitlines()]
+    assert [record["id"] for record in records] == [FIRST, SECOND]
+    assert records[1]["previous"]["id"] == FIRST and records[1]["role"] == "总设计师"
+    assert role_main(tmp_path, monkeypatch, "总设计") == 0
+    assert capsys.readouterr().out == f"{SECOND}\n"
+
+
+@pytest.mark.parametrize("session, name", [(None, "总设计师"), (FIRST, "nobody-here")])
+def test_role_take_refuses_without_a_session_or_an_unknown_name(tmp_path, monkeypatch, capsys, session, name):
+    as_session(monkeypatch, session)
+    assert role_main(tmp_path, monkeypatch, "take", name) == 1
+    from dkitchen import roles
+    assert not roles.registry("o/r").exists()
+
+
+def test_role_nobody_has_taken_exits_nonzero(tmp_path, monkeypatch, capsys):
+    assert role_main(tmp_path, monkeypatch, "Verifier") == 1
+    assert "nobody has taken Verifier" in capsys.readouterr().err
+
+
+def test_two_repositories_keep_separate_registries(tmp_path, monkeypatch, capsys):
+    as_session(monkeypatch, FIRST)
+    def run(repo, *words):
+        loaded = config.Config(root=tmp_path, repo=repo)
+        monkeypatch.setattr(config, "load", lambda *args: loaded)
+        return ding.main(["role", *words])
+    assert run("o/one", "take", "Verifier") == 0
+    assert run("o/two", "Verifier") == 1
+    assert run("o/one", "Verifier") == 0
+
+
+def role_watch(tmp_path, monkeypatch, collect=lambda *args, **kwargs: [(watch.now(), "matching comment", True)]):
+    loaded = settings(tmp_path, ROLE_CONFIG)
+    monkeypatch.setattr(watch, "collect", collect)
+    monkeypatch.setattr(watch, "pr_wakes", lambda *args: ([], {}))
+    monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
+    args = SimpleNamespace(state=None, checkout=None, since=None, skip_issue=[], station="总设计",
+                           interval=90, settle=0, stale_hours=6, stale_every=3600, max_errors=2, stalled_hours=48)
+    return watch.watch(args, loaded)
+
+
+def take_role(tmp_path, monkeypatch, session):
+    as_session(monkeypatch, session)
+    assert role_main(tmp_path, monkeypatch, "take", "总设计师") == 0
+
+
+def test_watch_from_a_non_holder_refuses_to_start(tmp_path, monkeypatch, capsys):
+    take_role(tmp_path, monkeypatch, FIRST)
+    as_session(monkeypatch, SECOND)
+    assert role_watch(tmp_path, monkeypatch, collect=lambda *args, **kwargs: pytest.fail("polled")) == 3
+    assert f"role 总设计师 is held by {FIRST} since" in capsys.readouterr().err
+    assert not watch.default_state("o/r", "总设计").exists()
+
+
+def test_watch_from_the_holder_runs_and_exits_once_another_session_takes_the_role(tmp_path, monkeypatch, capsys):
+    take_role(tmp_path, monkeypatch, FIRST)
+    assert role_watch(tmp_path, monkeypatch) == 0
+    assert "matching comment" in capsys.readouterr().out
+    polls = []
+    def collect(*args, **kwargs):
+        if not polls:
+            as_session(monkeypatch, SECOND)
+            take_role(tmp_path, monkeypatch, SECOND)
+            as_session(monkeypatch, FIRST)
+        polls.append(1)
+        return []
+    assert role_watch(tmp_path, monkeypatch, collect=collect) == 3
+    assert f"role 总设计师 is held by {SECOND} since" in capsys.readouterr().out
+    assert len(polls) == 1
+
+
+@pytest.mark.parametrize("session", [None, FIRST])
+def test_watch_without_a_holder_or_session_runs_and_warns_once(tmp_path, monkeypatch, capsys, session):
+    as_session(monkeypatch, session)
+    calls = []
+    def collect(*args, **kwargs):
+        calls.append(1)
+        return [(watch.now(), "matching comment", True)] if len(calls) > 3 else []
+    assert role_watch(tmp_path, monkeypatch, collect=collect) == 0
+    err = capsys.readouterr().err
+    assert err.count("nobody has taken 总设计师" if session else "no Claude Code or Codex session id") == 1

@@ -422,6 +422,7 @@ These commands carry out the kitchen's routine steps, as the house rules in [kit
 | `ding log --item TEXT [--pending TEXT]` | Orchestrator | Posts a signed, UTC-stamped entry to the orchestrator log ticket: one line per `--item`, then the matters waiting for the user. |
 | `ding night open\|show\|close` | Orchestrator opens/closes; any role reads | Records night orders on `[log] issue`, shows the open orders and their link, or closes them. Orders expire at `--until`. Calls no model. |
 | `ding watch [--for NAME]` | A role, in the background | Waits for GitHub activity, prints it as one batch, and exits. `--for NAME` selects requests and explicit handoffs to that role. See [Watches](../kitchen/team/watch.md). |
+| `ding role take NAME`<br>`ding role [NAME]` | The session taking a role; anyone who needs its holder | `take` records the calling session's id (Claude Code host session id or Codex thread id) as NAME's holder on this host, for this repository, and prints the previous holder. Without NAME it lists every held role; with NAME it prints only the holder's id, for `SendMessage` or `ding send`, and exits 1 when nobody holds it. See [Role holders](#role-holders-role). |
 | `ding waits [--for NAME] [--minutes N] [--stalled-hours H] [--json]` | Any role | Lists overdue unanswered waits from the latest executor comment on each open ticket, oldest first, then under `stalled:` the lines that name no wait yet have not moved for H hours. Read-only; no model calls or watch state changes. |
 | `ding check [--base REF]` | Executor before hand-over; CI on every PR | Runs the repo checks set in `[check]`: layout rules on the files added since `--base` (default `origin/main`), then Ruff, import-linter and the repo's own checks on the whole tree, and the guard-change trailer rule. See [Repo checks](#repo-checks). |
 | `ding map [FOLDER…]` | Any role | Lists each Python module under the library areas, or the given folders, with the first line of its docstring. |
@@ -533,6 +534,14 @@ The default state file is `OWNER-REPO.for-NAME.json` under the watch state direc
 Terminal comment hints keep the first 100 characters and add `…` when shortened. Watch summaries keep the first 160 characters and PR titles the first 80, also adding `…` when shortened. Notification text, including `{first_line}`, carries the complete stripped first nonempty line.
 
 Run `ding watch --help` for the timing options.
+
+### Role holders: `role`
+
+Session names are not identities: a fork copies the name, and a handover leaves two sessions under it. `ding role take NAME`, run inside the session that takes the role, records that session's id instead. NAME is any name `ding watch --for` accepts as a configured role (`[stations]` names and `[stations.aliases]`), stored under its configured name, so `ding role ALIAS` finds the same holder. Outside a Claude Code or Codex session it refuses; nobody types an id by hand.
+
+Records are appended under a lock to `~/.local/state/ding/roles/OWNER-REPO.jsonl` as `{role, kind, id, taken_at, previous}`; the latest record per role wins and earlier ones stay as history. The ids are only valid on this host, and each repository keeps its own file.
+
+`ding watch`, and `ding watch --for NAME` for a configured role, read the holder at start and on each poll. When another session holds the role, the watch refuses to start (exit 3, on stderr), or a running watch prints `role NAME is held by ID since TIME` and exits 3 without advancing its state, which wakes the old session. When nobody has taken the role, or the watch runs with no session id (in tmux, say), it runs as before and says so once on stderr.
 
 ### Unanswered waits: `waits`
 

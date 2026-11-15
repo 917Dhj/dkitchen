@@ -22,6 +22,8 @@ With --for NAME, executor requests and explicit handoffs to that station wake; d
 Aliases and width-normalized names share the longest-name match. Configured paused executors never wake --for.
 Awaiting-user labels always suppress idle/stale checks; other status labels suppress only when newer than the comment.
 Station names, status words, and labels come from .dkitchen.toml.
+When `ding role take` recorded a holder for the watched role (the orchestrator without --for), a watch from another
+session refuses to start, and a running one exits once another session takes the role.
 """
 from __future__ import annotations
 
@@ -814,6 +816,37 @@ def default_state(repo: str, station: str | None = None) -> Path:
     return state / "ding/watch" / f"{repo.replace('/', '-')}{suffix}.json"
 
 
+def holder_check(config: Config, repo: str, station: str | None):
+    """A check that returns why the calling session must not watch this role, or None; warns once when it can't tell.
+
+    A watch belongs to the session that took the role with `ding role take`. Nothing is checked for a NAME that is
+    not a configured role.
+    """
+    from dkitchen import roles
+    role = roles.canonical(station if station is not None else config.stations.orchestrator, config)
+    caller = inbox.current_session()
+    if role is None:
+        return lambda: None
+    if caller is None:
+        print(f"ding: no Claude Code or Codex session id here, so the holder of {role} is not checked",
+              file=sys.stderr)
+        return lambda: None
+    warned = False
+
+    def moved() -> str | None:
+        nonlocal warned
+        record = roles.holder(role, repo)
+        if record is None:
+            if not warned:
+                print(f"ding: nobody has taken {role}; its session runs `ding role take {role}`", file=sys.stderr)
+                warned = True
+            return None
+        if (record.get("kind"), record["id"]) == caller:
+            return None
+        return f"role {role} is held by {record['id']} since {record.get('taken_at')}"
+    return moved
+
+
 def watch(args, config: Config) -> int:
     try:
         discarded = os.path.samestat(os.fstat(sys.stdout.fileno()), os.stat(os.devnull))
@@ -827,6 +860,10 @@ def watch(args, config: Config) -> int:
     if station is not None and station_variants(station, config) & station_variants(config.stations.orchestrator, config):
         station = None
     collect_options = {"station": station} if station is not None else {}
+    moved = holder_check(config, repo, station)
+    if message := moved():
+        print(f"ding: {message}; this watch is not started", file=sys.stderr)
+        return 3
     path = args.state or default_state(repo, station)
     checkout = args.checkout or config.root
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -859,6 +896,9 @@ def watch(args, config: Config) -> int:
                  or config.watch.executor_listener_minutes)
     idle_every = min(threshold * 20, 900) if station is None and threshold else float("inf")
     while True:
+        if message := moved():
+            print(f"{message}; this watch exits without advancing its state")
+            return 3
         polled = now()
         try:
             found = collect(config, repo, since, labels_since, seen, skip, **collect_options)
