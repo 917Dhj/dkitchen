@@ -65,7 +65,7 @@ Every key is optional. The defaults match the English templates in kitchen/:
     review_check = ""                   # e.g. "review": the commit status `ding review` writes and `ding merge` requires
     review_pass = "Reviewed {sha}: pass"                                 # first line of a passing review
     review_changes = "Reviewed {sha}: changes requested, see below"      # first line of a failing review
-    refresh = ""                        # e.g. "python -m hca review {pr} --refresh": run before merging; nonzero refuses
+    refresh = ""                        # e.g. "python -m hca review {pr} --refresh --base {tip}": run before merging; nonzero refuses
 
     [review]                             # `ding review --ticket N`: a verdict on a ticket's run stage
     verdict_pass = "Verdict: pass"                    # line 2 of a passing verdict, after the verifier's line 1
@@ -238,9 +238,10 @@ class Merge:
     review_changes: str = "Reviewed {sha}: changes requested, see below"
     refresh: str = ""
 
-    def refresh_argv(self, pr: int, sha: str) -> list[str]:
-        """The refresh command as argv, with {pr} and {sha} substituted in each word."""
-        return [word.replace("{pr}", str(pr)).replace("{sha}", sha) for word in shlex.split(self.refresh)]
+    def refresh_argv(self, pr: int, sha: str, tip: str) -> list[str]:
+        """The refresh command as argv, with {pr}, {sha} and {tip} substituted in each word."""
+        return [word.replace("{pr}", str(pr)).replace("{sha}", sha).replace("{tip}", tip)
+                for word in shlex.split(self.refresh)]
 
 
 @dataclass(frozen=True)

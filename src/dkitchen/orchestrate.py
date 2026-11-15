@@ -168,13 +168,14 @@ def branch_tip(config: Config, repo: str, branch: str) -> str:
 def refresh(config: Config, repo: str, number: int, pr: dict, branch: str) -> str | None:
     """Run [merge] refresh until the default-branch tip holds still across a run; return why the merge is refused.
 
-    The command decides whether the checks are stale against the tip and may replace a status on the HEAD, so the
-    required checks are read again after each run.
+    Each run gets the tip it must validate against as {tip}; the merge is safe only if that same tip is still the
+    tip afterwards. The command may replace a status on the HEAD, so the required checks are read again after each run.
     """
     sha = pr["headRefOid"]
     tip = branch_tip(config, repo, branch)
     for _ in range(REFRESH_RUNS):
-        argv = config.merge.refresh_argv(number, sha)
+        argv = config.merge.refresh_argv(number, sha, tip)
+        print(f"refresh against {branch} {tip[:8]}: {shlex.join(argv)}", flush=True)
         try:
             result = call(config, *argv)
         except OSError as error:
@@ -183,6 +184,8 @@ def refresh(config: Config, repo: str, number: int, pr: dict, branch: str) -> st
             lines = "\n".join((result.stdout + result.stderr).strip().splitlines()[-REFRESH_LINES:])
             return (f"refresh exited {result.returncode} against {branch} {tip[:8]} ({shlex.join(argv)}); merge refused"
                     + (f"\n{lines}" if lines else ""))
+        last = result.stdout.strip().splitlines()[-1:]
+        print(f"refresh passed{': ' + last[0] if last else ''}", flush=True)
         failures = readiness(config, repo, pr, branch)["reasons"]
         if failures:
             return "PR readiness blocks merge after refresh:\n" + "\n".join(failures)

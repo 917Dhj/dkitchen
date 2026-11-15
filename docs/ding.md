@@ -445,10 +445,12 @@ Checks that went green on the HEAD were computed against the default branch as i
 
 ```toml
 [merge]
-refresh = "python -m hca review {pr} --refresh"
+refresh = "python -m hca review {pr} --refresh --base {tip}"
 ```
 
-The default is `""` (off). The value is one command line, split like a shell would split it but not run through a shell; `{pr}` and `{sha}` are replaced in each word by the PR number and the full reviewed HEAD. After every other gate passes, `ding merge` reads the default branch's tip and runs the command in the repository root. The command decides whether anything is stale: it should exit 0 at once when the checks were computed against that tip, and otherwise test the merge with the tip and write a fresh status on the same HEAD. A nonzero exit, or a command that cannot start, refuses the merge and prints its last 20 lines of output. After a zero exit, `ding merge` reads the required and review checks on the HEAD again, since the command may have replaced a status, and reads the tip again. If the tip moved during the run, the command runs again; if it moved during each of 3 runs, the merge is refused with `<branch> kept moving`. Which checks to re-run is the repository's knowledge, kept behind this one command; `ding watch` and `ding waits` never run it.
+The default is `""` (off). The value is one command line, split like a shell would split it but not run through a shell. In each word, `{pr}` becomes the PR number, `{sha}` the full reviewed HEAD, and `{tip}` the full SHA of the default branch's tip that `ding merge` read for this run. After every other gate passes, `ding merge` reads that tip and runs the command in the repository root. The command must validate against `{tip}`, not its own idea of the default branch, such as a local `origin/main` that may not have been fetched: the merge is safe only because the commit the command checked is still the tip when `ding merge` merges. The command decides whether anything is stale: it should exit 0 at once when the checks were computed against `{tip}`, and otherwise test the merge with `{tip}` and write a fresh status on the same HEAD.
+
+Before each run `ding merge` prints `refresh against <branch> <tip8>: <command>`; after a zero exit it prints `refresh passed: ` and the command's last line of standard output. A nonzero exit, or a command that cannot start, refuses the merge and prints its last 20 lines of output. After a zero exit, `ding merge` reads the required and review checks on the HEAD again, since the command may have replaced a status, and reads the tip again. If the tip moved during the run, the command runs again with the new `{tip}`; if it moved during each of 3 runs, the merge is refused with `<branch> kept moving`. There is no timeout: a refresh that hangs keeps `ding merge` waiting in the foreground until it is interrupted. Which checks to re-run is the repository's knowledge, kept behind this one command; `ding watch` and `ding waits` never run it.
 
 ### Commit-bound review and PR readiness
 
@@ -683,7 +685,7 @@ required_checks = []                # e.g. ["ci"]; only success permits merging
 review_check = ""                   # e.g. "review": the status `ding review` writes and `ding merge` requires
 review_pass = "Reviewed {sha}: pass"                              # first line of a passing review
 review_changes = "Reviewed {sha}: changes requested, see below"   # first line of a failing review
-refresh = ""                        # e.g. "python -m hca review {pr} --refresh": `ding merge` runs it first; nonzero refuses
+refresh = ""                        # e.g. "python -m hca review {pr} --refresh --base {tip}": `ding merge` runs it first; nonzero refuses
 
 [review]                             # `ding review --ticket N`: a verdict on a ticket's run stage
 verdict_pass = "Verdict: pass"                   # line 2 of a passing verdict
