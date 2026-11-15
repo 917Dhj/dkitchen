@@ -4,11 +4,15 @@
   with the previous holder; refuses outside a session, and for a name other than the orchestrator, a designer line,
   or the verifier (aliases included).
 - role [NAME]: list every role with a holder, or print only NAME's holder id (exit 1 when nobody holds it).
+- role NAME --to: print the address that reaches NAME's holder now, for SendMessage's `to`: a Codex thread id, or
+  `uds:<socket>` of the one live Claude Code process with the holder's session id. Looked up fresh on every call:
+  a socket lives only as long as its process.
 Records go to ``$XDG_STATE_HOME/ding/roles/OWNER-REPO.jsonl``, appended under a lock; the latest record per role wins.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import sys
@@ -16,6 +20,9 @@ import sys
 from dkitchen import ding, inbox
 from dkitchen.config import Config
 from dkitchen.watch import designer_roles, role_variants
+
+
+PROC = Path("/proc")
 
 
 def registry(repo: str) -> Path:
@@ -77,9 +84,57 @@ def take(name: str, config: Config) -> int:
     return 0
 
 
-def show(name: str | None, config: Config) -> int:
+def process_start(pid: int) -> str | None:
+    """The process's start time in clock ticks since boot, as Claude Code records it in `procStart`; None if gone."""
+    try:
+        stat = (PROC / str(pid) / "stat").read_text()
+    except OSError:
+        return None
+    fields = stat.rsplit(")", 1)[-1].split()  # the command name before ")" may hold spaces
+    return fields[19] if len(fields) > 19 else None
+
+
+def live_processes(session_id: str) -> list[dict]:
+    """Claude Code process records for this session whose process still runs, the same process that wrote them.
+
+    Restarts leave old `<pid>.json` files behind, and their pids can be reused, so a record counts only when its
+    `procStart` equals the running process's start time.
+    """
+    root = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude") / "sessions"
+    found = []
+    for path in sorted(root.glob("*.json")):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if (isinstance(record, dict) and session_id in (record.get("hostSessionId"), record.get("sessionId"))
+                and isinstance(record.get("pid"), int) and record.get("messagingSocketPath")
+                and str(record.get("procStart")) == process_start(record["pid"])):
+            found.append(record)
+    return found
+
+
+def address(role: str, record: dict) -> str:
+    if record.get("kind") != "claude":
+        return record["id"]
+    live = live_processes(record["id"])
+    if not live:
+        raise ValueError(f"{role} is held by {record['id']}, but no live Claude Code process has it on this host")
+    if len(live) > 1:
+        listing = "\n".join(f"  pid {item['pid']}: uds:{item['messagingSocketPath']}" for item in live)
+        raise ValueError(f"{role} is held by {record['id']}, and {len(live)} live Claude Code processes have it:\n"
+                         f"{listing}")
+    socket = live[0]["messagingSocketPath"]
+    if not Path(socket).exists():
+        raise ValueError(f"{role} is held by {record['id']}, but its process {live[0]['pid']} has no socket at {socket}")
+    return f"uds:{socket}"
+
+
+def show(name: str | None, config: Config, *, to: bool = False) -> int:
     found = holders(config.repository())
     if name is None:
+        if to:
+            raise ValueError("--to needs a role: ding role NAME --to")
         for role, record in found.items():
             print(f"{role}\t{record.get('kind')}\t{record['id']}\t{record.get('taken_at')}")
         return 0
@@ -89,16 +144,16 @@ def show(name: str | None, config: Config) -> int:
     if role not in found:
         print(f"ding: nobody has taken {role}; its session runs `ding role take {role}`", file=sys.stderr)
         return 1
-    print(found[role]["id"])
+    print(address(role, found[role]) if to else found[role]["id"])
     return 0
 
 
 def role(args, config: Config) -> int:
-    words = args.words
+    words, to = args.words, getattr(args, "to", False)
     if words and words[0] == "take":
-        if len(words) != 2:
+        if len(words) != 2 or to:
             raise ValueError("usage: ding role take NAME")
         return take(words[1], config)
     if len(words) > 1:
-        raise ValueError("usage: ding role [NAME] | ding role take NAME")
-    return show(words[0] if words else None, config)
+        raise ValueError("usage: ding role [NAME [--to]] | ding role take NAME")
+    return show(words[0] if words else None, config, to=to)
