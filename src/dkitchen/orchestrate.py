@@ -175,7 +175,7 @@ def refresh(config: Config, repo: str, number: int, pr: dict, branch: str) -> st
     tip = branch_tip(config, repo, branch)
     for _ in range(REFRESH_RUNS):
         argv = config.merge.refresh_argv(number, sha, tip)
-        print(f"refresh against {branch} {tip[:8]}: {shlex.join(argv)}", flush=True)
+        print(f"ding: refresh against {branch} {tip[:8]}: {shlex.join(argv)}", file=sys.stderr, flush=True)
         try:
             result = call(config, *argv)
         except OSError as error:
@@ -185,7 +185,7 @@ def refresh(config: Config, repo: str, number: int, pr: dict, branch: str) -> st
             return (f"refresh exited {result.returncode} against {branch} {tip[:8]} ({shlex.join(argv)}); merge refused"
                     + (f"\n{lines}" if lines else ""))
         last = result.stdout.strip().splitlines()[-1:]
-        print(f"refresh passed{': ' + last[0] if last else ''}", flush=True)
+        print(f"ding: refresh passed{': ' + last[0] if last else ''}", file=sys.stderr, flush=True)
         failures = readiness(config, repo, pr, branch)["reasons"]
         if failures:
             return "PR readiness blocks merge after refresh:\n" + "\n".join(failures)

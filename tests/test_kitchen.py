@@ -359,7 +359,7 @@ def test_merge_refresh_failure_refuses_before_merging(tmp_path, monkeypatch, cap
     captured = capsys.readouterr()
     error = captured.err
     assert "refresh exited 1 against main t1" in error and "merge refused" in error
-    assert "refresh against main t1" in captured.out and "refresh passed" not in captured.out
+    assert "ding: refresh against main t1" in error and "refresh passed" not in error and captured.out == ""
     assert "line 29" in error and "boom" in error and "line 9\n" not in error
     assert calls[3] == ("gh", "api", "repos/o/r/git/ref/heads/main")
     assert not any(call[:3] == ("gh", "pr", "merge") for call in calls)
@@ -376,9 +376,10 @@ def test_merge_refresh_success_substitutes_pr_and_sha_and_rereads_checks(tmp_pat
     assert refresh_calls(calls) == [("hca-refresh", "7", "--head", "abc123", "--base", "t1", "a b")]
     assert calls[5][-1].endswith("commits/abc123/check-runs?filter=latest&per_page=100")
     assert calls[-2][:3] == ("gh", "pr", "merge") and calls[-2][-2:] == ("--match-head-commit", "abc123")
-    out = capsys.readouterr().out
-    assert "refresh against main t1: hca-refresh 7 --head abc123 --base t1 'a b'" in out
-    assert "refresh passed: fresh" in out and "PR #7 merged as m1" in out
+    captured = capsys.readouterr()
+    assert "ding: refresh against main t1: hca-refresh 7 --head abc123 --base t1 'a b'" in captured.err
+    assert "ding: refresh passed: fresh" in captured.err
+    assert captured.out == "PR #7 merged as m1\n"
     assert not responses
 
 
