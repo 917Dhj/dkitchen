@@ -1,12 +1,12 @@
 """Wait for GitHub activity the orchestrator must handle, print it, and exit; read-only, no model calls.
 
 Wakes on:
-- executor comments whose status is not "in progress", or whose "waiting on" names a station or the user;
+- executor comments whose status is not "in progress", or whose "waiting on" names a role or the user;
 - idle executors still marked "in progress", after [watch] idle_minutes with no running job;
 - Claude Code executors still marked "in progress" whose `ding inbox --wait` has been gone for
   [watch] executor_listener_minutes, once per executor comment;
 - unanswered designer/verifier requests older than [watch] design_answer_minutes, once per executor comment;
-- comments from the user (no station signature);
+- comments from the user (no role signature);
 - status labels being added, and newly opened PRs;
 - stalled lines, at most once a day each: open draft PRs, and in-progress tickets whose status names no wait,
   not updated for --stalled-hours;
@@ -18,10 +18,10 @@ In orchestrator mode, a verifier comment wakes only when it carries the `changes
 `ding review --ticket`; other verifier comments are listed in the next batch for reference.
 The state file keeps the time already reported, so rerunning the same command loses nothing.
 One watch runs per state file; a second one exits at once.
-With --for NAME, executor requests and explicit handoffs to that station wake; designer rulings do not.
+With --for NAME, executor requests and explicit handoffs to that role wake; designer rulings do not.
 Aliases and width-normalized names share the longest-name match. Configured paused executors never wake --for.
 Awaiting-user labels always suppress idle/stale checks; other status labels suppress only when newer than the comment.
-Station names, status words, and labels come from .dkitchen.toml.
+Role names, status words, and labels come from .dkitchen.toml.
 When `ding role take` recorded a holder for the watched role (the orchestrator without --for), a watch from another
 session refuses to start, and a running one exits once another session takes the role.
 """
@@ -83,11 +83,11 @@ def normalized(text: str) -> str:
 
 
 def signature_name(prefix: str, config: Config) -> str:
-    return prefix.rstrip().removesuffix(config.stations.separator.rstrip()).strip()
+    return prefix.rstrip().removesuffix(config.roles.separator.rstrip()).strip()
 
 
-def designer_stations(config: Config) -> list[str]:
-    names = [config.stations.designer]
+def designer_roles(config: Config) -> list[str]:
+    names = [config.roles.designer]
     names += [signature_name(signature, config) for signature in config.designer_signatures]
     unique = {}
     for name in names:
@@ -96,29 +96,29 @@ def designer_stations(config: Config) -> list[str]:
     return list(unique.values())
 
 
-def station_variants(station: str, config: Config) -> set[str]:
-    target = normalized(station)
+def role_variants(role: str, config: Config) -> set[str]:
+    target = normalized(role)
     result = {target}
-    for name, aliases in config.stations.aliases.items():
+    for name, aliases in config.roles.aliases.items():
         group = {normalized(name), *(normalized(alias) for alias in aliases)}
         if target in group:
             result.update(group)
     return result
 
 
-def station_names(config: Config) -> list[str]:
-    stations = config.stations
-    names = [stations.orchestrator, *designer_stations(config), stations.verifier, stations.executor,
-             stations.user, *stations.aliases]
+def role_names(config: Config) -> list[str]:
+    roles = config.roles
+    names = [roles.orchestrator, *designer_roles(config), roles.verifier, roles.executor,
+             roles.user, *roles.aliases]
     return list({normalized(name): name for name in names}.values())
 
 
-def named(text: str, station: str, config: Config, *, markers: tuple[str, ...] = (), signature: bool = False) -> bool:
+def named(text: str, role: str, config: Config, *, markers: tuple[str, ...] = (), signature: bool = False) -> bool:
     text = normalized(text)
-    targets = station_variants(station, config)
-    stations = config.stations
-    names = station_names(config)
-    choices = targets | {variant for name in names for variant in station_variants(name, config)}
+    targets = role_variants(role, config)
+    roles = config.roles
+    names = role_names(config)
+    choices = targets | {variant for name in names for variant in role_variants(name, config)}
     pattern = "|".join(map(re.escape, sorted(choices, key=len, reverse=True)))
     for match in re.finditer(pattern, text):
         if match.group() not in targets:
@@ -129,7 +129,7 @@ def named(text: str, station: str, config: Config, *, markers: tuple[str, ...] =
         if markers and before.endswith(markers):
             return True
         if (signature and not before.rsplit("\n", 1)[-1].strip()
-                and text[match.end():].startswith(normalized(stations.separator).rstrip())):
+                and text[match.end():].startswith(normalized(roles.separator).rstrip())):
             return True
     return False
 
@@ -139,34 +139,34 @@ def review_line(template: str) -> str:
     return "[0-9a-fA-F]{8}".join(re.escape(part) for part in normalized(template).strip().split("{sha}"))
 
 
-def role(body: str, config: Config) -> str:
-    """The station named at the start of the first line; otherwise the executor by a line starting with its
+def signer(body: str, config: Config) -> str:
+    """The role named at the start of the first line; otherwise the executor by a line starting with its
     session signature (`Codex session:`, or `Claude session:` for an executor run in Claude Code); else the user.
     A session signature quoted inside a line signs nothing."""
-    stations = config.stations
+    roles = config.roles
     first_line = next((line for line in body.splitlines() if line.strip()), "")
     first_line = normalized(first_line)
     if config.merge.review_check and any(re.fullmatch(review_line(line), first_line.strip())
                                          for line in (config.merge.review_pass, config.merge.review_changes)):
-        return stations.verifier
+        return roles.verifier
     first = re.sub(r"^[\s#*>]+", "", first_line)
     if (any(first_line.startswith(normalized(prefix)) or first.startswith(normalized(prefix))
             for prefix in config.designer_signatures)
-            or any(first.startswith(variant + normalized(stations.separator))
+            or any(first.startswith(variant + normalized(roles.separator))
                    for prefix in config.designer_signatures
-                   for variant in station_variants(signature_name(prefix, config), config))):
-        return stations.designer
-    signed = next((name for name in (stations.verifier, stations.orchestrator)
-                   if any(first.startswith(variant) for variant in station_variants(name, config))), None)
+                   for variant in role_variants(signature_name(prefix, config), config))):
+        return roles.designer
+    signed = next((name for name in (roles.verifier, roles.orchestrator)
+                   if any(first.startswith(variant) for variant in role_variants(name, config))), None)
     if signed:
         return signed
-    return stations.executor if re.search(r"(?m)^[ \t]*(?:Codex|Claude) session:", body) else stations.user
+    return roles.executor if re.search(r"(?m)^[ \t]*(?:Codex|Claude) session:", body) else roles.user
 
 
 def changes_verdict(body: str, config: Config) -> bool:
     """Whether a verifier comment carries the `changes` verdict line that `ding review --ticket` writes as line 2."""
     lines = [line for line in body.splitlines() if line.strip()]
-    return (len(lines) > 1 and role(body, config) == config.stations.verifier
+    return (len(lines) > 1 and signer(body, config) == config.roles.verifier
             and normalized(lines[1]).strip() == normalized(config.review.verdict_changes).strip())
 
 
@@ -184,46 +184,46 @@ def state_and_waiting(body: str, config: Config) -> tuple[str, str]:
 
 def executor_wakes(body: str, waiting_user: bool, config: Config) -> bool:
     state, waiting = state_and_waiting(body, config)
-    status, stations = config.status, config.stations
+    status, roles = config.status, config.roles
     names = lambda *who: any(waiting_for(body, name, config) for name in who)
-    kitchen = (stations.orchestrator, *designer_stations(config), stations.verifier)
+    kitchen = (roles.orchestrator, *designer_roles(config), roles.verifier)
     if waiting_user:
         return state in {status.blocked, status.done, status.waiting_on_design} or names(*kitchen)
-    return state not in {status.in_progress, status.paused} or names(*kitchen, stations.user)
+    return state not in {status.in_progress, status.paused} or names(*kitchen, roles.user)
 
 
-def waiting_for(body: str, station: str, config: Config) -> bool:
+def waiting_for(body: str, role: str, config: Config) -> bool:
     _, waiting = state_and_waiting(body, config)
     if waiting.startswith(config.status.none):
         return False
-    return named(waiting, station, config)
+    return named(waiting, role, config)
 
 
 def design_request(body: str, config: Config) -> list[str]:
     state, _ = state_and_waiting(body, config)
     if state == config.status.paused:
         return []
-    designers = [name for name in designer_stations(config) if waiting_for(body, name, config)]
-    return designers or ([config.stations.designer] if state == config.status.waiting_on_design else [])
+    designers = [name for name in designer_roles(config) if waiting_for(body, name, config)]
+    return designers or ([config.roles.designer] if state == config.status.waiting_on_design else [])
 
 
-def station_wakes(body: str, station: str, config: Config) -> bool:
-    who = role(body, config)
-    if who == config.stations.designer:
+def role_wakes(body: str, role: str, config: Config) -> bool:
+    who = signer(body, config)
+    if who == config.roles.designer:
         return False
-    if who == config.stations.executor:
+    if who == config.roles.executor:
         state, _ = state_and_waiting(body, config)
         if state == config.status.paused:
             return False
-        if waiting_for(body, station, config):
+        if waiting_for(body, role, config):
             return True
         if (state == config.status.waiting_on_design
-                and not any(waiting_for(body, name, config) for name in designer_stations(config))
-                and station_variants(station, config) & station_variants(config.stations.designer, config)):
+                and not any(waiting_for(body, name, config) for name in designer_roles(config))
+                and role_variants(role, config) & role_variants(config.roles.designer, config)):
             return True
         next_step = fields(body, config).get(config.status.fields[3], "") if len(config.status.fields) > 3 else ""
-        return named(next_step, station, config, markers=handoff(config))
-    return named(body, station, config, markers=("@", *handoff(config)), signature=True)
+        return named(next_step, role, config, markers=handoff(config))
+    return named(body, role, config, markers=("@", *handoff(config)), signature=True)
 
 
 def handoff(config: Config) -> tuple[str, ...]:
@@ -239,31 +239,31 @@ def summary(body: str, config: Config) -> str:
 
 
 def collect(config: Config, repo: str, since: str, labels_since: str, seen: set[str],
-            skip: set[int], station: str | None = None) -> list[tuple[str, str, bool]]:
+            skip: set[int], role: str | None = None) -> list[tuple[str, str, bool]]:
     """(time, line, wakes) for every item after the given times; comment and PR times use `since`."""
     awaiting = config.labels.awaiting_user
     waiting = ({issue["number"] for issue in gh(f"repos/{repo}/issues?state=open&labels={awaiting}&per_page=100")}
-               if station is None else set())
-    verifier, user, executor = config.stations.verifier, config.stations.user, config.stations.executor
+               if role is None else set())
+    verifier, user, executor = config.roles.verifier, config.roles.user, config.roles.executor
     found = []
     for comment in newer(f"repos/{repo}/issues/comments?since={since}&sort=updated&direction=desc", "updated_at", since):
         number, body = issue_number(comment["issue_url"]), comment["body"]
-        who = role(body, config)
+        who = signer(body, config)
         if number in skip:
             continue
-        if station is not None:
-            if not station_wakes(body, station, config):
+        if role is not None:
+            if not role_wakes(body, role, config):
                 continue
         elif not (who in {verifier, user} or (who == executor and executor_wakes(body, number in waiting, config))):
             continue
         kind = f"{who} comment" if comment["created_at"] >= since else f"{who} edited a comment"
-        listed = who == verifier and station is None
+        listed = who == verifier and role is None
         changes = listed and changes_verdict(body, config)
         note = (f" ({config.review.verdict_changes})" if changes else
                 f" ({verifier.lower()} reports separately; for reference)" if listed else "")
         found.append((comment["updated_at"], f"#{number} {kind}{note}: {summary(body, config)} {comment['html_url']}",
                       changes or not listed))
-    if station is None:
+    if role is None:
         for event in newer(f"repos/{repo}/issues/events?", "created_at", labels_since):
             label = (event.get("label") or {}).get("name", "")
             if event["event"] == "labeled" and label.startswith(config.labels.prefix) and event["issue"]["number"] not in skip:
@@ -365,17 +365,17 @@ def label_suppresses(config: Config, repo: str, issue: dict, comment: dict) -> b
     return any(added.get(name, "") > comment["created_at"] for name in labels)
 
 
-def answered_by(body: str, station: str, config: Config) -> bool:
-    who = role(body, config)
+def answered_by(body: str, role: str, config: Config) -> bool:
+    who = signer(body, config)
     first = normalized(next((line for line in body.splitlines() if line.strip()), ""))
     first = re.sub(r"^[\s#*>]+", "", first)
-    if who == config.stations.designer:
+    if who == config.roles.designer:
         for prefix in sorted(config.designer_signatures, key=len, reverse=True):
             if first.startswith(normalized(prefix)):
-                return bool(station_variants(station, config) & station_variants(signature_name(prefix, config), config))
-    elif station_variants(station, config) & station_variants(who, config):
+                return bool(role_variants(role, config) & role_variants(signature_name(prefix, config), config))
+    elif role_variants(role, config) & role_variants(who, config):
         return True
-    return named(first, station, config, signature=True)
+    return named(first, role, config, signature=True)
 
 
 def named_prs(waiting: str, repo: str) -> set[int]:
@@ -400,7 +400,7 @@ def own_pr(pr: dict, ticket: int) -> bool:
 
 def finished_prs(waiting: str, ticket: int, config: Config, repo: str,
                  cache: dict[int, dict]) -> tuple[set[str], str]:
-    """For a wait naming PRs: the stations whose rows it no longer needs, and a note for the rows it keeps.
+    """For a wait naming PRs: the roles whose rows it no longer needs, and a note for the rows it keeps.
 
     When every PR named is merged or closed and is the ticket's own, the review and merge are over: the orchestrator,
     the verifier, and each PR's `review:<NAME>` reviewer are dropped. When a finished PR belongs to another ticket,
@@ -419,18 +419,18 @@ def finished_prs(waiting: str, ticket: int, config: Config, repo: str,
     prs = {number: cache[number] for number in numbers}
     finished = {number: pr for number, pr in prs.items() if pr.get("state") != "open"}
     if len(finished) == len(prs) and all(own_pr(pr, ticket) for pr in prs.values()):
-        stations = {config.stations.orchestrator, config.stations.verifier}
+        roles = {config.roles.orchestrator, config.roles.verifier}
         for pr in prs.values():
-            stations.update(label["name"][7:].strip() for label in pr.get("labels", [])
-                            if label["name"].startswith("review:") and label["name"][7:].strip())
-        return stations, ""
+            roles.update(label["name"][7:].strip() for label in pr.get("labels", [])
+                         if label["name"].startswith("review:") and label["name"][7:].strip())
+        return roles, ""
     return set(), "; ".join(f"PR #{number} {'merged' if pr.get('merged_at') else 'closed'}"
                             for number, pr in finished.items())
 
 
 def unanswered_waits(config: Config, repo: str, minutes: float, skip: set[int], *,
-                     stations: list[str] | None = None, design_fallback: bool = False) -> list[dict]:
-    names = station_names(config) if stations is None else stations
+                     roles: list[str] | None = None, design_fallback: bool = False) -> list[dict]:
+    names = role_names(config) if roles is None else roles
     moment = datetime.now(timezone.utc)
     found, prs = [], {}
     for issue in open_issues(repo):
@@ -438,12 +438,12 @@ def unanswered_waits(config: Config, repo: str, minutes: float, skip: set[int], 
             continue
         answered = set()
         for comment in comments_backwards(repo, issue):
-            who = role(comment["body"], config)
-            if who != config.stations.executor:
+            who = signer(comment["body"], config)
+            if who != config.roles.executor:
                 answered.update(name for name in names if answered_by(comment["body"], name, config))
-                if design_fallback and who == config.stations.designer:
-                    # Existing watch reminders accept a reply from any designer station.
-                    answered.update(set(names) & set(designer_stations(config)))
+                if design_fallback and who == config.roles.designer:
+                    # Existing watch reminders accept a reply from any designer role.
+                    answered.update(set(names) & set(designer_roles(config)))
                 if len(answered) == len(names):
                     break
                 continue
@@ -457,13 +457,13 @@ def unanswered_waits(config: Config, repo: str, minutes: float, skip: set[int], 
                 done, note = (finished_prs(state_and_waiting(comment["body"], config)[1], issue["number"], config,
                                            repo, prs) if waiting else (set(), ""))
                 for name in waiting:
-                    if not any(station_variants(name, config) & station_variants(other, config) for other in done):
-                        found.append({"ticket": issue["number"], "station": name, "minutes": elapsed,
+                    if not any(role_variants(name, config) & role_variants(other, config) for other in done):
+                        found.append({"ticket": issue["number"], "role": name, "minutes": elapsed,
                                       "summary": summary(comment["body"], config) + (f" ({note})" if note else ""),
                                       "url": comment["html_url"],
                                       "comment_id": comment["id"], "created_at": comment["created_at"]})
             break
-    return sorted(found, key=lambda item: (item["created_at"], item["ticket"], item["station"]))
+    return sorted(found, key=lambda item: (item["created_at"], item["ticket"], item["role"]))
 
 
 def pr_waits(config: Config, repo: str, skip: set[int]) -> list[dict]:
@@ -524,7 +524,7 @@ def pr_waits(config: Config, repo: str, skip: set[int]) -> list[dict]:
                 raise RuntimeError(f"PR #{pr['number']} has too many labels to route its review safely")
             reviewers = [label["name"][7:].strip() for label in pr["labels"]["nodes"]
                          if label["name"].startswith("review:") and label["name"][7:].strip()]
-            reviewer = reviewers[0] if reviewers else config.stations.verifier
+            reviewer = reviewers[0] if reviewers else config.roles.verifier
             kind = "blocked"
             if result["ready"]:
                 kind = "ready"
@@ -534,27 +534,27 @@ def pr_waits(config: Config, repo: str, skip: set[int]) -> list[dict]:
                 kind = "review-missing"
             elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(pr["updatedAt"].replace("Z", "+00:00"))).total_seconds() / 60
             found.append({"ticket": pr["number"], "head": pr["headRefOid"], "kind": kind,
-                          "station": reviewer if kind == "review-missing" else config.stations.orchestrator,
+                          "role": reviewer if kind == "review-missing" else config.roles.orchestrator,
                           "minutes": elapsed, "created_at": pr["updatedAt"], "url": pr["url"],
                           "summary": kind + (": " + "; ".join(result["reasons"]) if result["reasons"] else ""),
                           "pending_only": result["pending_only"], "reasons": result["reasons"]})
     return found
 
 
-def pr_wakes(config: Config, repo: str, station: str | None, reported: set[str], observed: dict,
+def pr_wakes(config: Config, repo: str, role: str | None, reported: set[str], observed: dict,
              skip: set[int]) -> tuple[list[tuple[str, str, str]], dict]:
     found, pending = [], {}
     moment = now()
-    target = station or config.stations.orchestrator
-    orchestrator = bool(station_variants(target, config) & station_variants(config.stations.orchestrator, config))
+    target = role or config.roles.orchestrator
+    orchestrator = bool(role_variants(target, config) & role_variants(config.roles.orchestrator, config))
     for item in pr_waits(config, repo, skip):
         kind = item["kind"]
         key = f"{item['ticket']}:{item['head']}:{kind}"
         since = observed.get(key, moment)
         pending[key] = since
-        line = f"PR #{item['ticket']} {item['summary']}; waiting on {item['station']} {item['url']}"
+        line = f"PR #{item['ticket']} {item['summary']}; waiting on {item['role']} {item['url']}"
         if (not (kind == "blocked" and item["pending_only"]) and key not in reported and
-                station_variants(target, config) & station_variants(item["station"], config)):
+                role_variants(target, config) & role_variants(item["role"], config)):
             found.append((moment, line, key))
         elapsed = (datetime.fromisoformat(moment.replace("Z", "+00:00")) -
                    datetime.fromisoformat(since.replace("Z", "+00:00"))).total_seconds() / 60
@@ -577,11 +577,11 @@ def unrouted_waits(config: Config, repo: str, checkout: Path, reported: set[int]
         latest = None
         for comment in comments_backwards(repo, issue):
             latest = latest or comment
-            if role(comment["body"], config) != config.stations.executor:
+            if signer(comment["body"], config) != config.roles.executor:
                 continue
             state, waiting = state_and_waiting(comment["body"], config)
             if (state == config.status.in_progress and waiting and not waiting.startswith(config.status.none)
-                    and not any(named(waiting, name, config) for name in station_names(config))
+                    and not any(named(waiting, name, config) for name in role_names(config))
                     and comment["id"] not in reported
                     and max(latest.get("updated_at", latest["created_at"]),
                             comment.get("updated_at", comment["created_at"])) < cutoff):
@@ -608,7 +608,7 @@ def stalled(config: Config, repo: str, checkout: Path, hours: float, skip: set[i
     while True:
         pulls = gh(f"repos/{repo}/pulls?state=open&sort=updated&direction=asc&per_page=100&page={page}")
         fresh = [pull for pull in pulls if pull["updated_at"] >= cutoff]
-        found += [{"ticket": pull["number"], "pr": True, "kind": "stalled", "station": config.stations.orchestrator,
+        found += [{"ticket": pull["number"], "pr": True, "kind": "stalled", "role": config.roles.orchestrator,
                    "minutes": age(pull["updated_at"]), "created_at": pull["updated_at"], "url": pull["html_url"],
                    "summary": f"draft: {truncate(pull['title'], 120)}"}
                   for pull in pulls if pull["updated_at"] < cutoff and pull.get("draft") and pull["number"] not in skip]
@@ -624,13 +624,13 @@ def stalled(config: Config, repo: str, checkout: Path, hours: float, skip: set[i
         if issue["number"] in running:
             continue
         last = next((comment for comment in comments_backwards(repo, issue)
-                     if role(comment["body"], config) == config.stations.executor), None)
+                     if signer(comment["body"], config) == config.roles.executor), None)
         if last is None:
             continue
         state, waiting = state_and_waiting(last["body"], config)
         if state == config.status.in_progress and (not waiting or waiting.startswith(config.status.none)):
             found.append({"ticket": issue["number"], "pr": False, "kind": "stalled",
-                          "station": config.stations.orchestrator, "minutes": age(issue["updated_at"]),
+                          "role": config.roles.orchestrator, "minutes": age(issue["updated_at"]),
                           "created_at": issue["updated_at"], "url": last["html_url"],
                           "summary": summary(last["body"], config)})
     return sorted(found, key=lambda item: (item["created_at"], item["ticket"]))
@@ -642,23 +642,23 @@ def stalled_line(item: dict) -> str:
 
 
 def waits(args, config: Config) -> int:
-    names = station_names(config)
-    if args.station is not None:
-        names = [name for name in names if station_variants(name, config) & station_variants(args.station, config)]
+    names = role_names(config)
+    if args.role is not None:
+        names = [name for name in names if role_variants(name, config) & role_variants(args.role, config)]
     minutes = config.watch.design_answer_minutes if args.minutes is None else args.minutes
-    found = unanswered_waits(config, config.repository(), minutes, set(), stations=names) if names else []
+    found = unanswered_waits(config, config.repository(), minutes, set(), roles=names) if names else []
     found += [item for item in pr_waits(config, config.repository(), set())
-              if item["minutes"] > minutes and (args.station is None or
-                 station_variants(args.station, config) & station_variants(item["station"], config))]
-    found.sort(key=lambda item: (item["created_at"], item["ticket"], item["station"]))
+              if item["minutes"] > minutes and (args.role is None or
+                 role_variants(args.role, config) & role_variants(item["role"], config))]
+    found.sort(key=lambda item: (item["created_at"], item["ticket"], item["role"]))
     quiet = (stalled(config, config.repository(), config.root, args.stalled_hours, set())
-             if args.station is None or station_variants(args.station, config)
-             & station_variants(config.stations.orchestrator, config) else [])
+             if args.role is None or role_variants(args.role, config)
+             & role_variants(config.roles.orchestrator, config) else [])
     if args.json:
-        print(json.dumps(found + quiet, ensure_ascii=False))
+        print(json.dumps([{**item, "station": item["role"]} for item in found + quiet], ensure_ascii=False))
     else:
         for item in found:
-            print(f"{'PR ' if 'head' in item else ''}#{item['ticket']} waiting on {item['station']} for {item['minutes']:.0f} minutes: "
+            print(f"{'PR ' if 'head' in item else ''}#{item['ticket']} waiting on {item['role']} for {item['minutes']:.0f} minutes: "
                   f"{item['summary']} {item['url']}")
         if quiet:
             print("stalled:")
@@ -670,14 +670,14 @@ def waits(args, config: Config) -> int:
 def unanswered_design(config: Config, repo: str, reported: set[int], skip: set[int]) -> list[tuple[str, str, int]]:
     if config.watch.design_answer_minutes == 0:
         return []
-    designers = designer_stations(config)
+    designers = designer_roles(config)
     found = {}
     for item in unanswered_waits(config, repo, config.watch.design_answer_minutes, skip,
-                                 stations=[*designers, config.stations.verifier], design_fallback=True):
+                                 roles=[*designers, config.roles.verifier], design_fallback=True):
         if item["comment_id"] not in reported:
-            found.setdefault(item["comment_id"], (item, []))[1].append(item["station"])
+            found.setdefault(item["comment_id"], (item, []))[1].append(item["role"])
     return [(item["created_at"], f"#{item['ticket']} waiting on {', '.join(names)} for {item['minutes']:.0f} minutes "
-             f"with no {'designer' if all(name in designers for name in names) else 'station'} reply: "
+             f"with no {'designer' if all(name in designers for name in names) else 'role'} reply: "
              f"{item['summary']} {item['url']}", item["comment_id"]) for item, names in found.values()]
 
 
@@ -695,7 +695,7 @@ def stale(config: Config, repo: str, checkout: Path, hours: float, reported: set
         if issue["number"] in running:
             continue
         last = gh(f"repos/{repo}/issues/{issue['number']}/comments?per_page=1&page={issue['comments']}")[-1]
-        if (last["id"] not in reported and role(last["body"], config) == config.stations.executor
+        if (last["id"] not in reported and signer(last["body"], config) == config.roles.executor
                 and state_and_waiting(last["body"], config)[0] == config.status.in_progress
                 and not label_suppresses(config, repo, issue, last)):
             found.append((last["created_at"], f"#{issue['number']} executor silent for over {hours:g} hours, with no "
@@ -732,7 +732,7 @@ def idle(config: Config, repo: str, checkout: Path, observed: dict, reported: se
                 or any(status not in {"idle", "notLoaded"} for status in sessions[number])):
             continue
         last = next((comment for comment in comments_backwards(repo, issue)
-                     if role(comment["body"], config) == config.stations.executor), None)
+                     if signer(comment["body"], config) == config.roles.executor), None)
         if (last is None or last["id"] in reported
                 or state_and_waiting(last["body"], config)[0] != config.status.in_progress
                 or label_suppresses(config, repo, issue, last)):
@@ -776,7 +776,7 @@ def missing_waiters(config: Config, repo: str, reported: set[int], skip: set[int
                 continue
             last, owner = None, None
             for comment in comments_backwards(repo, issue):
-                if last is None and role(comment["body"], config) == config.stations.executor:
+                if last is None and signer(comment["body"], config) == config.roles.executor:
                     last = comment
                 owner = owner or next(reversed(owner_references(comment["body"])), None)
                 if last is not None and owner is not None:
@@ -810,20 +810,20 @@ def stalled_wakes(config: Config, repo: str, checkout: Path, hours: float, repor
     return found, current
 
 
-def default_state(repo: str, station: str | None = None) -> Path:
+def default_state(repo: str, role: str | None = None) -> Path:
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
-    suffix = ".for-" + quote(station, safe="") if station is not None else ""
+    suffix = ".for-" + quote(role, safe="") if role is not None else ""
     return state / "ding/watch" / f"{repo.replace('/', '-')}{suffix}.json"
 
 
-def holder_check(config: Config, repo: str, station: str | None):
+def holder_check(config: Config, repo: str, watched: str | None):
     """A check that returns why the calling session must not watch this role, or None; warns once when it can't tell.
 
     A watch belongs to the session that took the role with `ding role take`. Nothing is checked for a NAME that is
     not a standing role (the orchestrator, a designer line, or the verifier).
     """
     from dkitchen import roles
-    role = roles.canonical(station if station is not None else config.stations.orchestrator, config)
+    role = roles.canonical(watched if watched is not None else config.roles.orchestrator, config)
     caller = inbox.current_session()
     if role is None:
         return lambda: None
@@ -856,15 +856,15 @@ def watch(args, config: Config) -> int:
         print("ding: watch stdout is /dev/null; use a pipe or a file so its batch is not lost", file=sys.stderr)
         return 3
     repo = config.repository()
-    station = getattr(args, "station", None)
-    if station is not None and station_variants(station, config) & station_variants(config.stations.orchestrator, config):
-        station = None
-    collect_options = {"station": station} if station is not None else {}
-    moved = holder_check(config, repo, station)
+    role = getattr(args, "role", None)
+    if role is not None and role_variants(role, config) & role_variants(config.roles.orchestrator, config):
+        role = None
+    collect_options = {"role": role} if role is not None else {}
+    moved = holder_check(config, repo, role)
     if message := moved():
         print(f"ding: {message}; this watch is not started", file=sys.stderr)
         return 3
-    path = args.state or default_state(repo, station)
+    path = args.state or default_state(repo, role)
     checkout = args.checkout or config.root
     path.parent.mkdir(parents=True, exist_ok=True)
     lock = path.with_suffix(".lock").open("w")
@@ -887,14 +887,14 @@ def watch(args, config: Config) -> int:
     skip = set(args.skip_issue) | ({config.log.issue} if config.log.issue else set())
     # Label changes made while the orchestrator was handling the last batch are its own; skip them.
     labels_since = state.get("labels_since", max(since, started) if path.exists() else since)
-    detail = (f"comments and PRs since {since}, labels since {labels_since}" if station is None
-              else f"requests and handoffs to {station!r} since {since}")
+    detail = (f"comments and PRs since {since}, labels since {labels_since}" if role is None
+              else f"requests and handoffs to {role!r} since {since}")
     print(f"Watching {repo}: {detail}", file=sys.stderr)
     errors = 0
-    next_stale = next_idle = 0.0 if station is None else float("inf")
+    next_stale = next_idle = 0.0 if role is None else float("inf")
     threshold = (config.watch.idle_minutes or config.watch.design_answer_minutes or config.watch.unrouted_wait_minutes
                  or config.watch.executor_listener_minutes)
-    idle_every = min(threshold * 20, 900) if station is None and threshold else float("inf")
+    idle_every = min(threshold * 20, 900) if role is None and threshold else float("inf")
     while True:
         if message := moved():
             print(f"{message}; this watch exits without advancing its state")
@@ -902,7 +902,7 @@ def watch(args, config: Config) -> int:
         polled = now()
         try:
             found = collect(config, repo, since, labels_since, seen, skip, **collect_options)
-            pr_found, pr_pending = pr_wakes(config, repo, station, pr_reported, pr_observed, skip)
+            pr_found, pr_pending = pr_wakes(config, repo, role, pr_reported, pr_observed, skip)
             quiet, idle_found, design_found, pending, stale_ids = [], [], [], observed, set()
             unrouted_found, waiter_found, stalled_found, stalled_current = [], [], [], None
             checked_at = time.monotonic()

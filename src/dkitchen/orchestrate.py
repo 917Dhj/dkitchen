@@ -24,16 +24,16 @@ from dkitchen.config import Config
 
 
 def signed(text: str, config: Config) -> str:
-    signature = config.stations.signature(config.stations.orchestrator)
+    signature = config.roles.signature(config.roles.orchestrator)
     text = text.strip()
     return text if text.startswith(signature.rstrip()) else signature + text
 
 
 def log_body(items: list[str], pending: list[str], moment: datetime, config: Config) -> str:
-    stations = config.stations
-    lines = [f"{stations.signature(stations.orchestrator)}{moment.astimezone(timezone.utc):%H:%M} UTC",
+    roles = config.roles
+    lines = [f"{roles.signature(roles.orchestrator)}{moment.astimezone(timezone.utc):%H:%M} UTC",
              *(f"- {item}" for item in items),
-             f"- {config.log.pending}{stations.separator}{'; '.join(pending) or config.status.none}"]
+             f"- {config.log.pending}{roles.separator}{'; '.join(pending) or config.status.none}"]
     return "\n".join(lines)
 
 
@@ -245,9 +245,9 @@ def relay(args, config: Config) -> int:
     queue = getattr(args, "queue", False)
     text = signed(message, config)
     if not queue:
-        signature = config.stations.signature(config.stations.orchestrator)
+        signature = config.roles.signature(config.roles.orchestrator)
         text = f"{signature}{config.relay.superseding}\n{text[len(signature.rstrip()):].lstrip()}"
-    send = ["send", target, "--from", config.stations.orchestrator, "--message", text]
+    send = ["send", target, "--from", config.roles.orchestrator, "--message", text]
     if not queue:
         send += ["--steer", "--supersede"]
     if getattr(args, "interrupt", False):

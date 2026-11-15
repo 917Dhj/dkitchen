@@ -34,12 +34,12 @@ def first_line(text: str) -> str:
 
 def format_problem(draft: str, config: Config) -> str | None:
     """Why the draft's first two lines are wrong, or None when they are right."""
-    stations, rule = config.stations, config.rule
+    roles, rule = config.roles, config.rule
     lines = draft.split("\n")
     if not lines[0].startswith(config.designer_signatures):
         signatures = " or ".join(repr(signature) for signature in config.designer_signatures)
         return f"line 1 must start with {signatures}, not {truncate(lines[0], 40)!r}"
-    label = f"{rule.type_label}{stations.separator}"
+    label = f"{rule.type_label}{roles.separator}"
     if len(lines) < 2 or not lines[1].startswith(label):
         return f"line 2 must start with {label!r}, not {truncate(lines[1] if len(lines) > 1 else '', 40)!r}"
     kind = ruling_type(draft, config)
@@ -50,7 +50,7 @@ def format_problem(draft: str, config: Config) -> str | None:
 
 def ruling_type(draft: str, config: Config) -> str:
     """The type on line 2 of a draft whose first two lines `format_problem` accepts."""
-    return draft.split("\n")[1][len(config.rule.type_label) + len(config.stations.separator):].strip()
+    return draft.split("\n")[1][len(config.rule.type_label) + len(config.roles.separator):].strip()
 
 
 def notify_target(args, config: Config, ticket: int, draft: str) -> str | None:
@@ -117,7 +117,7 @@ def notify(config: Config, args, target: str | None, ticket: int, url: str, draf
     hint = ("" if args.notify is not None else
             f" It went to {target} because the ruling's type notifies by default; when a ruling of this type is "
             "not for the ticket's executor, pass --no-notify.")
-    return deliver(target, config.stations.designer, message, url, hint)
+    return deliver(target, config.roles.designer, message, url, hint)
 
 
 def deliver(target: str, sender: str, message: str, url: str, hint: str = "") -> int:

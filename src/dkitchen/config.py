@@ -4,16 +4,16 @@ Every key is optional. The defaults match the English templates in kitchen/:
 
     repo = "owner/name"                  # default: the repository gh sees here
 
-    [stations]
+    [roles]
     orchestrator = "Orchestrator"
     designer = "Designer"
     verifier = "Verifier"
     executor = "Executor"
     user = "User"
-    separator = ": "                     # written after a station name to sign a comment, e.g. "：" in Chinese
+    separator = ": "                     # written after a role name to sign a comment, e.g. "：" in Chinese
 
-    # [stations.aliases]
-    # "Training designer" = ["Training"]  # optional equivalent station names
+    # [roles.aliases]
+    # "Training designer" = ["Training"]  # optional equivalent role names
 
     [status]
     fields = ["Status", "Waiting on", "Key numbers", "Next"]   # first: the state; second: who it waits on
@@ -55,10 +55,10 @@ Every key is optional. The defaults match the English templates in kitchen/:
 
     [watch]
     idle_minutes = 45                    # 0 disables idle-executor wakes
-    design_answer_minutes = 30           # 0 disables unanswered-station and PR backstops
-    unrouted_wait_minutes = 30           # 0 disables unknown-station wait reminders
+    design_answer_minutes = 30           # 0 disables unanswered-role and PR backstops
+    unrouted_wait_minutes = 30           # 0 disables unknown-role wait reminders
     executor_listener_minutes = 30       # 0 disables wakes for a Claude Code executor without `ding inbox --wait`
-    handoff = ["hand to "]               # written right before a station name to hand it work, e.g. ["交"]
+    handoff = ["hand to "]               # written right before a role name to hand it work, e.g. ["交"]
 
     [merge]
     required_checks = []                # e.g. ["hca-check"]; only success permits merging
@@ -108,10 +108,11 @@ else:
 from dkitchen import ding
 
 FILE = ".dkitchen.toml"
+RENAME_WARNED: set[Path] = set()  # files already warned about [stations] in this process
 
 
 @dataclass(frozen=True)
-class Stations:
+class Roles:
     orchestrator: str = "Orchestrator"
     designer: str = "Designer"
     verifier: str = "Verifier"
@@ -347,7 +348,7 @@ def session_template(value: object) -> str:
 class Config:
     root: Path
     repo: str | None = None
-    stations: Stations = Stations()
+    roles: Roles = Roles()
     status: Status = Status()
     labels: Labels = Labels()
     log: Log = Log()
@@ -364,7 +365,7 @@ class Config:
 
     @property
     def designer_signatures(self) -> tuple[str, ...]:
-        return self.rule.signatures or (self.stations.signature(self.stations.designer),)
+        return self.rule.signatures or (self.roles.signature(self.roles.designer),)
 
     def repository(self) -> str:
         """The configured repository, or the one gh sees from the repository root."""
@@ -440,12 +441,12 @@ def section(cls, values: object, name: str):
                 raise ValueError(f"{FILE}: [watch] {key} must be a nonnegative finite number of minutes")
         elif key == "aliases":
             if (not isinstance(value, dict) or any(
-                    not isinstance(station, str) or not station.strip()
+                    not isinstance(role, str) or not role.strip()
                     or not isinstance(aliases, list) or not aliases
                     or not all(isinstance(alias, str) and alias.strip() for alias in aliases)
-                    for station, aliases in value.items())):
-                raise ValueError(f"{FILE}: [stations.aliases] must map station names to nonempty lists of names")
-            value = {station.strip(): tuple(alias.strip() for alias in aliases) for station, aliases in value.items()}
+                    for role, aliases in value.items())):
+                raise ValueError(f"{FILE}: [roles.aliases] must map role names to nonempty lists of names")
+            value = {role.strip(): tuple(alias.strip() for alias in aliases) for role, aliases in value.items()}
         elif key == "notify":
             needed = ("{url}", "{verdict}") if cls is Review else ("{url}",)
             if not isinstance(value, str) or not all(field in value for field in needed):
@@ -509,9 +510,16 @@ def load(cwd: Path | None = None) -> Config:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(f"{path}: {exc}") from exc
-    sections = {"stations": Stations, "status": Status, "labels": Labels, "log": Log, "sessions": Sessions, "relay": Relay,
+    sections = {"roles": Roles, "status": Status, "labels": Labels, "log": Log, "sessions": Sessions, "relay": Relay,
                 "rule": Rule, "launch": Launch, "executor": Executor, "watch": Watch, "night": Night, "merge": Merge,
                 "review": Review}
+    if "stations" in data:
+        if "roles" in data:
+            raise ValueError(f"{FILE}: [stations] and [roles] are the same section; keep only [roles]")
+        if path not in RENAME_WARNED:
+            RENAME_WARNED.add(path)
+            print(f"{FILE}: [stations] is now [roles]; rename the section", file=sys.stderr)
+        data["roles"] = data.pop("stations")
     unknown = sorted(set(data) - {"repo", "check", "build", *sections})
     if unknown:
         raise ValueError(f"{FILE}: unknown keys: {', '.join(unknown)}")

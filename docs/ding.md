@@ -475,7 +475,7 @@ ding review --ticket 42 pass --body-file verdict.md
 ding review --ticket 42 changes --body-file findings.md
 ```
 
-A verdict on a run stage of a ticket, such as a first batch or a final state, goes on the ticket, not on a PR, and writes no commit status. The file's line 1 must start with the verifier's signature (`[stations] verifier` plus the separator, by default `Verifier: `), and N must be a ticket, not a PR (a PR number is refused with a pointer to `ding review PR SHA`), or nothing is posted. The comment is the file with `[review] verdict_pass` or `verdict_changes` inserted as line 2. On `changes` a third line hands the ticket to its design line, the first `[watch] handoff` word followed by its name (by default `hand to Designer`): the first designer role or alias named in the ticket body's first three nonempty lines, or, when they name none and the first is the `[sessions] parent` line, in the parent's; otherwise `[stations] designer`. It prints only the comment URL on stdout, then sends `[review] notify` plus the file's first nonempty line, unless the template holds `{first_line}`, to `'#42'`, the ticket's executor, with `ding send --from` the verifier. As with `ding rule`, `no_listener` exits 0 and says not to resend, and any other failed delivery exits 1 and keeps the comment.
+A verdict on a run stage of a ticket, such as a first batch or a final state, goes on the ticket, not on a PR, and writes no commit status. The file's line 1 must start with the verifier's signature (`[roles] verifier` plus the separator, by default `Verifier: `), and N must be a ticket, not a PR (a PR number is refused with a pointer to `ding review PR SHA`), or nothing is posted. The comment is the file with `[review] verdict_pass` or `verdict_changes` inserted as line 2. On `changes` a third line hands the ticket to its design line, the first `[watch] handoff` word followed by its name (by default `hand to Designer`): the first designer role or alias named in the ticket body's first three nonempty lines, or, when they name none and the first is the `[sessions] parent` line, in the parent's; otherwise `[roles] designer`. It prints only the comment URL on stdout, then sends `[review] notify` plus the file's first nonempty line, unless the template holds `{first_line}`, to `'#42'`, the ticket's executor, with `ding send --from` the verifier. As with `ding rule`, `no_listener` exits 0 and says not to resend, and any other failed delivery exits 1 and keeps the comment.
 
 The orchestrator's `ding watch` wakes on a comment whose line 2 is `verdict_changes`, and the design line's `ding watch --for` wakes on its handoff. A `pass` verdict, like any other verifier comment, is listed in the orchestrator's next batch for reference without waking it. The verdict carries no release: whether the executor goes on after a pass is the repository's rule.
 
@@ -498,18 +498,18 @@ ding watch --for '总设计（训练）'
 
 Using the orchestrator's name or any of its aliases selects the complete orchestrator watch, including comment collection, stale/idle checks and all backstops, with the same default state file as bare `ding watch`. Other targets use the role watch described below.
 
-Use the role's name or a `review:<NAME>` label target. This mode wakes for executor comments whose waiting-on field names the role, including on awaiting-user tickets, or whose Next field contains a `[watch] handoff` word followed by NAME (by default `hand to NAME`). An executor marked `[status] waiting_on_design` with no designer named in its waiting field wakes the default `[stations] designer`.
+Use the role's name or a `review:<NAME>` label target. This mode wakes for executor comments whose waiting-on field names the role, including on awaiting-user tickets, or whose Next field contains a `[watch] handoff` word followed by NAME (by default `hand to NAME`). An executor marked `[status] waiting_on_design` with no designer named in its waiting field wakes the default `[roles] designer`.
 
 Verifier, orchestrator, and user comments wake the role only when they contain `@NAME`, a handoff word followed by NAME, or a line starting with `NAME` followed by the configured separator. Designer comments, including the role's own rulings, never trigger a role watch. A configured `[status] paused` executor never triggers `--for`; the orchestrator treats that status like in progress.
 
 A role watch skips issue-label events, newly opened PR events, stale/idle checks, ticket backstops, board, and tmux. With `review_check` configured it also polls PR readiness and reviewer labels. `--settle`, `--skip-issue`, the log-ticket exclusion, and bounded error retries still apply.
 
-Names are compared after width normalization, so `总设计(训练)` matches `总设计（训练）`. Matching includes `[stations.aliases]` and excludes occurrences inside longer configured names or aliases; trailing signature separators are removed before comparison. For example, when `总设计（训练）：` is configured, `--for 总设计` does not wake for a comment waiting only on `总设计（训练）`; `--for '总设计（训练）'` does.
+Names are compared after width normalization, so `总设计(训练)` matches `总设计（训练）`. Matching includes `[roles.aliases]` and excludes occurrences inside longer configured names or aliases; trailing signature separators are removed before comparison. For example, when `总设计（训练）：` is configured, `--for 总设计` does not wake for a comment waiting only on `总设计（训练）`; `--for '总设计（训练）'` does.
 
 Aliases are optional and apply to both role watches and the orchestrator's waiting-field test:
 
 ```toml
-[stations.aliases]
+[roles.aliases]
 "总设计（训练）" = ["训练设计"]
 
 [status]
@@ -537,7 +537,7 @@ Run `ding watch --help` for the timing options.
 
 ### Role holders: `role`
 
-Session names are not identities: a fork copies the name, and a handover leaves two sessions under it. `ding role take NAME`, run inside the session that takes the role, records that session's id instead. NAME is a standing role, held by one session: the orchestrator, a designer line, or the verifier, by its `[stations]` name or an alias from `[stations.aliases]`. It is stored under its configured name, so `ding role ALIAS` finds the same holder. The executor and the user are refused: executors are one per ticket and found by their claim lines, and the user is not a session. Outside a Claude Code or Codex session it refuses; nobody types an id by hand.
+Session names are not identities: a fork copies the name, and a handover leaves two sessions under it. `ding role take NAME`, run inside the session that takes the role, records that session's id instead. NAME is a standing role, held by one session: the orchestrator, a designer line, or the verifier, by its `[roles]` name or an alias from `[roles.aliases]`. It is stored under its configured name, so `ding role ALIAS` finds the same holder. The executor and the user are refused: executors are one per ticket and found by their claim lines, and the user is not a session. Outside a Claude Code or Codex session it refuses; nobody types an id by hand.
 
 Records are appended under a lock to `~/.local/state/ding/roles/OWNER-REPO.jsonl` as `{role, kind, id, taken_at, previous}`; the latest record per role wins and earlier ones stay as history. The ids are only valid on this host, and each repository keeps its own file.
 
@@ -551,11 +551,11 @@ ding waits --for '总设计（训练）' --minutes 45
 ding waits --json
 ```
 
-For each open ticket, `ding waits` considers only the latest executor comment. It lists each role named by that comment's waiting field when more than N minutes have passed without a subsequent comment from that role. Names include the configured orchestrator, designers, verifier, executor, user, and `[stations.aliases]` keys. Matching shares watch's aliases, width normalization, and longest-name precedence. A user reply is a comment whose role is user; designer replies are matched to the named designer/signature or alias. Configured paused states are excluded from ticket waits. PRs use the separate readiness query when `review_check` is set. No labels or running-job checks hide waits, and no watch cursor or reported-ID state is read or changed.
+For each open ticket, `ding waits` considers only the latest executor comment. It lists each role named by that comment's waiting field when more than N minutes have passed without a subsequent comment from that role. Names include the configured orchestrator, designers, verifier, executor, user, and `[roles.aliases]` keys. Matching shares watch's aliases, width normalization, and longest-name precedence. A user reply is a comment whose role is user; designer replies are matched to the named designer/signature or alias. Configured paused states are excluded from ticket waits. PRs use the separate readiness query when `review_check` is set. No labels or running-job checks hide waits, and no watch cursor or reported-ID state is read or changed.
 
 The threshold defaults to `[watch] design_answer_minutes`; `--minutes` accepts a nonnegative finite number. For `waits`, 0 lists any positive-duration wait, including when the periodic backstop is disabled. `--for NAME` keeps only waits on that role or its aliases. A design-state comment with no role named in its waiting field belongs only to the existing watch fallback, not this list.
 
-Text output is one line per unanswered role, with ticket, role, minutes, summary, and comment URL, oldest first. Empty text output is blank; both empty and nonempty lists exit 0. `--json` emits an array (empty: `[]`) whose objects contain `ticket`, `station`, `minutes`, `summary`, `url`, `comment_id`, and `created_at`. GitHub/query errors exit nonzero rather than returning an empty list.
+Text output is one line per unanswered role, with ticket, role, minutes, summary, and comment URL, oldest first. Empty text output is blank; both empty and nonempty lists exit 0. `--json` emits an array (empty: `[]`) whose objects contain `ticket`, `role`, `minutes`, `summary`, `url`, `comment_id`, and `created_at`. Each object also carries `station`, equal to `role`; it is deprecated and will be removed in 0.7.0. GitHub/query errors exit nonzero rather than returning an empty list.
 
 **Waits on finished PRs.** The waiting field can name PRs of this repository as `PR #N`, `PRN` (any width of `#`, spaces allowed), or a `/pull/N` link. If every PR it names is merged or closed and belongs to the ticket, the rows for the roles that review and merge it are dropped: the orchestrator, the verifier, and each PR's `review:<NAME>` reviewer. Rows for other roles the same status names, such as the user, stay. A PR belongs to ticket N when its body cites `#N` or the ticket's link, or its head branch contains `issueN`. A finished PR of another ticket is a dependency that is now ready, so the rows stay and the summary ends with `(PR #M merged)` or `(PR #M closed)`. A `PR #N` that GitHub does not know as a PR keeps its rows. The orchestrator's unanswered-request backstop uses the same rule. Waits on an open PR, and waits that name no PR, are listed as before.
 
@@ -564,7 +564,7 @@ Text output is one line per unanswered role, with ticket, role, minutes, summary
 - each open draft PR not updated for that long, with its title;
 - each open ticket, not labelled awaiting-user, whose latest executor status is in progress with an empty or `none` waiting field, which has had no comment or other update for that long, and which has no running `ding run` or live `issue<N>` tmux job (the stale check's test, since a long job is quiet by design), with that status's summary and link.
 
-Each row shows the ticket or PR, the status line or title, and the hours since the last update. The section belongs to the orchestrator: `--for` another role leaves it out. In `--json` its objects carry `"kind": "stalled"`, `pr` (true for a draft PR), `station` (the orchestrator), and the usual `ticket`, `minutes`, `summary`, `url`, and `created_at`.
+Each row shows the ticket or PR, the status line or title, and the hours since the last update. The section belongs to the orchestrator: `--for` another role leaves it out. In `--json` its objects carry `"kind": "stalled"`, `pr` (true for a draft PR), `role` (the orchestrator, also as the deprecated `station`), and the usual `ticket`, `minutes`, `summary`, `url`, and `created_at`.
 
 The orchestrator's `ding watch` runs the same check on its stale cadence (`--stale-every`) with its own `--stalled-hours` (default 48; 0 disables it), and wakes once per stalled item per 24 hours, so the orchestrator decides whether to resume, hand it over, or close it. Report times persist in `stalled_reported`; an item that moves again is forgotten, so it is reported at once if it stalls later.
 
@@ -643,7 +643,7 @@ Put this file at the repo root to change the kitchen's words. Every key is optio
 ```toml
 repo = "owner/name"                  # default: the repository gh sees here
 
-[stations]
+[roles]
 orchestrator = "Orchestrator"
 designer = "Designer"
 verifier = "Verifier"
@@ -651,7 +651,7 @@ executor = "Executor"
 user = "User"
 separator = ": "                     # written after a role name to sign a comment
 
-# [stations.aliases]
+# [roles.aliases]
 # "Training designer" = ["Training"]  # optional equivalent names
 
 [status]
@@ -716,11 +716,13 @@ handoff = ["hand to "]               # written right before a role name to hand 
 [build]                              # notes the build skills keep for each other; `ding` skips this table
 ```
 
+Earlier versions named `[roles]` `[stations]`. A file with only `[stations]` still loads, as `[roles]`, and each `ding` command prints `.dkitchen.toml: [stations] is now [roles]; rename the section` on stderr; 0.7.0 drops the old name. A file with both sections is refused.
+
 `[sessions] name` may use `{issue}`, `{name}` (the `--name` text), and `{repo}` (`OWNER/REPO`), with an optional format spec such as `{issue:04d}`. Any other field is an error when the file is read. The `--name` text is filled in as is, so braces in it are kept. `ding new` without `--issue` and `ding rename` use `--name` unchanged.
 
 `[watch] idle_minutes`, `design_answer_minutes`, `unrouted_wait_minutes`, and `executor_listener_minutes` must be nonnegative finite numbers of minutes; unknown `[watch]` keys are errors.
 
-`[rule] signatures` lists the full first-line prefixes accepted as designer signatures by both `ding rule` and `ding watch`. It must be a nonempty list of nonempty strings. `ding rule` matches prefixes verbatim, including spaces; `ding watch` also recognizes width-normalized forms and configured aliases. When omitted, it defaults to `[stations] designer` plus `[stations] separator`.
+`[rule] signatures` lists the full first-line prefixes accepted as designer signatures by both `ding rule` and `ding watch`. It must be a nonempty list of nonempty strings. `ding rule` matches prefixes verbatim, including spaces; `ding watch` also recognizes width-normalized forms and configured aliases. When omitted, it defaults to `[roles] designer` plus `[roles] separator`.
 
 `[rule] notify_types` lists the types whose ruling `ding rule` sends to the ticket's executor (`'#N'`) when neither `--notify` nor `--no-notify` is given. Each entry must be one of `[rule] types`. When omitted, it is the first entry of `types`, the actionable type; `[]` makes every notification explicit, as before 0.6.3.
 

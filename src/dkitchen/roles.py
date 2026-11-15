@@ -15,7 +15,7 @@ import sys
 
 from dkitchen import ding, inbox
 from dkitchen.config import Config
-from dkitchen.watch import designer_stations, station_variants
+from dkitchen.watch import designer_roles, role_variants
 
 
 def registry(repo: str) -> Path:
@@ -28,14 +28,14 @@ def standing(config: Config) -> list[str]:
 
     Executors are one per ticket and found by their claim lines; the user is not a session.
     """
-    stations = config.stations
-    return [stations.orchestrator, *designer_stations(config), stations.verifier]
+    roles = config.roles
+    return [roles.orchestrator, *designer_roles(config), roles.verifier]
 
 
 def canonical(name: str, config: Config) -> str | None:
     """The standing role NAME stands for, aliases and width normalization included; None when it names none."""
-    variants = station_variants(name, config)
-    return next((known for known in standing(config) if station_variants(known, config) & variants), None)
+    variants = role_variants(name, config)
+    return next((known for known in standing(config) if role_variants(known, config) & variants), None)
 
 
 def holders(repo: str) -> dict[str, dict]:

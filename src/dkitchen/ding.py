@@ -1847,7 +1847,7 @@ def launch_task(args, command: list[str]) -> int:
 
 def status_block(settings) -> str:
     """A status block saying work has started, in the kitchen's words."""
-    names, separator = settings.status.fields, settings.stations.separator
+    names, separator = settings.status.fields, settings.roles.separator
     values = [settings.status.in_progress, *([settings.status.none] * (len(names) - 1))]
     return "\n".join(f"{name}{separator}{value}" for name, value in zip(names, values))
 
@@ -2074,9 +2074,9 @@ def main(argv=None) -> int:
     opening.add_argument("--replace", action="store_true", help="Close existing open orders before posting new ones")
     night_commands.add_parser("show", help="Print open orders and their link, or 'no night orders open' (exit 0)")
     night_commands.add_parser("close", help="Post a closing line for the open orders; expired orders are already closed")
-    sub = commands.add_parser("waits", help="List overdue waits on stations or the user, oldest first",
+    sub = commands.add_parser("waits", help="List overdue waits on roles or the user, oldest first",
                               description="List each open ticket's latest executor comment waiting on a configured "
-                                          "station or the user, with no later reply from that station. Uses watch's "
+                                          "role or the user, with no later reply from that role. Uses watch's "
                                           "aliases, width normalization, longest-name matching, and paused-state exclusion. "
                                           "With [merge] review_check, also list PR readiness and review:<NAME> waits. "
                                           "A wait naming only the ticket's own PRs (PR #N, PRN or a /pull/ link), all merged or "
@@ -2084,7 +2084,7 @@ def main(argv=None) -> int:
                                           "ticket's finished PR is noted instead. "
                                           "Then a 'stalled:' section lists lines that name no wait (--stalled-hours). "
                                           "Read-only; calls no model; exits 0 even when empty.")
-    sub.add_argument("--for", dest="station", type=str.strip, metavar="NAME", help="Keep only waits on NAME or its aliases")
+    sub.add_argument("--for", dest="role", type=str.strip, metavar="NAME", help="Keep only waits on NAME or its aliases")
     sub.add_argument("--minutes", type=float, help="Nonnegative finite threshold (default: [watch] design_answer_minutes)")
     sub.add_argument("--stalled-hours", type=nonnegative_number, default=48,
                      help="List open draft PRs, and in-progress tickets whose status names no wait, not updated for "
@@ -2093,19 +2093,19 @@ def main(argv=None) -> int:
                                                          "stalled items carry \"kind\": \"stalled\"")
     sub = commands.add_parser("watch", help="Wait for GitHub activity the orchestrator must handle, then exit",
                                 description="Wait for GitHub activity the orchestrator must handle, print it, and exit. "
-                                            "With --for NAME, watch executor comments waiting on that station, design requests, and explicit handoffs. "
-                                            "[stations.aliases] adds equivalent names; bracket/colon width is normalized. "
-                                            "Configure [status] paused to suppress station wakes for paused executors. "
+                                            "With --for NAME, watch executor comments waiting on that role, design requests, and explicit handoffs. "
+                                            "[roles.aliases] adds equivalent names; bracket/colon width is normalized. "
+                                            "Configure [status] paused to suppress role wakes for paused executors. "
                                             "Idle/stale checks ignore status labels older than the executor comment; "
                                             "awaiting-user still suppresses them. The orchestrator checks unanswered designer/verifier "
                                             "requests after [watch] design_answer_minutes (default 30; 0 disables it). "
                                             "With [merge] review_check, also watch PR readiness and review:<NAME> labels. "
-                                            "[watch] unrouted_wait_minutes (default 30; 0 disables) reminds of unknown-station waits. "
+                                            "[watch] unrouted_wait_minutes (default 30; 0 disables) reminds of unknown-role waits. "
                                             "[watch] executor_listener_minutes (default 30; 0 disables) reports in-progress Claude Code "
                                             "executors that have run no `ding inbox --wait` that long. "
                                             "Stdout /dev/null is refused with exit 3 before polling; pipes and files are allowed. "
                                             "Read-only; calls no model.")
-    sub.add_argument("--for", dest="station", type=str.strip, metavar="NAME",
+    sub.add_argument("--for", dest="role", type=str.strip, metavar="NAME",
                      help="Wake on requests, explicit mentions or review:<NAME> labels, even for an unconfigured NAME; skip issue labels, newly opened PR events and stale/idle checks")
     sub.add_argument("--state", type=Path, help="JSON file holding the last reported time "
                                                   "(default: ~/.local/state/ding/watch/OWNER-REPO[.for-NAME].json)")
@@ -2135,7 +2135,7 @@ def main(argv=None) -> int:
         description="Post a designer ruling as a ticket comment (or, with --edit-body, as the ticket's new body).\n"
                     "Before anything is sent it checks that:\n"
                     "  - the draft's line 1 starts with a configured designer signature and line 2 with the type label\n"
-                    "    and one of the allowed types ([stations] and [rule] in .dkitchen.toml; comments only);\n"
+                    "    and one of the allowed types ([roles] and [rule] in .dkitchen.toml; comments only);\n"
                     "  - `ding check-refs` finds no wrong reference in it;\n"
                     "  - with --reply-to, no comment came after the one answered (--force posts anyway); without\n"
                     "    it, the time and first line of the latest comment are shown as a hint;\n"
@@ -2217,7 +2217,7 @@ def main(argv=None) -> int:
             parser.error("--edit-body and --base go together")
         if args.force and not args.reply_to:
             parser.error("--force goes with --reply-to")
-    if args.action in {"watch", "waits"} and args.station is not None and not args.station:
+    if args.action in {"watch", "waits"} and args.role is not None and not args.role:
         parser.error("--for must contain non-whitespace text")
     if args.action == "waits" and args.minutes is not None and (not math.isfinite(args.minutes) or args.minutes < 0):
         parser.error("--minutes must be a nonnegative finite number")

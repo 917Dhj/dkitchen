@@ -9,7 +9,7 @@ The installed set of house rules, settings, and repo scripts that lets a team of
 _Avoid_: Workflow, setup
 
 **Role**:
-A part of the kitchen's team, filled by one agent session at a time: the orchestrator, a designer, the verifier, or an executor. `.dkitchen.toml` names the roles under `[stations]`, a key kept from earlier versions.
+A part of the kitchen's team, filled by one agent session at a time: the orchestrator, a designer, the verifier, or an executor. `.dkitchen.toml` names the roles under `[roles]`.
 _Avoid_: Station (in a real kitchen, one cook's place on the line), agent, seat
 
 **Design line**:
