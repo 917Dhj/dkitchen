@@ -759,7 +759,7 @@ def executor(block):
 ])
 def test_executor_comments_wake_by_status_and_waiting_on(tmp_path, block, waiting_user, wakes):
     loaded = settings(tmp_path)
-    assert watch.role(executor(block), loaded) == "Executor"
+    assert watch.signer(executor(block), loaded) == "Executor"
     assert watch.executor_wakes(executor(block), waiting_user, loaded) is wakes
 
 
@@ -887,11 +887,11 @@ def test_a_quoted_session_signature_signs_nothing(tmp_path, text):
     stations = loaded.stations
     verifier = (f"## {stations.verifier}{stations.separator}#272 run request check\n\n"
                 "| request body | ok: it starts with the status block and contains `Codex session:` |\n")
-    assert watch.role(verifier, loaded) == stations.verifier
-    assert watch.role("I checked it; the body has `Codex session:` in it.", loaded) == stations.user
-    assert watch.role("Quoting `Claude session:` signs nothing.", loaded) == stations.user
-    assert watch.role("Status: done\nWaiting on: none\n\nClaude session: impl", loaded) == stations.executor
-    assert watch.role(executor("Status: done\nWaiting on: none\nKey numbers: 1\nNext: merge"), loaded) == stations.executor
+    assert watch.signer(verifier, loaded) == stations.verifier
+    assert watch.signer("I checked it; the body has `Codex session:` in it.", loaded) == stations.user
+    assert watch.signer("Quoting `Claude session:` signs nothing.", loaded) == stations.user
+    assert watch.signer("Status: done\nWaiting on: none\n\nClaude session: impl", loaded) == stations.executor
+    assert watch.signer(executor("Status: done\nWaiting on: none\nKey numbers: 1\nNext: merge"), loaded) == stations.executor
 
 
 RULING = CHINESE + """
@@ -1240,22 +1240,22 @@ def test_default_designer_signature_is_shared_and_requires_separator(tmp_path, t
     signature = stations.signature(stations.designer)
     assert loaded.designer_signatures == (signature,)
     assert rule.format_problem(f"{signature}decision\nType{stations.separator}record\n", loaded) is None
-    assert watch.role(f"## {signature}decision", loaded) == stations.designer
+    assert watch.signer(f"## {signature}decision", loaded) == stations.designer
     for prefix in (stations.designer, stations.designer + " (other): "):
         assert rule.format_problem(f"{prefix}\nType{stations.separator}record\n", loaded) is not None
-        assert watch.role(prefix, loaded) == stations.user
-    assert watch.role(stations.verifier + " report", loaded) == stations.verifier
-    assert watch.role(stations.orchestrator + " update", loaded) == stations.orchestrator
+        assert watch.signer(prefix, loaded) == stations.user
+    assert watch.signer(stations.verifier + " report", loaded) == stations.verifier
+    assert watch.signer(stations.orchestrator + " update", loaded) == stations.orchestrator
 
 
 @pytest.mark.parametrize("prefix", ["总设计：", "总设计（训练）："])
 def test_rule_and_watch_share_configured_designer_signatures(tmp_path, prefix):
     loaded = settings(tmp_path, RULING + 'signatures = ["总设计：", "总设计（训练）："]\n')
     assert rule.format_problem(f"{prefix}结论\n类型：可执行\n", loaded) is None
-    assert watch.role(f"{prefix}结论", loaded) == loaded.stations.designer
+    assert watch.signer(f"{prefix}结论", loaded) == loaded.stations.designer
     problem = rule.format_problem("其他设计：结论\n类型：可执行\n", loaded)
     assert "'总设计：'" in problem and "'总设计（训练）：'" in problem
-    assert watch.role("其他设计：结论", loaded) == loaded.stations.user
+    assert watch.signer("其他设计：结论", loaded) == loaded.stations.user
 
 
 @pytest.mark.parametrize("value", ['[]', '[1]', '["Designer: ", false]', '[""]', '["   "]', '"Designer: "'])
@@ -1268,10 +1268,10 @@ def test_explicit_signatures_replace_default_and_preserve_spaces(tmp_path):
     loaded = settings(tmp_path, '[rule]\nsignatures = ["Training designer: "]')
     assert loaded.rule.signatures == ("Training designer: ",)
     assert rule.format_problem("Training designer: decision\nType: record", loaded) is None
-    assert watch.role("Training designer: decision", loaded) == loaded.stations.designer
+    assert watch.signer("Training designer: decision", loaded) == loaded.stations.designer
     for prefix in ("Training designer:", "Designer: decision"):
         assert rule.format_problem(f"{prefix}\nType: record", loaded) is not None
-        assert watch.role(prefix, loaded) == loaded.stations.user
+        assert watch.signer(prefix, loaded) == loaded.stations.user
 
 
 @pytest.mark.parametrize("prefix", ["总设计：", "总设计（训练）："])
@@ -1294,7 +1294,7 @@ def test_configured_signature_is_matched_before_watch_markdown_normalization(tmp
     loaded = settings(tmp_path, f"[rule]\nsignatures = {json.dumps([signature])}")
     body = f"{signature}decision\nType: record"
     assert rule.format_problem(body, loaded) is None
-    assert watch.role(body, loaded) == loaded.stations.designer
+    assert watch.signer(body, loaded) == loaded.stations.designer
 
 
 def test_watch_does_not_report_a_configured_designer_as_user(tmp_path, monkeypatch):
@@ -2937,17 +2937,17 @@ def test_waits_excludes_drafts_except_failed_review(review_pr, capsys, review):
 def test_review_comment_is_verifier_only_with_review_check(tmp_path, enabled):
     loaded = settings(tmp_path, 'repo="o/r"\n[merge]\nreview_check=' + ('"review"' if enabled else '""'))
     expected = loaded.stations.verifier if enabled else loaded.stations.user
-    assert watch.role('Reviewed e7870cd7: pass\n\nchecked', loaded) == expected
-    assert watch.role('Reviewed e7870cd7: changes requested, see below\n\nfindings', loaded) == expected
-    assert watch.role('Reviewed it: pass', loaded) == loaded.stations.user
+    assert watch.signer('Reviewed e7870cd7: pass\n\nchecked', loaded) == expected
+    assert watch.signer('Reviewed e7870cd7: changes requested, see below\n\nfindings', loaded) == expected
+    assert watch.signer('Reviewed it: pass', loaded) == loaded.stations.user
 
 
 def test_review_lines_follow_the_configured_wording(tmp_path, monkeypatch):
     loaded = settings(tmp_path, 'repo="o/r"\n[merge]\nreview_check="review"\n'
                                 'review_pass="审过 {sha}：通过"\nreview_changes="审过 {sha}：有出入，见下"')
-    assert watch.role('审过 e7870cd7：通过\n\nchecked', loaded) == loaded.stations.verifier
-    assert watch.role('审过 e7870cd7:有出入,见下', loaded) == loaded.stations.verifier
-    assert watch.role('Reviewed e7870cd7: pass', loaded) == loaded.stations.user
+    assert watch.signer('审过 e7870cd7：通过\n\nchecked', loaded) == loaded.stations.verifier
+    assert watch.signer('审过 e7870cd7:有出入,见下', loaded) == loaded.stations.verifier
+    assert watch.signer('Reviewed e7870cd7: pass', loaded) == loaded.stations.user
     body = tmp_path / 'review.md'
     body.write_text('details')
     calls = []

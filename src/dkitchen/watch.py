@@ -139,7 +139,7 @@ def review_line(template: str) -> str:
     return "[0-9a-fA-F]{8}".join(re.escape(part) for part in normalized(template).strip().split("{sha}"))
 
 
-def role(body: str, config: Config) -> str:
+def signer(body: str, config: Config) -> str:
     """The station named at the start of the first line; otherwise the executor by a line starting with its
     session signature (`Codex session:`, or `Claude session:` for an executor run in Claude Code); else the user.
     A session signature quoted inside a line signs nothing."""
@@ -166,7 +166,7 @@ def role(body: str, config: Config) -> str:
 def changes_verdict(body: str, config: Config) -> bool:
     """Whether a verifier comment carries the `changes` verdict line that `ding review --ticket` writes as line 2."""
     lines = [line for line in body.splitlines() if line.strip()]
-    return (len(lines) > 1 and role(body, config) == config.stations.verifier
+    return (len(lines) > 1 and signer(body, config) == config.stations.verifier
             and normalized(lines[1]).strip() == normalized(config.review.verdict_changes).strip())
 
 
@@ -208,7 +208,7 @@ def design_request(body: str, config: Config) -> list[str]:
 
 
 def station_wakes(body: str, station: str, config: Config) -> bool:
-    who = role(body, config)
+    who = signer(body, config)
     if who == config.stations.designer:
         return False
     if who == config.stations.executor:
@@ -248,7 +248,7 @@ def collect(config: Config, repo: str, since: str, labels_since: str, seen: set[
     found = []
     for comment in newer(f"repos/{repo}/issues/comments?since={since}&sort=updated&direction=desc", "updated_at", since):
         number, body = issue_number(comment["issue_url"]), comment["body"]
-        who = role(body, config)
+        who = signer(body, config)
         if number in skip:
             continue
         if station is not None:
@@ -366,7 +366,7 @@ def label_suppresses(config: Config, repo: str, issue: dict, comment: dict) -> b
 
 
 def answered_by(body: str, station: str, config: Config) -> bool:
-    who = role(body, config)
+    who = signer(body, config)
     first = normalized(next((line for line in body.splitlines() if line.strip()), ""))
     first = re.sub(r"^[\s#*>]+", "", first)
     if who == config.stations.designer:
@@ -438,7 +438,7 @@ def unanswered_waits(config: Config, repo: str, minutes: float, skip: set[int], 
             continue
         answered = set()
         for comment in comments_backwards(repo, issue):
-            who = role(comment["body"], config)
+            who = signer(comment["body"], config)
             if who != config.stations.executor:
                 answered.update(name for name in names if answered_by(comment["body"], name, config))
                 if design_fallback and who == config.stations.designer:
@@ -577,7 +577,7 @@ def unrouted_waits(config: Config, repo: str, checkout: Path, reported: set[int]
         latest = None
         for comment in comments_backwards(repo, issue):
             latest = latest or comment
-            if role(comment["body"], config) != config.stations.executor:
+            if signer(comment["body"], config) != config.stations.executor:
                 continue
             state, waiting = state_and_waiting(comment["body"], config)
             if (state == config.status.in_progress and waiting and not waiting.startswith(config.status.none)
@@ -624,7 +624,7 @@ def stalled(config: Config, repo: str, checkout: Path, hours: float, skip: set[i
         if issue["number"] in running:
             continue
         last = next((comment for comment in comments_backwards(repo, issue)
-                     if role(comment["body"], config) == config.stations.executor), None)
+                     if signer(comment["body"], config) == config.stations.executor), None)
         if last is None:
             continue
         state, waiting = state_and_waiting(last["body"], config)
@@ -695,7 +695,7 @@ def stale(config: Config, repo: str, checkout: Path, hours: float, reported: set
         if issue["number"] in running:
             continue
         last = gh(f"repos/{repo}/issues/{issue['number']}/comments?per_page=1&page={issue['comments']}")[-1]
-        if (last["id"] not in reported and role(last["body"], config) == config.stations.executor
+        if (last["id"] not in reported and signer(last["body"], config) == config.stations.executor
                 and state_and_waiting(last["body"], config)[0] == config.status.in_progress
                 and not label_suppresses(config, repo, issue, last)):
             found.append((last["created_at"], f"#{issue['number']} executor silent for over {hours:g} hours, with no "
@@ -732,7 +732,7 @@ def idle(config: Config, repo: str, checkout: Path, observed: dict, reported: se
                 or any(status not in {"idle", "notLoaded"} for status in sessions[number])):
             continue
         last = next((comment for comment in comments_backwards(repo, issue)
-                     if role(comment["body"], config) == config.stations.executor), None)
+                     if signer(comment["body"], config) == config.stations.executor), None)
         if (last is None or last["id"] in reported
                 or state_and_waiting(last["body"], config)[0] != config.status.in_progress
                 or label_suppresses(config, repo, issue, last)):
@@ -776,7 +776,7 @@ def missing_waiters(config: Config, repo: str, reported: set[int], skip: set[int
                 continue
             last, owner = None, None
             for comment in comments_backwards(repo, issue):
-                if last is None and role(comment["body"], config) == config.stations.executor:
+                if last is None and signer(comment["body"], config) == config.stations.executor:
                     last = comment
                 owner = owner or next(reversed(owner_references(comment["body"])), None)
                 if last is not None and owner is not None:
