@@ -338,12 +338,134 @@ def test_merge_empty_required_checks_keeps_existing_behavior(tmp_path, monkeypat
     assert len(calls) == 3 and calls[1][:3] == ("gh", "pr", "merge")
 
 
+REFRESH = 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check"]\nrefresh = "hca-refresh {pr} --head {sha} \'a b\'"'
+
+
+def tip(sha):
+    return 0, json.dumps({"ref": "refs/heads/main", "object": {"sha": sha, "type": "commit"}})
+
+
+def refresh_calls(calls):
+    return [call for call in calls if call[0] == "hca-refresh"]
+
+
+def test_merge_refresh_failure_refuses_before_merging(tmp_path, monkeypatch, capsys):
+    loaded = settings(tmp_path, REFRESH)
+    calls = []
+    output = "\n".join(f"line {n}" for n in range(30))
+    responses = [view(), *check_responses([check_run()]), tip("t1"), (1, output)]
+    monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
+    error = capsys.readouterr().err
+    assert "refresh exited 1 against main t1" in error and "merge refused" in error
+    assert "line 29" in error and "boom" in error and "line 9\n" not in error
+    assert calls[3] == ("gh", "api", "repos/o/r/git/ref/heads/main")
+    assert not any(call[:3] == ("gh", "pr", "merge") for call in calls)
+    assert not responses
+
+
+def test_merge_refresh_success_substitutes_pr_and_sha_and_rereads_checks(tmp_path, monkeypatch, capsys):
+    loaded = settings(tmp_path, REFRESH)
+    calls = []
+    responses = [view(), *check_responses([check_run()]), tip("t1"), (0, "fresh"),
+                 *check_responses([check_run()]), tip("t1"), (0, ""), view("MERGED")]
+    monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 0
+    assert refresh_calls(calls) == [("hca-refresh", "7", "--head", "abc123", "a b")]
+    assert calls[5][-1].endswith("commits/abc123/check-runs?filter=latest&per_page=100")
+    assert calls[-2][:3] == ("gh", "pr", "merge") and calls[-2][-2:] == ("--match-head-commit", "abc123")
+    assert "PR #7 merged as m1" in capsys.readouterr().out
+    assert not responses
+
+
+def test_merge_refresh_runs_without_required_checks(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrefresh = "hca-refresh {pr}"')
+    calls = []
+    responses = [view(), tip("t1"), (0, ""), tip("t1"), (0, ""), view("MERGED")]
+    monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 0
+    assert refresh_calls(calls) == [("hca-refresh", "7")]
+    assert not responses
+
+
+def test_merge_refresh_that_fails_a_required_check_refuses(tmp_path, monkeypatch, capsys):
+    loaded = settings(tmp_path, REFRESH)
+    calls = []
+    responses = [view(), *check_responses([check_run()]), tip("t1"), (0, ""),
+                 *check_responses([], [commit_status("failure")])]
+    monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
+    assert "readiness blocks merge after refresh" in capsys.readouterr().err
+    assert not any(call[:3] == ("gh", "pr", "merge") for call in calls)
+    assert not responses
+
+
+def test_merge_refresh_runs_again_when_the_tip_moves(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, REFRESH)
+    calls = []
+    responses = [view(), *check_responses([check_run()]), tip("t1"),
+                 (0, ""), *check_responses([check_run()]), tip("t2"),
+                 (0, ""), *check_responses([check_run()]), tip("t2"), (0, ""), view("MERGED")]
+    monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 0
+    assert len(refresh_calls(calls)) == 2
+    assert not responses
+
+
+def test_merge_refresh_refuses_when_the_tip_keeps_moving(tmp_path, monkeypatch, capsys):
+    loaded = settings(tmp_path, REFRESH)
+    calls = []
+    responses = [view(), *check_responses([check_run()]), tip("t0")]
+    for n in range(1, 4):
+        responses += [(0, ""), *check_responses([check_run()]), tip(f"t{n}")]
+    monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
+    assert "main kept moving" in capsys.readouterr().err
+    assert len(refresh_calls(calls)) == 3
+    assert not any(call[:3] == ("gh", "pr", "merge") for call in calls)
+    assert not responses
+
+
+def test_merge_refresh_that_cannot_start_refuses(tmp_path, monkeypatch, capsys):
+    loaded = settings(tmp_path, REFRESH)
+    calls = []
+    inner = fake_call([view(), *check_responses([check_run()]), tip("t1")], calls)
+
+    def call(settings, *args):
+        if args[0] == "hca-refresh":
+            raise FileNotFoundError(2, "No such file or directory", "hca-refresh")
+        return inner(settings, *args)
+    monkeypatch.setattr(orchestrate, "call", call)
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
+    assert "refresh could not run (hca-refresh 7 --head abc123 'a b')" in capsys.readouterr().err
+
+
+def test_merge_refresh_does_not_run_when_readiness_already_blocks(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, REFRESH)
+    calls = []
+    monkeypatch.setattr(orchestrate, "call", fake_call([view(), *check_responses([check_run("failure")])], calls))
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
+    assert not refresh_calls(calls) and len(calls) == 3
+
+
+@pytest.mark.parametrize("value", ['1', '"   "', '"a \'b"', '"a\\nb"', '["a"]'])
+def test_merge_refresh_rejects_bad_config(tmp_path, value):
+    with pytest.raises(ValueError, match="refresh must be one command line or an empty string"):
+        settings(tmp_path, f"[merge]\nrefresh = {value}")
+
+
+def test_merge_refresh_defaults_to_off(tmp_path):
+    assert settings(tmp_path).merge.refresh == ""
+    assert settings(tmp_path, '[merge]\nrefresh = ""').merge.refresh == ""
+
+
 def test_merge_help_describes_required_checks(capsys):
     with pytest.raises(SystemExit) as exc:
         ding.main(["merge", "--help"])
     assert exc.value.code == 0
     help_text = capsys.readouterr().out
     assert "required_checks" in help_text and "review_check" in help_text and "no bypass" in help_text
+    assert "refresh" in help_text
 
 
 @pytest.mark.parametrize("argv, error", [

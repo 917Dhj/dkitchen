@@ -65,6 +65,7 @@ Every key is optional. The defaults match the English templates in kitchen/:
     review_check = ""                   # e.g. "review": the commit status `ding review` writes and `ding merge` requires
     review_pass = "Reviewed {sha}: pass"                                 # first line of a passing review
     review_changes = "Reviewed {sha}: changes requested, see below"      # first line of a failing review
+    refresh = ""                        # e.g. "python -m hca review {pr} --refresh": run before merging; nonzero refuses
 
     [review]                             # `ding review --ticket N`: a verdict on a ticket's run stage
     verdict_pass = "Verdict: pass"                    # line 2 of a passing verdict, after the verifier's line 1
@@ -93,6 +94,7 @@ from dataclasses import dataclass, field, fields as dataclass_fields, replace
 from pathlib import Path
 import math
 import re
+import shlex
 import string
 import subprocess
 import sys
@@ -234,6 +236,11 @@ class Merge:
     review_check: str = ""
     review_pass: str = "Reviewed {sha}: pass"
     review_changes: str = "Reviewed {sha}: changes requested, see below"
+    refresh: str = ""
+
+    def refresh_argv(self, pr: int, sha: str) -> list[str]:
+        """The refresh command as argv, with {pr} and {sha} substituted in each word."""
+        return [word.replace("{pr}", str(pr)).replace("{sha}", sha) for word in shlex.split(self.refresh)]
 
 
 @dataclass(frozen=True)
@@ -397,6 +404,13 @@ def section(cls, values: object, name: str):
         elif key == "review_check":
             if not isinstance(value, str) or (value and not value.strip()):
                 raise ValueError(f"{FILE}: [merge] review_check must be a check name or an empty string")
+        elif key == "refresh":
+            try:
+                words = shlex.split(value) if isinstance(value, str) and "\n" not in value and "\r" not in value else []
+            except ValueError:
+                words = []
+            if not isinstance(value, str) or (value and not words):
+                raise ValueError(f"{FILE}: [merge] refresh must be one command line or an empty string")
         elif key == "handoff":
             if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
                 raise ValueError(f"{FILE}: [watch] handoff must be a nonempty list of nonempty words")

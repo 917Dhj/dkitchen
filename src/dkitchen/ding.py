@@ -2054,7 +2054,9 @@ def main(argv=None) -> int:
                                           "require that review status on the HEAD. In .dkitchen.toml, [merge] required_checks = [\"ci\"] "
                                           "requires success on that exact HEAD. Default: [] (no check gate). "
                                           "Missing, pending, failed, neutral or skipped checks refuse immediately; "
-                                          "there is no bypass flag.")
+                                          "there is no bypass flag. With [merge] refresh = \"CMD {pr} {sha}\", CMD then runs in "
+                                          "the repo root: a nonzero exit refuses, and it runs again (at most 3 times) while the "
+                                          "default branch moves.")
     sub.add_argument("pr", type=int, help="PR number")
     sub.add_argument("sha", help="The HEAD that was reviewed (full or prefix)")
     sub = commands.add_parser("log", help="Post an entry to the orchestrator log ticket")
