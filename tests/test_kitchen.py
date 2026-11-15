@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -3421,3 +3422,72 @@ def test_stations_and_roles_together_are_refused(tmp_path):
                                         encoding="utf-8")
     with pytest.raises(ValueError, match=r"\[stations\] and \[roles\]"):
         config.load(tmp_path)
+
+
+def fake_process(tmp_path, monkeypatch, pid, start, *, session=FIRST, record_start=None, socket=True):
+    """A Claude Code process record for `session`, and a /proc entry for `pid` started at `start` (None: not running)."""
+    from dkitchen import roles
+    proc = tmp_path / "proc"
+    monkeypatch.setattr(roles, "PROC", proc)
+    if start is not None:
+        (proc / str(pid)).mkdir(parents=True)
+        (proc / str(pid) / "stat").write_text(f"{pid} (claude code) S " + " ".join(["0"] * 18 + [start] + ["0"] * 5))
+    sessions = Path(os.environ["CLAUDE_CONFIG_DIR"]) / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    path = tmp_path / f"{pid}.sock"
+    if socket:
+        path.touch()
+    (sessions / f"{pid}.json").write_text(json.dumps({
+        "pid": pid, "procStart": record_start or start or "1", "hostSessionId": session,
+        "messagingSocketPath": str(path)}))
+    return f"uds:{path}"
+
+
+def test_role_to_prints_the_socket_of_the_one_live_process(tmp_path, monkeypatch, capsys):
+    take_role(tmp_path, monkeypatch, FIRST)
+    fake_process(tmp_path, monkeypatch, 11, None)
+    fake_process(tmp_path, monkeypatch, 12, "500", record_start="400")
+    live = fake_process(tmp_path, monkeypatch, 13, "600")
+    fake_process(tmp_path, monkeypatch, 14, "700", session=SECOND)
+    capsys.readouterr()
+    assert role_main(tmp_path, monkeypatch, "总设计", "--to") == 0
+    assert capsys.readouterr().out == f"{live}\n"
+    assert role_main(tmp_path, monkeypatch, "总设计") == 0
+    assert capsys.readouterr().out == f"{FIRST}\n"
+
+
+@pytest.mark.parametrize("live", [0, 2])
+def test_role_to_refuses_without_exactly_one_live_process(tmp_path, monkeypatch, capsys, live):
+    take_role(tmp_path, monkeypatch, FIRST)
+    fake_process(tmp_path, monkeypatch, 20, None)
+    addresses = [fake_process(tmp_path, monkeypatch, 21 + index, str(900 + index)) for index in range(live)]
+    capsys.readouterr()
+    assert role_main(tmp_path, monkeypatch, "总设计师", "--to") == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    if live:
+        assert "2 live Claude Code processes" in captured.err and all(item in captured.err for item in addresses)
+    else:
+        assert f"总设计师 is held by {FIRST}, but no live Claude Code process has it on this host" in captured.err
+
+
+def test_role_to_refuses_a_live_process_without_its_socket(tmp_path, monkeypatch, capsys):
+    take_role(tmp_path, monkeypatch, FIRST)
+    fake_process(tmp_path, monkeypatch, 30, "100", socket=False)
+    assert role_main(tmp_path, monkeypatch, "总设计", "--to") == 1
+    assert "has no socket" in capsys.readouterr().err
+
+
+def test_role_to_prints_a_codex_holders_thread_id(tmp_path, monkeypatch, capsys):
+    thread = "019a0000-0000-7000-8000-000000000001"
+    as_session(monkeypatch, None)
+    monkeypatch.setenv("CODEX_THREAD_ID", thread)
+    assert role_main(tmp_path, monkeypatch, "take", "总设计") == 0
+    capsys.readouterr()
+    assert role_main(tmp_path, monkeypatch, "总设计", "--to") == 0
+    assert capsys.readouterr().out == f"{thread}\n"
+
+
+def test_role_to_without_a_holder_exits_nonzero(tmp_path, monkeypatch, capsys):
+    assert role_main(tmp_path, monkeypatch, "Verifier", "--to") == 1
+    assert "nobody has taken Verifier" in capsys.readouterr().err

@@ -57,7 +57,7 @@ Done when the note exists, your watch is stopped, and the user has the path.
 1. **Read** the note, then `docs/agents/roles.md` and the files it points to for your role. The note is a snapshot: before acting on a ticket it lists, read that ticket's latest comments.
 2. **Sign in**: run `ding role take <role>` in this session, before starting your watch. It records this session's id as the role's holder; the previous holder's watch, if still running, exits on its own. Peers find you with `ding role <role>`, so there is nothing to tell them.
 3. **Start your watch** as `docs/agents/watch.md` says, and check `ding night show`. If it says another watch is using its state file, the previous holder's watch has not reached its next poll yet; start yours again after it exits.
-   To message a peer role, run `ding role <peer>` and send with `SendMessage`, `to` set to the id it prints, never the session name.
+   To message a peer role, run `ding role <peer> --to` and send with `SendMessage`, `to` set to what it prints. Look it up again for each send, and reply to an incoming message's `from`. Never use a session name or an address from the note.
 4. **Pick up the open work** in the note's order, each ticket from its latest comment.
 
 Done when `ding role <role>` prints your session's id, your watch runs, and you have read the latest state of every ticket the note lists.

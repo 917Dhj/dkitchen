@@ -2124,11 +2124,16 @@ def main(argv=None) -> int:
     sub = commands.add_parser("role", help="Record or print which session holds each role, by session id",
                               description="ding role: list every role with a holder (role, kind, id, since). "
                                           "ding role NAME: print only NAME's holder id; exit 1 when nobody holds it. "
+                                          "ding role NAME --to: print the address that reaches the holder now, for "
+                                          "SendMessage's to: uds:<socket> of its one live Claude Code process, or "
+                                          "a Codex thread id; exit 1 when there is none or more than one. "
                                           "ding role take NAME: record this session as NAME's holder; run it inside "
                                           "that session. NAME is the orchestrator, a designer line, or the verifier, aliases included. "
                                           "Records are per repository, on this host, under "
                                           "~/.local/state/ding/roles/OWNER-REPO.jsonl.")
     sub.add_argument("words", nargs="*", metavar="[take] NAME")
+    sub.add_argument("--to", action="store_true", help="Print the address that reaches NAME's holder now, "
+                                                       "looked up fresh; never store it")
     sub = commands.add_parser(
         "rule", help="Post the designer's ruling on a ticket after checking it, and tell a session",
         formatter_class=argparse.RawDescriptionHelpFormatter,
