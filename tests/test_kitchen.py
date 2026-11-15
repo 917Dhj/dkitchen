@@ -3310,12 +3310,20 @@ def test_second_take_replaces_the_holder_and_keeps_the_first_as_previous(tmp_pat
     assert capsys.readouterr().out == f"{SECOND}\n"
 
 
-@pytest.mark.parametrize("session, name", [(None, "总设计师"), (FIRST, "nobody-here")])
+@pytest.mark.parametrize("session, name", [(None, "总设计师"), (FIRST, "nobody-here"), (FIRST, "Executor"), (FIRST, "User")])
 def test_role_take_refuses_without_a_session_or_an_unknown_name(tmp_path, monkeypatch, capsys, session, name):
     as_session(monkeypatch, session)
     assert role_main(tmp_path, monkeypatch, "take", name) == 1
     from dkitchen import roles
     assert not roles.registry("o/r").exists()
+    if session:
+        assert "choose one of: Orchestrator, 总设计师, Verifier" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["Executor", "User"])
+def test_role_lookup_refuses_the_executor_and_the_user(tmp_path, monkeypatch, capsys, name):
+    assert role_main(tmp_path, monkeypatch, name) == 1
+    assert "is not a role here" in capsys.readouterr().err
 
 
 def test_role_nobody_has_taken_exits_nonzero(tmp_path, monkeypatch, capsys):

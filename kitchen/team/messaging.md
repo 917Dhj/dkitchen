@@ -1,6 +1,6 @@
 # Messaging sessions (ding)
 
-`ding` shows what executor sessions are doing, sends them messages, and starts new Codex sessions. Install it with `pipx install dkitchen`; the full guide is at https://github.com/917Dhj/dkitchen/blob/main/docs/ding.md. It reaches Codex sessions only. Claude Code sessions message each other with the `SendMessage` tool.
+`ding` shows what executor sessions are doing, sends them messages, and starts new Codex sessions. Install it with `pipx install dkitchen`; the full guide is at https://github.com/917Dhj/dkitchen/blob/main/docs/ding.md. It reaches Codex sessions only. Claude Code sessions message each other with the `SendMessage` tool, `to` set to the id `ding role <role>` prints, never a session name.
 
 ```bash
 ding new --cwd /path/worktree --issue 42 --name 'Ablation' --message-file /path/brief.md

@@ -537,11 +537,11 @@ Run `ding watch --help` for the timing options.
 
 ### Role holders: `role`
 
-Session names are not identities: a fork copies the name, and a handover leaves two sessions under it. `ding role take NAME`, run inside the session that takes the role, records that session's id instead. NAME is any name `ding watch --for` accepts as a configured role (`[stations]` names and `[stations.aliases]`), stored under its configured name, so `ding role ALIAS` finds the same holder. Outside a Claude Code or Codex session it refuses; nobody types an id by hand.
+Session names are not identities: a fork copies the name, and a handover leaves two sessions under it. `ding role take NAME`, run inside the session that takes the role, records that session's id instead. NAME is a standing role, held by one session: the orchestrator, a designer line, or the verifier, by its `[stations]` name or an alias from `[stations.aliases]`. It is stored under its configured name, so `ding role ALIAS` finds the same holder. The executor and the user are refused: executors are one per ticket and found by their claim lines, and the user is not a session. Outside a Claude Code or Codex session it refuses; nobody types an id by hand.
 
 Records are appended under a lock to `~/.local/state/ding/roles/OWNER-REPO.jsonl` as `{role, kind, id, taken_at, previous}`; the latest record per role wins and earlier ones stay as history. The ids are only valid on this host, and each repository keeps its own file.
 
-`ding watch`, and `ding watch --for NAME` for a configured role, read the holder at start and on each poll. When another session holds the role, the watch refuses to start (exit 3, on stderr), or a running watch prints `role NAME is held by ID since TIME` and exits 3 without advancing its state, which wakes the old session. When nobody has taken the role, or the watch runs with no session id (in tmux, say), it runs as before and says so once on stderr.
+`ding watch`, and `ding watch --for NAME` for a standing role, read the holder at start and on each poll. When another session holds the role, the watch refuses to start (exit 3, on stderr), or a running watch prints `role NAME is held by ID since TIME` and exits 3 without advancing its state, which wakes the old session. When nobody has taken the role, or the watch runs with no session id (in tmux, say), it runs as before and says so once on stderr.
 
 ### Unanswered waits: `waits`
 

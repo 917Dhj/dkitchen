@@ -1,7 +1,8 @@
 """Which session holds each role of a kitchen, by session id, on this host.
 
 - role take NAME: record the calling session (Claude Code host session id, or Codex thread id) as NAME's holder,
-  with the previous holder; refuses outside a session and for a name `ding watch --for` would not accept.
+  with the previous holder; refuses outside a session, and for a name other than the orchestrator, a designer line,
+  or the verifier (aliases included).
 - role [NAME]: list every role with a holder, or print only NAME's holder id (exit 1 when nobody holds it).
 Records go to ``$XDG_STATE_HOME/ding/roles/OWNER-REPO.jsonl``, appended under a lock; the latest record per role wins.
 """
@@ -14,7 +15,7 @@ import sys
 
 from dkitchen import ding, inbox
 from dkitchen.config import Config
-from dkitchen.watch import station_names, station_variants
+from dkitchen.watch import designer_stations, station_variants
 
 
 def registry(repo: str) -> Path:
@@ -22,11 +23,19 @@ def registry(repo: str) -> Path:
     return state / "ding/roles" / f"{repo.replace('/', '-')}.jsonl"
 
 
+def standing(config: Config) -> list[str]:
+    """The roles one session holds: the orchestrator, each designer line, and the verifier.
+
+    Executors are one per ticket and found by their claim lines; the user is not a session.
+    """
+    stations = config.stations
+    return [stations.orchestrator, *designer_stations(config), stations.verifier]
+
+
 def canonical(name: str, config: Config) -> str | None:
-    """The configured name NAME stands for, aliases and width normalization included; None when it names no role."""
-    names = station_names(config)
+    """The standing role NAME stands for, aliases and width normalization included; None when it names none."""
     variants = station_variants(name, config)
-    return next((known for known in names if station_variants(known, config) & variants), None)
+    return next((known for known in standing(config) if station_variants(known, config) & variants), None)
 
 
 def holders(repo: str) -> dict[str, dict]:
@@ -45,7 +54,7 @@ def holder(role: str, repo: str) -> dict | None:
 def take(name: str, config: Config) -> int:
     role = canonical(name, config)
     if role is None:
-        raise ValueError(f"{name!r} is not a role here; choose one of: {', '.join(station_names(config))}")
+        raise ValueError(f"{name!r} is not a role here; choose one of: {', '.join(standing(config))}")
     caller = inbox.current_session()
     if caller is None:
         raise ValueError("role take runs inside the session that takes the role; "
@@ -76,7 +85,7 @@ def show(name: str | None, config: Config) -> int:
         return 0
     role = canonical(name, config)
     if role is None:
-        raise ValueError(f"{name!r} is not a role here; choose one of: {', '.join(station_names(config))}")
+        raise ValueError(f"{name!r} is not a role here; choose one of: {', '.join(standing(config))}")
     if role not in found:
         print(f"ding: nobody has taken {role}; its session runs `ding role take {role}`", file=sys.stderr)
         return 1

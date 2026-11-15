@@ -2125,7 +2125,7 @@ def main(argv=None) -> int:
                               description="ding role: list every role with a holder (role, kind, id, since). "
                                           "ding role NAME: print only NAME's holder id; exit 1 when nobody holds it. "
                                           "ding role take NAME: record this session as NAME's holder; run it inside "
-                                          "that session. NAME is a name `ding watch --for` accepts, aliases included. "
+                                          "that session. NAME is the orchestrator, a designer line, or the verifier, aliases included. "
                                           "Records are per repository, on this host, under "
                                           "~/.local/state/ding/roles/OWNER-REPO.jsonl.")
     sub.add_argument("words", nargs="*", metavar="[take] NAME")

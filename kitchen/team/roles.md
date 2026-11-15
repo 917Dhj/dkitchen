@@ -6,6 +6,8 @@ Read this once at session start. Before messaging another session, read [relayin
 
 When a session is replaced, edit only this table. Everywhere else, write the role, never a session name.
 
+The table is for people to read. Sessions find each other with `ding role`: the session holding a role runs `ding role take <role>`, and `ding role <role>` prints its session id.
+
 | Role | Session name |
 | --- | --- |
 | Orchestrator | (not yet opened) |

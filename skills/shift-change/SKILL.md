@@ -19,7 +19,7 @@ An executor does not use this skill: its ticket already holds the whole story, a
 
 From the sources, not from memory:
 
-- your role, from the Current sessions table in `docs/agents/roles.md`, and the peers' session names;
+- your role, and the peer roles: `ding role` lists each role with the id of the session holding it;
 - `ding board`, and the open tickets you own or that wait on you (`gh issue list`, the `status:*` labels);
 - your watch's command and state file, your other background tasks, and jobs you started;
 - open night orders: `ding night show`;
@@ -38,7 +38,7 @@ Done when every user decision from step 1 is on a ticket or listed for the note'
 Write it to `/tmp/dkitchen-handoff/<repo name>/<role>-<UTC time>.md`, outside the repo. Link to what tickets, commits, and docs already hold rather than copying it, and leave out secrets such as keys and passwords. The note holds:
 
 - **Role**: the role, the repo, and the focus the user gave, if any.
-- **Peers**: each peer role's session name and how to message it.
+- **Peers**: the peer roles by name, not session names or ids. The incoming session finds each holder with `ding role <peer>` when it needs it.
 - **Open work**: one line per ticket: its link, its state, the next step, and who takes it.
 - **Running**: the watch command, background tasks, and jobs, each with how to check it.
 - **Night orders**: the link to open orders, or "none".
@@ -48,15 +48,16 @@ Write it to `/tmp/dkitchen-handoff/<repo name>/<role>-<UTC time>.md`, outside th
 
 ### 4. Leave the role
 
-Stop your watch, since only one watch runs per state file and the incoming session must start its own. Then give the user the note's path and one line: open a new session and run `/shift-change take over <path>` in it.
+Stop your watch, since only one watch runs per state file and the incoming session must start its own. If it is still running when the incoming session takes the role, it exits on its own at its next poll. Then give the user the note's path and one line: open a new session and run `/shift-change take over <path>` in it.
 
 Done when the note exists, your watch is stopped, and the user has the path.
 
 ## Taking over
 
 1. **Read** the note, then `docs/agents/roles.md` and the files it points to for your role. The note is a snapshot: before acting on a ticket it lists, read that ticket's latest comments.
-2. **Sign in**: put your session name in your role's row of the Current sessions table in `docs/agents/roles.md`, the way this repo changes its rules. Tell each peer role your session name in one line.
-3. **Start your watch** as `docs/agents/watch.md` says, and check `ding night show`.
+2. **Sign in**: run `ding role take <role>` in this session, before starting your watch. It records this session's id as the role's holder; the previous holder's watch, if still running, exits on its own. Peers find you with `ding role <role>`, so there is nothing to tell them.
+3. **Start your watch** as `docs/agents/watch.md` says, and check `ding night show`. If it says another watch is using its state file, the previous holder's watch has not reached its next poll yet; start yours again after it exits.
+   To message a peer role, run `ding role <peer>` and send with `SendMessage`, `to` set to the id it prints, never the session name.
 4. **Pick up the open work** in the note's order, each ticket from its latest comment.
 
-Done when the table names your session, your watch runs, and you have read the latest state of every ticket the note lists.
+Done when `ding role <role>` prints your session's id, your watch runs, and you have read the latest state of every ticket the note lists.

@@ -820,7 +820,7 @@ def holder_check(config: Config, repo: str, station: str | None):
     """A check that returns why the calling session must not watch this role, or None; warns once when it can't tell.
 
     A watch belongs to the session that took the role with `ding role take`. Nothing is checked for a NAME that is
-    not a configured role.
+    not a standing role (the orchestrator, a designer line, or the verifier).
     """
     from dkitchen import roles
     role = roles.canonical(station if station is not None else config.stations.orchestrator, config)
