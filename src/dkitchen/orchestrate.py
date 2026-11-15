@@ -2,7 +2,8 @@
 
 - review: post a review comment on the PR and write its verdict as the review_check status on the reviewed HEAD.
 - merge: merge a reviewed PR at the reviewed HEAD and print the merge commit; refuses drafts, moved HEADs,
-  wrong bases, and unsuccessful required or review checks.
+  wrong bases, and unsuccessful required or review checks. With [merge] refresh, the repo's refresh command runs
+  first, against the default-branch tip, and a nonzero exit refuses.
 - relay: send a message to a ticket's executor with `ding send`, then leave the matching ticket comment. By default
   the message goes into the executor's current turn and replaces the orchestrator's relays still queued for it.
 - log: post one entry to the orchestrator log, stamped with the current UTC time.
@@ -14,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import re
+import shlex
 import subprocess
 import sys
 
@@ -149,6 +151,51 @@ def review(args, config: Config) -> int:
     return 0
 
 
+REFRESH_RUNS = 3
+REFRESH_LINES = 20
+
+
+def branch_tip(config: Config, repo: str, branch: str) -> str:
+    result = call(config, "gh", "api", f"repos/{repo}/git/ref/heads/{branch}")
+    if result.returncode:
+        raise RuntimeError(f"cannot read the tip of {branch}: {result.stderr.strip()}")
+    sha = json.loads(result.stdout)["object"]["sha"]
+    if not isinstance(sha, str) or not sha:
+        raise ValueError(f"{branch} has no tip commit")
+    return sha
+
+
+def refresh(config: Config, repo: str, number: int, pr: dict, branch: str) -> str | None:
+    """Run [merge] refresh until the default-branch tip holds still across a run; return why the merge is refused.
+
+    Each run gets the tip it must validate against as {tip}; the merge is safe only if that same tip is still the
+    tip afterwards. The command may replace a status on the HEAD, so the required checks are read again after each run.
+    """
+    sha = pr["headRefOid"]
+    tip = branch_tip(config, repo, branch)
+    for _ in range(REFRESH_RUNS):
+        argv = config.merge.refresh_argv(number, sha, tip)
+        print(f"ding: refresh against {branch} {tip[:8]}: {shlex.join(argv)}", file=sys.stderr, flush=True)
+        try:
+            result = call(config, *argv)
+        except OSError as error:
+            return f"refresh could not run ({shlex.join(argv)}): {error}; merge refused"
+        if result.returncode:
+            lines = "\n".join((result.stdout + result.stderr).strip().splitlines()[-REFRESH_LINES:])
+            return (f"refresh exited {result.returncode} against {branch} {tip[:8]} ({shlex.join(argv)}); merge refused"
+                    + (f"\n{lines}" if lines else ""))
+        last = result.stdout.strip().splitlines()[-1:]
+        print(f"ding: refresh passed{': ' + last[0] if last else ''}", file=sys.stderr, flush=True)
+        failures = readiness(config, repo, pr, branch)["reasons"]
+        if failures:
+            return "PR readiness blocks merge after refresh:\n" + "\n".join(failures)
+        latest = branch_tip(config, repo, branch)
+        if latest == tip:
+            return None
+        tip = latest
+    return f"{branch} kept moving: its tip changed during each of {REFRESH_RUNS} refresh runs; merge refused, try again later"
+
+
 def merge(args, config: Config) -> int:
     repo = config.repository()
 
@@ -174,6 +221,10 @@ def merge(args, config: Config) -> int:
         failures = readiness(config, repo, pr, branch)["reasons"]
         if failures:
             return fail("PR readiness blocks merge:\n" + "\n".join(failures))
+        if config.merge.refresh:
+            refused = refresh(config, repo, args.pr, pr, branch)
+            if refused:
+                return fail(refused)
         result = call(config, "gh", "pr", "merge", str(args.pr), "--repo", repo, "--merge",
                       "--match-head-commit", pr["headRefOid"])
         if result.returncode:
