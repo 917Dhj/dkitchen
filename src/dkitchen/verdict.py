@@ -29,9 +29,9 @@ def comment_body(draft: str, verdict: str, config: Config, design: str | None) -
 
 def named_designer(text: str, config: Config) -> str | None:
     """The design line named first in `text`, by its name or an alias."""
-    designers = watch.designer_stations(config)
-    variants = {variant: name for name in designers for variant in watch.station_variants(name, config)}
-    others = {variant for name in watch.station_names(config) for variant in watch.station_variants(name, config)}
+    designers = watch.designer_roles(config)
+    variants = {variant: name for name in designers for variant in watch.role_variants(name, config)}
+    others = {variant for name in watch.role_names(config) for variant in watch.role_variants(name, config)}
     pattern = "|".join(map(re.escape, sorted(set(variants) | others, key=len, reverse=True)))
     for match in re.finditer(pattern, watch.normalized(text)):
         if match.group() in variants:
@@ -58,12 +58,12 @@ def design_line(config: Config, repo: str, issue: dict) -> str:
         if up is None:
             break
         issue = read_issue(config, repo, int(up.group(1)))
-    return config.stations.designer
+    return config.roles.designer
 
 
 def review_ticket(args, config: Config) -> int:
     ticket, verdict = args.ticket, args.verdict
-    signature = config.stations.signature(config.stations.verifier)
+    signature = config.roles.signature(config.roles.verifier)
     try:
         draft = args.body_file.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:
@@ -94,4 +94,4 @@ def review_ticket(args, config: Config) -> int:
     message = template.format(ticket=ticket, url=url, verdict=line, first_line=rule.first_line(draft))
     if "{first_line}" not in template:
         message += "\n" + rule.first_line(draft)
-    return rule.deliver(f"#{ticket}", config.stations.verifier, message, url)
+    return rule.deliver(f"#{ticket}", config.roles.verifier, message, url)

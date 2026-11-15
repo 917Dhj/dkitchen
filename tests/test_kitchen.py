@@ -13,7 +13,7 @@ from dkitchen import config, ding, night, orchestrate, refs, rule, watch
 CHINESE = """
 repo = "o/r"
 
-[stations]
+[roles]
 orchestrator = "总编排"
 designer = "总设计"
 verifier = "核查"
@@ -45,14 +45,14 @@ def test_defaults_without_a_config_file(tmp_path):
     loaded = settings(tmp_path)
     assert loaded.root == tmp_path and loaded.repo is None
     assert loaded.status.fields == ("Status", "Waiting on", "Key numbers", "Next")
-    assert loaded.stations.signature(loaded.stations.orchestrator) == "Orchestrator: "
+    assert loaded.roles.signature(loaded.roles.orchestrator) == "Orchestrator: "
 
 
 def test_config_file_sets_the_vocabulary(tmp_path):
     loaded = settings(tmp_path, CHINESE)
     assert loaded.repository() == "o/r"
     assert loaded.status.fields == ("状态", "在等", "关键数字", "下一步")
-    assert loaded.stations.signature(loaded.stations.orchestrator) == "总编排："
+    assert loaded.roles.signature(loaded.roles.orchestrator) == "总编排："
     assert loaded.log.issue == 246
 
 
@@ -61,7 +61,7 @@ def test_config_file_sets_the_vocabulary(tmp_path):
     ("[status]\nfeilds = ['A']", r"unknown keys in \[status\]: feilds"),
     ("[status]\nfields = []", "nonempty list"),
     ("[log]\nissue = 0", "positive issue number"),
-    ("[stations]\ndesigner = ''", "nonempty string"),
+    ("[roles]\ndesigner = ''", "nonempty string"),
     ("repo = 'not a repo'", "owner/name"),
     ("[status", "dkitchen.toml"),
 ])
@@ -739,9 +739,9 @@ def test_verifier_comments_are_listed_without_waking(tmp_path, monkeypatch, text
     comments = [comment(272, verifier), comment(234, user)]
     monkeypatch.setattr(watch, "gh", lambda path: comments if "/issues/comments" in path and "page=1" in path else [])
     found = watch.collect(loaded, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z", set(), set())
-    stations = loaded.stations
+    roles = loaded.roles
     assert [(line.split(":")[0].split(" (")[0], wakes) for _, line, wakes in found] == [
-        (f"#234 {stations.user} comment", True), (f"#272 {stations.verifier} comment", False)]
+        (f"#234 {roles.user} comment", True), (f"#272 {roles.verifier} comment", False)]
 
 
 def executor(block):
@@ -884,14 +884,14 @@ def test_log_issue_must_be_positive(capsys):
 @pytest.mark.parametrize("text", [None, CHINESE])
 def test_a_quoted_session_signature_signs_nothing(tmp_path, text):
     loaded = settings(tmp_path, text)
-    stations = loaded.stations
-    verifier = (f"## {stations.verifier}{stations.separator}#272 run request check\n\n"
+    roles = loaded.roles
+    verifier = (f"## {roles.verifier}{roles.separator}#272 run request check\n\n"
                 "| request body | ok: it starts with the status block and contains `Codex session:` |\n")
-    assert watch.signer(verifier, loaded) == stations.verifier
-    assert watch.signer("I checked it; the body has `Codex session:` in it.", loaded) == stations.user
-    assert watch.signer("Quoting `Claude session:` signs nothing.", loaded) == stations.user
-    assert watch.signer("Status: done\nWaiting on: none\n\nClaude session: impl", loaded) == stations.executor
-    assert watch.signer(executor("Status: done\nWaiting on: none\nKey numbers: 1\nNext: merge"), loaded) == stations.executor
+    assert watch.signer(verifier, loaded) == roles.verifier
+    assert watch.signer("I checked it; the body has `Codex session:` in it.", loaded) == roles.user
+    assert watch.signer("Quoting `Claude session:` signs nothing.", loaded) == roles.user
+    assert watch.signer("Status: done\nWaiting on: none\n\nClaude session: impl", loaded) == roles.executor
+    assert watch.signer(executor("Status: done\nWaiting on: none\nKey numbers: 1\nNext: merge"), loaded) == roles.executor
 
 
 RULING = CHINESE + """
@@ -1236,26 +1236,26 @@ def test_bad_launch_config_is_refused(tmp_path, text, error):
 @pytest.mark.parametrize("text", [None, CHINESE])
 def test_default_designer_signature_is_shared_and_requires_separator(tmp_path, text):
     loaded = settings(tmp_path, text)
-    stations = loaded.stations
-    signature = stations.signature(stations.designer)
+    roles = loaded.roles
+    signature = roles.signature(roles.designer)
     assert loaded.designer_signatures == (signature,)
-    assert rule.format_problem(f"{signature}decision\nType{stations.separator}record\n", loaded) is None
-    assert watch.signer(f"## {signature}decision", loaded) == stations.designer
-    for prefix in (stations.designer, stations.designer + " (other): "):
-        assert rule.format_problem(f"{prefix}\nType{stations.separator}record\n", loaded) is not None
-        assert watch.signer(prefix, loaded) == stations.user
-    assert watch.signer(stations.verifier + " report", loaded) == stations.verifier
-    assert watch.signer(stations.orchestrator + " update", loaded) == stations.orchestrator
+    assert rule.format_problem(f"{signature}decision\nType{roles.separator}record\n", loaded) is None
+    assert watch.signer(f"## {signature}decision", loaded) == roles.designer
+    for prefix in (roles.designer, roles.designer + " (other): "):
+        assert rule.format_problem(f"{prefix}\nType{roles.separator}record\n", loaded) is not None
+        assert watch.signer(prefix, loaded) == roles.user
+    assert watch.signer(roles.verifier + " report", loaded) == roles.verifier
+    assert watch.signer(roles.orchestrator + " update", loaded) == roles.orchestrator
 
 
 @pytest.mark.parametrize("prefix", ["总设计：", "总设计（训练）："])
 def test_rule_and_watch_share_configured_designer_signatures(tmp_path, prefix):
     loaded = settings(tmp_path, RULING + 'signatures = ["总设计：", "总设计（训练）："]\n')
     assert rule.format_problem(f"{prefix}结论\n类型：可执行\n", loaded) is None
-    assert watch.signer(f"{prefix}结论", loaded) == loaded.stations.designer
+    assert watch.signer(f"{prefix}结论", loaded) == loaded.roles.designer
     problem = rule.format_problem("其他设计：结论\n类型：可执行\n", loaded)
     assert "'总设计：'" in problem and "'总设计（训练）：'" in problem
-    assert watch.signer("其他设计：结论", loaded) == loaded.stations.user
+    assert watch.signer("其他设计：结论", loaded) == loaded.roles.user
 
 
 @pytest.mark.parametrize("value", ['[]', '[1]', '["Designer: ", false]', '[""]', '["   "]', '"Designer: "'])
@@ -1268,10 +1268,10 @@ def test_explicit_signatures_replace_default_and_preserve_spaces(tmp_path):
     loaded = settings(tmp_path, '[rule]\nsignatures = ["Training designer: "]')
     assert loaded.rule.signatures == ("Training designer: ",)
     assert rule.format_problem("Training designer: decision\nType: record", loaded) is None
-    assert watch.signer("Training designer: decision", loaded) == loaded.stations.designer
+    assert watch.signer("Training designer: decision", loaded) == loaded.roles.designer
     for prefix in ("Training designer:", "Designer: decision"):
         assert rule.format_problem(f"{prefix}\nType: record", loaded) is not None
-        assert watch.signer(prefix, loaded) == loaded.stations.user
+        assert watch.signer(prefix, loaded) == loaded.roles.user
 
 
 @pytest.mark.parametrize("prefix", ["总设计：", "总设计（训练）："])
@@ -1294,7 +1294,7 @@ def test_configured_signature_is_matched_before_watch_markdown_normalization(tmp
     loaded = settings(tmp_path, f"[rule]\nsignatures = {json.dumps([signature])}")
     body = f"{signature}decision\nType: record"
     assert rule.format_problem(body, loaded) is None
-    assert watch.signer(body, loaded) == loaded.stations.designer
+    assert watch.signer(body, loaded) == loaded.roles.designer
 
 
 def test_watch_does_not_report_a_configured_designer_as_user(tmp_path, monkeypatch):
@@ -1901,11 +1901,11 @@ def test_rule_baseline_diff_marks_omitted_lines(ruling, tmp_path, capsys):
 
 
 @pytest.fixture
-def station_settings(tmp_path):
+def role_settings(tmp_path):
     return settings(tmp_path, RULING + 'signatures = ["总设计：", "总设计（训练）："]\n')
 
 
-@pytest.mark.parametrize("station, waiting, signed, expected", [
+@pytest.mark.parametrize("role, waiting, signed, expected", [
     ("总设计", "总设计", True, True),
     ("总设计", "总设计（训练）", True, False),
     ("总设计（训练）", "总设计（训练）", True, True),
@@ -1915,28 +1915,28 @@ def station_settings(tmp_path):
     ("总设计", "总设计（训练）和总设计", True, True),
     ("总设计", "总设计和总设计（训练）", True, True),
 ])
-def test_station_collect_wakes_only_matching_executor_comments(station_settings, monkeypatch,
-                                                              station, waiting, signed, expected):
+def test_role_collect_wakes_only_matching_executor_comments(role_settings, monkeypatch,
+                                                           role, waiting, signed, expected):
     body = f"状态：进行中\n在等：{waiting}\n关键数字：1\n下一步：等"
     if signed:
         body = executor(body)
     calls = []
     def gh(path):
         calls.append(path)
-        assert "/issues/comments?" in path, "station watches must not query labels, PRs or ticket lists"
+        assert "/issues/comments?" in path, "role watches must not query labels, PRs or ticket lists"
         return [comment(30, body)]
     monkeypatch.setattr(watch, "gh", gh)
-    result = watch.collect(station_settings, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z",
-                           set(), set(), station=station)
+    result = watch.collect(role_settings, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z",
+                           set(), set(), role=role)
     assert bool(result) is expected
     assert len(calls) == 1
     if expected:
         assert result[0][2] is True and "#30 执行者 comment" in result[0][1]
 
 
-def test_station_match_uses_all_station_names_and_strips_signature_separators(station_settings):
+def test_role_match_uses_all_role_names_and_strips_signature_separators(role_settings):
     from dataclasses import replace
-    loaded = replace(station_settings, stations=replace(station_settings.stations, verifier="总设计（审稿）"))
+    loaded = replace(role_settings, roles=replace(role_settings.roles, verifier="总设计（审稿）"))
     for longer in ("总设计（训练）", "总设计（审稿）"):
         body = executor(f"状态：进行中\n在等：{longer}\n关键数字：1\n下一步：等")
         assert not watch.waiting_for(body, "总设计", loaded)
@@ -1948,19 +1948,19 @@ def test_station_match_uses_all_station_names_and_strips_signature_separators(st
 
 
 @pytest.mark.parametrize("state", ["进行中", "等用户", "完成"])
-def test_station_watch_matching_comment_wakes_even_on_awaiting_user_ticket(station_settings, monkeypatch, state):
+def test_role_watch_matching_comment_wakes_even_on_awaiting_user_ticket(role_settings, monkeypatch, state):
     item = comment(30, executor(f"状态：{state}\n在等：总设计\n关键数字：1\n下一步：等"))
-    item["issue"] = {"labels": [{"name": station_settings.labels.awaiting_user}]}
+    item["issue"] = {"labels": [{"name": role_settings.labels.awaiting_user}]}
     def gh(path):
         assert "/issues/comments?" in path
         return [item]
     monkeypatch.setattr(watch, "gh", gh)
-    assert watch.collect(station_settings, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z",
-                         set(), set(), station="总设计")[0][2] is True
+    assert watch.collect(role_settings, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z",
+                         set(), set(), role="总设计")[0][2] is True
 
 
-def test_station_watch_skips_other_triggers_and_honors_settle(station_settings, monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(config, "load", lambda: station_settings)
+def test_role_watch_skips_other_triggers_and_honors_settle(role_settings, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(config, "load", lambda: role_settings)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     calls, sleeps = [], []
     items = [comment(30, executor("状态：进行中\n在等：总设计\n关键数字：1\n下一步：等")),
@@ -1971,7 +1971,7 @@ def test_station_watch_skips_other_triggers_and_honors_settle(station_settings, 
         return items
     monkeypatch.setattr(watch, "gh", gh)
     def forbidden(*args, **kwargs):
-        pytest.fail("station watch must not consult stale, idle, board or tmux")
+        pytest.fail("role watch must not consult stale, idle, board or tmux")
     for name in ("stale", "idle", "board_output", "tmux_panes"):
         monkeypatch.setattr(watch, name, forbidden)
     monkeypatch.setattr(watch.time, "sleep", lambda seconds: sleeps.append(seconds))
@@ -1985,16 +1985,16 @@ def test_station_watch_skips_other_triggers_and_honors_settle(station_settings, 
     assert not watch.default_state("o/r").exists()
 
 
-def test_station_watch_retains_skip_issue_and_seen_filters(station_settings, monkeypatch):
+def test_role_watch_retains_skip_issue_and_seen_filters(role_settings, monkeypatch):
     body = executor("状态：进行中\n在等：总设计\n关键数字：1\n下一步：等")
     monkeypatch.setattr(watch, "gh", lambda path: [comment(30, body)])
-    args = (station_settings, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z")
-    item = watch.collect(*args, set(), set(), station="总设计")[0]
-    assert watch.collect(*args, {item[1]}, set(), station="总设计") == []
-    assert watch.collect(*args, set(), {30}, station="总设计") == []
+    args = (role_settings, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z")
+    item = watch.collect(*args, set(), set(), role="总设计")[0]
+    assert watch.collect(*args, {item[1]}, set(), role="总设计") == []
+    assert watch.collect(*args, set(), {30}, role="总设计") == []
 
 
-def test_station_and_orchestrator_watches_run_concurrently_with_separate_default_states(tmp_path, monkeypatch):
+def test_role_and_orchestrator_watches_run_concurrently_with_separate_default_states(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
     loaded = config.Config(root=tmp_path, repo="o/r")
@@ -2010,8 +2010,8 @@ def test_station_and_orchestrator_watches_run_concurrently_with_separate_default
     monkeypatch.setattr(watch, "unrouted_waits", lambda *args: [])
     monkeypatch.setattr(watch, "stalled", lambda *args: [])
     monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
-    def run(station):
-        args = SimpleNamespace(state=None, checkout=None, since=None, skip_issue=[], station=station,
+    def run(role):
+        args = SimpleNamespace(state=None, checkout=None, since=None, skip_issue=[], role=role,
                                interval=90, settle=0, stale_hours=6, stale_every=3600, max_errors=2,
                                stalled_hours=48)
         return watch.watch(args, loaded)
@@ -2023,7 +2023,7 @@ def test_station_and_orchestrator_watches_run_concurrently_with_separate_default
     assert default.with_suffix(".lock") != designer.with_suffix(".lock")
 
 
-def test_station_default_state_name_stays_inside_watch_directory(tmp_path, monkeypatch):
+def test_role_default_state_name_stays_inside_watch_directory(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     path = watch.default_state("o/r", "../../Designer/训练")
     assert path.parent == tmp_path / "ding/watch"
@@ -2031,7 +2031,7 @@ def test_station_default_state_name_stays_inside_watch_directory(tmp_path, monke
     assert watch.default_state("o/r", "Designer A") != watch.default_state("o/r", "Designer/A")
 
 
-def test_station_watch_explicit_state_keeps_the_existing_lock(tmp_path, monkeypatch):
+def test_role_watch_explicit_state_keeps_the_existing_lock(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "load", lambda: config.Config(root=tmp_path, repo="o/r"))
     state = tmp_path / "shared.json"
     with state.with_suffix(".lock").open("w") as handle:
@@ -2041,13 +2041,13 @@ def test_station_watch_explicit_state_keeps_the_existing_lock(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("arguments", [["--for"], ["--for", ""], ["--for", "   "]])
-def test_station_watch_requires_a_nonempty_name(arguments):
+def test_role_watch_requires_a_nonempty_name(arguments):
     with pytest.raises(SystemExit) as error:
         ding.main(["watch", *arguments])
     assert error.value.code == 2
 
 
-def test_station_watch_help_describes_its_scope(capsys):
+def test_role_watch_help_describes_its_scope(capsys):
     with pytest.raises(SystemExit):
         ding.main(["watch", "--help"])
     text = capsys.readouterr().out
@@ -2056,9 +2056,9 @@ def test_station_watch_help_describes_its_scope(capsys):
     assert "review:<NAME>" in text and "stale/idle" in text
 
 
-def test_station_watch_retries_post_settle_timeout_without_duplicate_output(station_settings, monkeypatch, tmp_path, capsys):
+def test_role_watch_retries_post_settle_timeout_without_duplicate_output(role_settings, monkeypatch, tmp_path, capsys):
     import subprocess
-    monkeypatch.setattr(config, "load", lambda: station_settings)
+    monkeypatch.setattr(config, "load", lambda: role_settings)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
     calls = []
@@ -2078,18 +2078,18 @@ def test_station_watch_retries_post_settle_timeout_without_duplicate_output(stat
 
 
 @pytest.mark.parametrize("prefix", ["核查：", "总设计：", "总编排：", "用户："])
-def test_station_watch_ignores_non_executor_roles_even_when_waiting_on_target(station_settings, monkeypatch, prefix):
+def test_role_watch_ignores_non_executor_roles_even_when_waiting_on_target(role_settings, monkeypatch, prefix):
     body = prefix + "报告\n在等：总设计\n关键数字：1\n下一步：等"
     monkeypatch.setattr(watch, "gh", lambda path: [comment(30, body)])
-    assert watch.collect(station_settings, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z",
-                         set(), set(), station="总设计") == []
+    assert watch.collect(role_settings, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z",
+                         set(), set(), role="总设计") == []
 
 
 @pytest.fixture
 def routed_settings(tmp_path):
     return settings(tmp_path, RULING.replace('[status]\n', '[status]\npaused = "暂停"\n') + '''
 signatures = ["总设计：", "总设计（训练）："]
-[stations.aliases]
+[roles.aliases]
 "总设计（训练）" = ["训练设计"]
 [watch]
 handoff = ["交"]
@@ -2110,8 +2110,8 @@ handoff = ["交"]
     ("总设计(训练):自己的裁定\n@训练设计", False, False),
 ])
 def test_issue32_mention_replays(routed_settings, body, training, general):
-    assert watch.station_wakes(body, "总设计（训练）", routed_settings) is training
-    assert watch.station_wakes(body, "总设计", routed_settings) is general
+    assert watch.role_wakes(body, "总设计（训练）", routed_settings) is training
+    assert watch.role_wakes(body, "总设计", routed_settings) is general
 
 
 def test_alias_matching_is_shared_with_orchestrator_and_normalizes_width(routed_settings):
@@ -2126,11 +2126,11 @@ def test_alias_matching_is_shared_with_orchestrator_and_normalizes_width(routed_
 
 
 @pytest.mark.parametrize("text", [
-    '[stations]\naliases = "wrong"',
-    '[stations.aliases]\nDesigner = []',
-    '[stations.aliases]\nDesigner = [1]',
-    '[stations.aliases]\nDesigner = [""]',
-    '[stations.aliases]\n"" = ["D"]',
+    '[roles]\naliases = "wrong"',
+    '[roles.aliases]\nDesigner = []',
+    '[roles.aliases]\nDesigner = [1]',
+    '[roles.aliases]\nDesigner = [""]',
+    '[roles.aliases]\n"" = ["D"]',
     '[watch]\ndesign_answer_minutes = -1',
     '[watch]\ndesign_answer_minutes = true',
     '[watch]\ndesign_answer_minutes = inf',
@@ -2205,7 +2205,7 @@ def test_waits_ignores_superseded_and_paused_waits(verifier_wait, capsys, latest
 @pytest.mark.parametrize("requested, reply", [
     ("总编排", "总编排：已安排"), ("用户", "同意"), ("训练设计", "总设计(训练): 已答复"),
 ])
-def test_waits_requires_a_reply_from_the_requested_station(verifier_wait, capsys, requested, reply):
+def test_waits_requires_a_reply_from_the_requested_role(verifier_wait, capsys, requested, reply):
     ticket = verifier_wait
     ticket.last["body"] = executor(f"状态: 进行中\n在等: {requested}\n关键数字: 1\n下一步: 等")
     ticket.comments.append({"id": 2602, "body": "核查：其他工作已核对"})
@@ -2228,7 +2228,7 @@ def test_waits_for_uses_aliases_width_and_longest_name(verifier_wait, capsys, ta
     found = json.loads(capsys.readouterr().out)
     assert bool(found) is matches
     if matches:
-        assert found[0]["station"] == "总设计（训练）" and found[0]["minutes"] == 45
+        assert found[0]["role"] == "总设计（训练）" and found[0]["minutes"] == 45
 
 
 def test_waits_reports_unanswered_targets_independently(verifier_wait, capsys):
@@ -2237,7 +2237,7 @@ def test_waits_reports_unanswered_targets_independently(verifier_wait, capsys):
     ticket.comments.append({"id": 2602, "body": "核查：答复"})
     ticket.issues[0]["comments"] = 2
     assert ding.main(["waits", "--json"]) == 0
-    assert [item["station"] for item in json.loads(capsys.readouterr().out)] == ["总设计"]
+    assert [item["role"] for item in json.loads(capsys.readouterr().out)] == ["总设计"]
 
 
 def test_designer_reply_does_not_hide_an_older_verifier_wait(verifier_wait, monkeypatch):
@@ -2287,7 +2287,7 @@ def test_waits_sorts_oldest_first_and_ignores_prs(verifier_wait, monkeypatch, ca
     assert ding.main(["waits", "--json"]) == 0
     found = json.loads(capsys.readouterr().out)
     assert [item["ticket"] for item in found] == [27, 26]
-    assert found[0] == {"ticket": 27, "station": "核查", "minutes": 60, "summary": "状态: 进行中; 在等: 核查",
+    assert found[0] == {"ticket": 27, "role": "核查", "station": "核查", "minutes": 60, "summary": "状态: 进行中; 在等: 核查",
                         "url": older["html_url"], "comment_id": 2701, "created_at": older["created_at"]}
 
 
@@ -2399,15 +2399,15 @@ def test_backstop_only_considers_latest_executor_comment(unanswered_ticket, body
     assert [item[2] for item in found] == expected
 
 
-def test_verifier_handoff_wakes_station_but_remains_reference_for_orchestrator(routed_settings, monkeypatch):
+def test_verifier_handoff_wakes_role_but_remains_reference_for_orchestrator(routed_settings, monkeypatch):
     item = comment(32, "核查：结论\n交总设计决定")
     def gh(path):
         return [item] if "/issues/comments?" in path else []
     monkeypatch.setattr(watch, "gh", gh)
     args = (routed_settings, "o/r", "2026-10-14T08:00:00Z", "2026-10-14T08:00:00Z", set(), set())
-    station = watch.collect(*args, station="总设计")
+    role = watch.collect(*args, role="总设计")
     orchestrator = watch.collect(*args)
-    assert station[0][2] is True and "for reference" not in station[0][1]
+    assert role[0][2] is True and "for reference" not in role[0][1]
     assert orchestrator[0][2] is False and "for reference" in orchestrator[0][1]
 
 
@@ -2428,7 +2428,7 @@ def test_backstop_persists_ids_and_does_not_repeat_after_restart(unanswered_tick
     monkeypatch.setattr(watch, "collect", lambda *args: [(watch.now(), "other activity", True)])
     assert ding.main(args) == 0
     output = capsys.readouterr().out
-    assert output.count("no station reply" if target else "no designer reply") == 1
+    assert output.count("no role reply" if target else "no designer reply") == 1
     assert "other activity" in output
 
 
@@ -2462,7 +2462,7 @@ def test_for_watch_never_runs_design_backstop(routed_settings, monkeypatch, tmp_
     for name in ("unanswered_design", "idle", "stale", "board_output", "tmux_panes"):
         monkeypatch.setattr(watch, name, forbidden)
     monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
-    assert ding.main(["watch", "--for", "总设计（训练）", "--state", str(tmp_path / "station.json"),
+    assert ding.main(["watch", "--for", "总设计（训练）", "--state", str(tmp_path / "role.json"),
                       "--since", "2026-10-14T08:00:00Z", "--settle", "0"]) == 0
 
 
@@ -2483,7 +2483,7 @@ def test_backstop_can_be_disabled_and_does_not_depend_on_idle_enabled(unanswered
     assert ding.main(["watch", "--state", str(ticket.config.root / "idle-off.json")]) == 0
 
 
-def test_backstop_reads_only_latest_page_when_all_watched_stations_replied(unanswered_ticket, monkeypatch):
+def test_backstop_reads_only_latest_page_when_all_watched_roles_replied(unanswered_ticket, monkeypatch):
     ticket = unanswered_ticket
     ticket.issues[0]["comments"] = 202
     original = watch.gh
@@ -2554,7 +2554,7 @@ def test_open_issue_pagination_reaches_older_tickets_without_duplicates(monkeypa
 
 def test_optional_config_defaults_are_backward_compatible(tmp_path):
     loaded = settings(tmp_path)
-    assert loaded.stations.aliases == {}
+    assert loaded.roles.aliases == {}
     assert loaded.status.paused is None
     assert loaded.watch.design_answer_minutes == 30
     assert settings(tmp_path, '[watch]\ndesign_answer_minutes = 0').watch.design_answer_minutes == 0
@@ -2564,7 +2564,7 @@ def test_issue32_watch_help_covers_new_rules(capsys):
     with pytest.raises(SystemExit):
         ding.main(["watch", "--help"])
     help_text = " ".join(capsys.readouterr().out.split())
-    assert "[stations.aliases]" in help_text
+    assert "[roles.aliases]" in help_text
     assert "[status] paused" in help_text
     assert "design_answer_minutes" in help_text
     assert "awaiting-user" in help_text and "status labels older" in help_text
@@ -2743,7 +2743,7 @@ def test_waits_uses_readiness_and_routes_unconfigured_label(review_pr, capsys):
     assert ding.main(['waits', '--for', 'Guest', '--json']) == 0
     item, = json.loads(capsys.readouterr().out)
     assert item['kind'] == 'review-missing' and item['head'] == 'abc123'
-    assert item['station'] == 'Guest' and 'missing' in item['summary']
+    assert item['role'] == 'Guest' and 'missing' in item['summary']
     review_pr.review = 'success'
     review_pr.ci = 'failure'
     assert ding.main(['waits', '--json']) == 0
@@ -2885,7 +2885,7 @@ def test_review_help_lists_command_and_keys(capsys):
 def test_orchestrator_for_runs_all_backstops_and_collects_as_bare(review_pr, monkeypatch, target):
     from dataclasses import replace
     ticket = review_pr
-    ticket.config = replace(ticket.config, stations=replace(ticket.config.stations, aliases={'Orchestrator': ('Boss',)}))
+    ticket.config = replace(ticket.config, roles=replace(ticket.config.roles, aliases={'Orchestrator': ('Boss',)}))
     ticket.review = 'failure'
     phases = []
     def collect(*args, **kwargs):
@@ -2936,18 +2936,18 @@ def test_waits_excludes_drafts_except_failed_review(review_pr, capsys, review):
 @pytest.mark.parametrize('enabled', [False, True])
 def test_review_comment_is_verifier_only_with_review_check(tmp_path, enabled):
     loaded = settings(tmp_path, 'repo="o/r"\n[merge]\nreview_check=' + ('"review"' if enabled else '""'))
-    expected = loaded.stations.verifier if enabled else loaded.stations.user
+    expected = loaded.roles.verifier if enabled else loaded.roles.user
     assert watch.signer('Reviewed e7870cd7: pass\n\nchecked', loaded) == expected
     assert watch.signer('Reviewed e7870cd7: changes requested, see below\n\nfindings', loaded) == expected
-    assert watch.signer('Reviewed it: pass', loaded) == loaded.stations.user
+    assert watch.signer('Reviewed it: pass', loaded) == loaded.roles.user
 
 
 def test_review_lines_follow_the_configured_wording(tmp_path, monkeypatch):
     loaded = settings(tmp_path, 'repo="o/r"\n[merge]\nreview_check="review"\n'
                                 'review_pass="审过 {sha}：通过"\nreview_changes="审过 {sha}：有出入，见下"')
-    assert watch.signer('审过 e7870cd7：通过\n\nchecked', loaded) == loaded.stations.verifier
-    assert watch.signer('审过 e7870cd7:有出入,见下', loaded) == loaded.stations.verifier
-    assert watch.signer('Reviewed e7870cd7: pass', loaded) == loaded.stations.user
+    assert watch.signer('审过 e7870cd7：通过\n\nchecked', loaded) == loaded.roles.verifier
+    assert watch.signer('审过 e7870cd7:有出入,见下', loaded) == loaded.roles.verifier
+    assert watch.signer('Reviewed e7870cd7: pass', loaded) == loaded.roles.user
     body = tmp_path / 'review.md'
     body.write_text('details')
     calls = []
@@ -2966,10 +2966,10 @@ def test_bad_review_lines_are_refused(tmp_path, text):
 
 def test_handoff_words_default_to_english_and_are_configurable(tmp_path):
     english = settings(tmp_path, 'repo="o/r"')
-    assert watch.station_wakes("Orchestrator: done\nhand to Designer", "Designer", english)
-    assert not watch.station_wakes("Orchestrator: done\n交Designer", "Designer", english)
+    assert watch.role_wakes("Orchestrator: done\nhand to Designer", "Designer", english)
+    assert not watch.role_wakes("Orchestrator: done\n交Designer", "Designer", english)
     chinese = settings(tmp_path, 'repo="o/r"\n[watch]\nhandoff = ["交"]')
-    assert watch.station_wakes("Orchestrator: done\n交Designer", "Designer", chinese)
+    assert watch.role_wakes("Orchestrator: done\n交Designer", "Designer", chinese)
     with pytest.raises(ValueError, match="handoff must be a nonempty list"):
         settings(tmp_path, '[watch]\nhandoff = []')
 
@@ -2998,7 +2998,7 @@ MERGED = {"state": "closed", "merged_at": "2026-11-02T00:00:00Z", "labels": [], 
 OTHER = {**MERGED, "body": "Closes #25"}  # another ticket's PR
 
 
-@pytest.mark.parametrize("waiting, prs, stations", [
+@pytest.mark.parametrize("waiting, prs, roles", [
     ("核查、总编排、用户, PR #31", {31: MERGED}, ["用户"]),
     ("核查审 PR＃31，总编排合入", {31: {**MERGED, "merged_at": None}}, []),
     ("核查、总编排 https://github.com/o/r/pull/31", {31: MERGED}, []),
@@ -3016,11 +3016,11 @@ OTHER = {**MERGED, "body": "Closes #25"}  # another ticket's PR
     ("核查、总编排", {}, ["核查", "总编排"]),
 ])
 def test_waits_drop_review_and_merge_rows_once_the_tickets_own_pr_is_finished(verifier_wait, monkeypatch, capsys,
-                                                                             waiting, prs, stations):
+                                                                             waiting, prs, roles):
     verifier_wait.last["body"] = executor(f"状态: 进行中\n在等: {waiting}\n关键数字: 1\n下一步: 等")
     pr_states(monkeypatch, prs)
     assert ding.main(["waits", "--json"]) == 0
-    assert sorted(item["station"] for item in json.loads(capsys.readouterr().out)) == sorted(stations)
+    assert sorted(item["role"] for item in json.loads(capsys.readouterr().out)) == sorted(roles)
 
 
 def test_a_wait_on_another_tickets_merged_pr_keeps_its_rows_and_says_so(verifier_wait, monkeypatch, capsys):
@@ -3029,7 +3029,7 @@ def test_a_wait_on_another_tickets_merged_pr_keeps_its_rows_and_says_so(verifier
     pr_states(monkeypatch, {31: OTHER})
     assert ding.main(["waits", "--json"]) == 0
     [row] = json.loads(capsys.readouterr().out)
-    assert row["station"] == "总编排" and row["summary"].endswith("(PR #31 merged)")
+    assert row["role"] == "总编排" and row["summary"].endswith("(PR #31 merged)")
 
 
 @pytest.mark.parametrize("prs, kept", [({31: MERGED}, False), ({31: OTHER}, True)])
@@ -3065,7 +3065,7 @@ def test_waits_lists_stalled_drafts_and_tickets_that_name_no_wait(stalled_line, 
     ]
     assert ding.main(["waits", "--json"]) == 0
     found = json.loads(capsys.readouterr().out)
-    assert [(item["kind"], item["pr"], item["ticket"], item["station"]) for item in found] == [
+    assert [(item["kind"], item["pr"], item["ticket"], item["role"]) for item in found] == [
         ("stalled", True, 1350, "总编排"), ("stalled", False, 26, "总编排")]
 
 
@@ -3077,7 +3077,7 @@ def test_waits_lists_stalled_drafts_and_tickets_that_name_no_wait(stalled_line, 
     ([], "状态: 阻塞\n在等: 无"),
     ([], "awaiting"),
 ])
-def test_stalled_skips_waits_other_states_and_other_stations(stalled_line, capsys, options, change):
+def test_stalled_skips_waits_other_states_and_other_roles(stalled_line, capsys, options, change):
     ticket = stalled_line
     ticket.pulls = []
     if change == "awaiting":
@@ -3132,7 +3132,7 @@ def test_watch_and_waits_take_stalled_hours(capsys):
 
 
 TWO_LINES = """repo = "o/r"
-[stations.aliases]
+[roles.aliases]
 "Training designer" = ["Training"]
 [rule]
 signatures = ["Designer: ", "Training designer: "]
@@ -3197,8 +3197,8 @@ def test_changes_hand_the_ticket_to_its_design_line(verdict, capsys, bodies, des
                                     f"hand to {design}"]
     loaded = config.load()
     assert watch.changes_verdict(body, loaded)
-    for name in watch.designer_stations(loaded):
-        assert watch.station_wakes(body, name, loaded) is (name == design)
+    for name in watch.designer_roles(loaded):
+        assert watch.role_wakes(body, name, loaded) is (name == design)
     assert verdict.sends[0][-1].startswith(f"#42 Verdict: changes requested, see the ticket {STAGE_URL}")
 
 
@@ -3267,7 +3267,7 @@ def test_a_stage_verdict_on_a_pr_number_posts_nothing_and_names_the_pr_form(verd
     assert len(verdict.calls) == 1 and verdict.sends == []
 
 
-ROLE_CONFIG = 'repo = "o/r"\n[stations]\ndesigner = "总设计师"\n[stations.aliases]\n"总设计师" = ["总设计"]\n'
+ROLE_CONFIG = 'repo = "o/r"\n[roles]\ndesigner = "总设计师"\n[roles.aliases]\n"总设计师" = ["总设计"]\n'
 FIRST, SECOND = "local_11111111-aaaa", "local_22222222-bbbb"
 
 
@@ -3347,7 +3347,7 @@ def role_watch(tmp_path, monkeypatch, collect=lambda *args, **kwargs: [(watch.no
     monkeypatch.setattr(watch, "collect", collect)
     monkeypatch.setattr(watch, "pr_wakes", lambda *args: ([], {}))
     monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
-    args = SimpleNamespace(state=None, checkout=None, since=None, skip_issue=[], station="总设计",
+    args = SimpleNamespace(state=None, checkout=None, since=None, skip_issue=[], role="总设计",
                            interval=90, settle=0, stale_hours=6, stale_every=3600, max_errors=2, stalled_hours=48)
     return watch.watch(args, loaded)
 
@@ -3392,3 +3392,32 @@ def test_watch_without_a_holder_or_session_runs_and_warns_once(tmp_path, monkeyp
     assert role_watch(tmp_path, monkeypatch, collect=collect) == 0
     err = capsys.readouterr().err
     assert err.count("nobody has taken 总设计师" if session else "no Claude Code or Codex session id") == 1
+
+
+ROLES_TOML = '[{}]\ndesigner = "总设计师"\nverifier = "核查"\nseparator = "："\n[{}.aliases]\n"总设计师" = ["总设计"]\n'
+
+
+def test_a_stations_section_reads_as_roles_and_warns_once_per_command(tmp_path, monkeypatch, capsys):
+    import subprocess
+    current, old = tmp_path / "current", tmp_path / "old"
+    for root, section in ((current, "roles"), (old, "stations")):
+        root.mkdir()
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        (root / config.FILE).write_text('repo = "o/r"\n' + ROLES_TOML.format(section, section), encoding="utf-8")
+    assert config.load(old).roles == config.load(current).roles
+    assert capsys.readouterr().err.count("[stations] is now [roles]") == 1
+    monkeypatch.chdir(old)
+    monkeypatch.setattr(config, "RENAME_WARNED", set())
+    monkeypatch.setenv("CLAUDE_CODE_HOST_SESSION_ID", "local_1")
+    assert ding.main(["role", "take", "总设计"]) == 0
+    assert ding.main(["role", "总设计师"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.endswith("local_1\n")
+    assert captured.err == ".dkitchen.toml: [stations] is now [roles]; rename the section\n"
+
+
+def test_stations_and_roles_together_are_refused(tmp_path):
+    (tmp_path / config.FILE).write_text(ROLES_TOML.format("roles", "roles") + '[stations]\nuser = "用户"\n',
+                                        encoding="utf-8")
+    with pytest.raises(ValueError, match=r"\[stations\] and \[roles\]"):
+        config.load(tmp_path)
