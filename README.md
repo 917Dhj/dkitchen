@@ -105,6 +105,7 @@ The roles' everyday steps are `ding` commands too, so they run the same careful 
 - `ding relay` sends a message to a ticket's executor, and records it on the ticket only once delivery is confirmed.
 - `ding review` records a verdict on the current PR HEAD. With `[merge] review_check`, `ding merge`, `ding watch`, and `ding waits` share PR readiness checks; every merge requires the default target branch. See [the review and merge guide](docs/ding.md).
 - `ding watch` waits in each role's background and wakes it when a ticket needs it.
+- `ding role take NAME` records which session holds a role, by session id; `ding role NAME` prints it, so peers stop finding each other by name.
 - `ding waits` lists overdue unanswered waits, including ones still pending after a prior watch batch, and the stalled lines that name no wait.
 - `ding log` keeps the orchestrator's log of what it did while you were away.
 - `ding night` opens, shows, and closes time-limited night orders on that log. Run `/goodnight` and `/goodmorning` in the orchestrator session to collect the orders and report their use.

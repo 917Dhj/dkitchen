@@ -98,7 +98,7 @@ Done when every check passes, or the user has been told exactly which one fails 
 Tell the user, briefly:
 
 1. which sessions to open: the orchestrator, each designer line, and the verifier in Claude Code; executors in Codex, one per ticket, each in its own worktree;
-2. to put those session names into the table at the top of `docs/agents/roles.md`;
+2. that the first session in each role runs `ding role take <role>` before starting its watch, so peers find it with `ding role <role>`; the session names can go into the table at the top of `docs/agents/roles.md` for people to read;
 3. that each Claude Code role starts its watch at session start, as `docs/agents/watch.md` says;
 4. how to start: describe the first piece of work to the designer, who writes it as a ticket with `write-ticket`;
 5. that `/shift-change` hands a role over to a fresh session when its context fills up.

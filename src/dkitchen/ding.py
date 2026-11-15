@@ -2121,6 +2121,14 @@ def main(argv=None) -> int:
                      help="Orchestrator only: on the stale check, report each open draft PR and each in-progress "
                           "ticket naming no wait not updated for this long, once a day (default: 48; 0 disables)")
     sub.add_argument("--max-errors", type=int, default=10, help="Consecutive failed polls before exiting (default: 10)")
+    sub = commands.add_parser("role", help="Record or print which session holds each role, by session id",
+                              description="ding role: list every role with a holder (role, kind, id, since). "
+                                          "ding role NAME: print only NAME's holder id; exit 1 when nobody holds it. "
+                                          "ding role take NAME: record this session as NAME's holder; run it inside "
+                                          "that session. NAME is the orchestrator, a designer line, or the verifier, aliases included. "
+                                          "Records are per repository, on this host, under "
+                                          "~/.local/state/ding/roles/OWNER-REPO.jsonl.")
+    sub.add_argument("words", nargs="*", metavar="[take] NAME")
     sub = commands.add_parser(
         "rule", help="Post the designer's ruling on a ticket after checking it, and tell a session",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2254,6 +2262,9 @@ def main(argv=None) -> int:
         if args.action == "check-refs":
             from dkitchen import refs
             return refs.check_refs(args)
+        if args.action == "role":
+            from dkitchen import config, roles
+            return roles.role(args, config.load())
         if args.action == "night":
             from dkitchen import config, night
             return night.night(args, config.load())

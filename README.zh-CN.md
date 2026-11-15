@@ -105,6 +105,7 @@ ding launch train -- python train.py                  # 在 tmux 里跑，退出
 - `ding relay` 给票的执行者发消息，确认送达后才在票里留记录。
 - `ding review` 将审查结论绑定到当前 PR HEAD。配置 `[merge] review_check` 后，`ding merge`、`ding watch` 和 `ding waits` 共用 PR 就绪判断；所有合并都要求目标为默认分支。详见 [review 与 merge 文档](docs/ding.md)。
 - `ding watch` 在每个岗位后台等着，票需要它时唤醒它。
+- `ding role take NAME` 按会话 id 记录谁持有某个角色；`ding role NAME` 打印该 id，同伴不再靠会话名互相寻找。
 - `ding waits` 列出超时未回应的等待，包括上一批 watch 之后还没处理的，以及没写等待却停滞的工作线。
 - `ding log` 记下你不在时总编排做了什么。
 - `ding night` 在这份日志上开启、查看和关闭有时限的夜间指令。在总编排会话里运行 `/goodnight` 和 `/goodmorning`，收集指令并汇报使用情况。
