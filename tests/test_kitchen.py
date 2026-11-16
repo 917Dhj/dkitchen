@@ -3817,3 +3817,103 @@ def test_pr_cli_takes_one_shape(tmp_path, capsys):
     with pytest.raises(SystemExit):
         ding.main(["pr", "42", "--ready", "7", "--title", "x", "--body-file", str(tmp_path / "b.md")])
     assert "pr takes" in capsys.readouterr().err
+
+
+# Watching a kitchen kept in its own repo
+
+SPLIT = 'repo = "me/kitchen"\ncode = "org/code"\n'
+SINCE = "2026-11-16T08:00:00Z"
+
+
+def fake_watch_github(monkeypatch, routes):
+    """Fake watch.gh: the first route whose fragments all appear in the path answers it; unknown paths are empty."""
+    asked = []
+
+    def gh(path):
+        asked.append(path)
+        for fragments, answer in routes:
+            if all(fragment in path for fragment in fragments):
+                return answer
+        return []
+    monkeypatch.setattr(watch, "gh", gh)
+    monkeypatch.setattr(watch, "VIEWER", ["me"])
+    return asked
+
+
+def code_comment(number, body, *, login="me", created=SINCE, repo="me/kitchen", pull=False):
+    target = {"pull_request_url": f"https://api.github.com/repos/{repo}/pulls/{number}"} if pull else {
+        "issue_url": f"https://api.github.com/repos/{repo}/issues/{number}"}
+    return {**target, "body": body, "user": {"login": login}, "created_at": created, "updated_at": created,
+            "html_url": f"https://github.com/{repo}/issues/{number}#issuecomment-1", "id": 1}
+
+
+def test_a_pr_line_on_a_ticket_tells_the_orchestrator_a_pr_opened(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, SPLIT)
+    pr_line = code_comment(42, "Status: in progress\nWaiting on: none\n\nPR: org/code#45\n\nCodex session: t")
+    fake_watch_github(monkeypatch, [(("me/kitchen/issues/comments",), [pr_line])])
+    lines = [line for _, line, wakes in watch.collect(loaded, "me/kitchen", SINCE, SINCE, set(), set()) if wakes]
+    assert lines == ["PR org/code#45 opened, recorded on #42 https://github.com/me/kitchen/issues/42#issuecomment-1"]
+
+
+def test_outside_comments_on_the_kitchens_own_code_repo_work_wake_the_orchestrator(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, SPLIT)
+    fake_watch_github(monkeypatch, [
+        (("org/code/issues/comments",), [code_comment(45, "Please split this.", login="alice", repo="org/code"),
+                                         code_comment(45, "Done.", repo="org/code"),
+                                         code_comment(46, "Not ours.", login="alice", repo="org/code")]),
+        (("org/code/pulls/comments",), [code_comment(45, "nit: name", login="bob", repo="org/code", pull=True)]),
+        (("org/code/issues/45",), {"user": {"login": "me"}}),
+        (("org/code/issues/46",), {"user": {"login": "carol"}}),
+    ])
+    lines = [line for _, line, wakes in watch.collect(loaded, "me/kitchen", SINCE, SINCE, set(), set()) if wakes]
+    assert [line.split(":")[0] for line in lines] == ["org/code#45 code repo comment by @alice",
+                                                       "org/code#45 code repo comment by @bob"]
+    assert not any("User" in line for line in lines)
+
+
+def test_a_single_repo_kitchen_does_not_read_a_code_repo(tmp_path, monkeypatch):
+    asked = fake_watch_github(monkeypatch, [])
+    watch.collect(settings(tmp_path, 'repo = "o/r"\n'), "o/r", SINCE, SINCE, set(), set())
+    assert not any("pulls/comments" in path for path in asked)
+
+
+def test_waits_name_code_repo_prs_and_finish_with_the_tickets_own(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, SPLIT)
+    assert watch.named_prs("Verifier, PR org/code#45 and PR other/x#3", "org/code") == {45}
+    fake_watch_github(monkeypatch, [
+        (("org/code/pulls/45",), {"state": "closed", "merged_at": "x", "labels": []}),
+        (("org/code/pulls/46",), {"state": "closed", "merged_at": "x", "labels": []}),
+        (("me/kitchen/issues/42/comments",), [{"body": "PR: org/code#45"}]),
+        (("me/kitchen/issues/42",), {"number": 42, "body": "Goal", "comments": 1}),
+    ])
+    roles, note = watch.finished_prs("Verifier (PR org/code#45)", 42, loaded, "me/kitchen", {})
+    assert loaded.roles.verifier in roles and note == ""
+    roles, note = watch.finished_prs("Verifier (PR org/code#46)", 42, loaded, "me/kitchen", {})
+    assert roles == set() and note == "PR #46 merged"
+
+
+def test_a_shared_code_repo_has_no_pr_readiness_waits(tmp_path):
+    loaded = settings(tmp_path, SHARED + '[merge]\nreview_check = "review"\n')
+    assert watch.pr_waits(loaded, "org/code", set()) == []
+
+
+def test_stalled_drafts_in_a_split_kitchen_are_its_own_code_repo_drafts(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, SPLIT)
+    old = "2026-01-01T00:00:00Z"
+    draft = lambda number, login: {"number": number, "draft": True, "updated_at": old, "title": "t", "user": {"login": login},
+                                   "html_url": f"https://github.com/org/code/pull/{number}"}
+    asked = fake_watch_github(monkeypatch, [(("org/code/pulls?state=open",), [draft(1, "me"), draft(2, "alice")])])
+    found = watch.stalled(loaded, "me/kitchen", tmp_path, 48, {1})
+    assert [item["ref"] for item in found] == ["org/code#1"]
+    assert watch.stalled_line(found[0]).startswith("PR org/code#1 stalled")
+    assert not any("me/kitchen/pulls" in path for path in asked)
+
+
+def test_board_covers_both_checkouts_of_a_split_kitchen(tmp_path, monkeypatch):
+    from dkitchen import kitchens
+    kitchen, code = split_pair(tmp_path)
+    run_git(code, "worktree", "add", "-q", str(tmp_path / "wt"), "-b", "issue12")
+    kitchens.write({"org/code": kitchens.Entry(kitchen=kitchen, code=code)})
+    for where in (kitchen, tmp_path / "wt"):
+        monkeypatch.chdir(where)
+        assert set(ding.repository_roots()) == {kitchen, code, (tmp_path / "wt").resolve()}

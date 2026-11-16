@@ -308,8 +308,28 @@ def repository_roots() -> list[Path]:
         return [cwd]
     if root.returncode:
         return [cwd]
+    roots = worktrees(None)
+    # A kitchen kept in its own repo works across two checkouts: its standing roles sit in the kitchen's, its
+    # executors in the code repo's worktrees. The board covers both, from either side.
+    from dkitchen import config
+
+    try:
+        settings = config.load()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return roots
+    if settings.split and settings.code_root is not None:
+        for other in (settings.root, settings.code_root):
+            try:
+                roots += [path for path in worktrees(other) if path not in roots]
+            except (OSError, subprocess.SubprocessError) as exc:
+                print(f"ding: cannot list the worktrees of {other}: {exc}", file=sys.stderr)
+    return roots
+
+
+def worktrees(checkout: Path | None) -> list[Path]:
+    """Every worktree of the repository at checkout (default: the working directory's)."""
     result = subprocess.run(["git", "-c", "core.quotePath=false", "worktree", "list", "--porcelain"],
-                            capture_output=True, text=True, timeout=10, check=True)
+                            cwd=checkout, capture_output=True, text=True, timeout=10, check=True)
     paths = [field[len("worktree "):] for field in result.stdout.splitlines()
              if field.startswith("worktree ")]
     return [Path(ast.literal_eval(path) if path.startswith('"') else path).resolve() for path in paths]
