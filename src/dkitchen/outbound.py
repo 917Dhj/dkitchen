@@ -11,7 +11,8 @@ code repo would read as one of its own issues (allowed only for the code issues 
 In a shared code repo, `ding pr` first runs `ding check` in the worktree when [check] is set, and refuses on a
 problem. Opening a PR that is not a draft, marking one ready, and opening a code issue each need
 `--approval URL`: a user decision on the ticket, opening `<role>: user decision` ([outbound] user_decision), or the
-night orders open now.
+night orders open now. The ticket comment records the approval, and a user decision approves one code issue only:
+the user approves each code issue on its own, while one decision may approve a PR's handing over ahead of time.
 
 The ticket comment is signed by `--from ROLE`, or else by the caller's executor session, after a status block.
 """
@@ -30,6 +31,7 @@ from dkitchen.orchestrate import call, fail
 
 PR_LINE = re.compile(r"(?m)^PR: ([\w.-]+/[\w.-]+)#(\d+)\b")
 ISSUE_LINE = re.compile(r"(?m)^Code issue: ([\w.-]+/[\w.-]+)#(\d+)\b")
+APPROVAL_LINE = re.compile(r"(?m)^Approval: (\S+)")
 COMMENT_URL = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)#issuecomment-(\d+)")
 CREATED_URL = re.compile(r"https://github\.com/([\w.-]+/[\w.-]+)/(pull|issues)/(\d+)")
 BARE_NUMBER = re.compile(r"(?<![\w/&#])#(\d+)(?![\w])")
@@ -40,6 +42,7 @@ SESSION_MARKERS = ("Codex session:", "Claude session:", "Codex owner:", "Claude 
 class Links:
     prs: frozenset[tuple[str, int]]
     issues: frozenset[tuple[str, int]]
+    issue_approvals: frozenset[str] = frozenset()   # approvals already spent on a code issue
 
 
 def ticket_texts(config: Config, ticket: int) -> list[str]:
@@ -62,7 +65,8 @@ def links(config: Config, ticket: int) -> Links:
     texts = ticket_texts(config, ticket)
     found = {pattern: frozenset((repo, int(number)) for text in texts for repo, number in pattern.findall(text))
              for pattern in (PR_LINE, ISSUE_LINE)}
-    return Links(prs=found[PR_LINE], issues=found[ISSUE_LINE])
+    spent = frozenset(url for text in texts if ISSUE_LINE.search(text) for url in APPROVAL_LINE.findall(text))
+    return Links(prs=found[PR_LINE], issues=found[ISSUE_LINE], issue_approvals=spent)
 
 
 def leaks(config: Config, text: str, allowed: set[int]) -> list[str]:
@@ -187,8 +191,11 @@ def created(output: str, kind: str) -> tuple[str, int, str]:
     return match.group(1), int(match.group(3)), match.group()
 
 
-def record(config: Config, ticket: int, sign: str, line: str, url: str) -> int:
-    """Leave the link line on the ticket: after the role's signature, or between a status block and the session line."""
+def record(config: Config, ticket: int, sign: str, line: str, url: str, approval: str | None = None) -> int:
+    """Leave the link line, and the approval that allowed it, on the ticket: after the role's signature, or between a
+    status block and the session line."""
+    if approval:
+        line = f"{line}\nApproval: {approval.strip()}"
     if sign.endswith(config.roles.separator):
         body = f"{sign}{url}\n{line}\n"
     else:
@@ -253,16 +260,19 @@ def pr(args, config: Config) -> int:
     except (OSError, UnicodeDecodeError, RuntimeError, ValueError, KeyError, TypeError) as error:
         return fail(str(error))
     print(url)
-    return record(config, args.ticket, sign, f"PR: {repo}#{number}", url)
+    return record(config, args.ticket, sign, f"PR: {repo}#{number}", url, args.approval if config.shared else None)
 
 
 def code_issue(args, config: Config) -> int:
     try:
         sign = signer(config, args.sender)
         title, body = read_text(args)
-        checked(config, args.ticket, title, body)
+        found = checked(config, args.ticket, title, body)
         if config.shared and (problem := approval_problem(config, args.approval, args.ticket)):
             return fail(f"{problem}. Nothing posted")
+        if config.shared and args.approval.strip() in found.issue_approvals and f"/issues/{args.ticket}#" in args.approval:
+            return fail(f"{args.approval.strip()} already approved a code issue; the user approves each code issue on its "
+                        "own. Nothing posted")
         repo = config.code_repo()
         result = call(config, "gh", "issue", "create", "--repo", repo, "--title", title,
                       "--body-file", str(Path(args.body_file).resolve()))
@@ -272,4 +282,4 @@ def code_issue(args, config: Config) -> int:
     except (OSError, UnicodeDecodeError, RuntimeError, ValueError, KeyError, TypeError) as error:
         return fail(str(error))
     print(url)
-    return record(config, args.ticket, sign, f"Code issue: {repo}#{number}", url)
+    return record(config, args.ticket, sign, f"Code issue: {repo}#{number}", url, args.approval if config.shared else None)

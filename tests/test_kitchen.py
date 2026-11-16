@@ -3809,7 +3809,27 @@ def test_code_issue_needs_approval_when_shared_and_is_signed_by_its_role(tmp_pat
     args.approval = "https://github.com/me/kitchen/issues/42#issuecomment-99"
     assert outbound.code_issue(args, loaded) == 0
     comment = next(call for call in calls if call[:3] == ("gh", "issue", "comment"))[-1]
-    assert comment == "Designer: https://github.com/org/code/issues/6\nCode issue: org/code#6\n"
+    assert comment == ("Designer: https://github.com/org/code/issues/6\nCode issue: org/code#6\n"
+                       "Approval: https://github.com/me/kitchen/issues/42#issuecomment-99\n")
+
+
+def test_a_user_decision_approves_one_code_issue(tmp_path, monkeypatch, capsys):
+    from dkitchen import outbound
+    loaded = settings(tmp_path, SHARED)
+    (tmp_path / "issue.md").write_text("The loader drops rows.\n", encoding="utf-8")
+    approval = "https://github.com/me/kitchen/issues/42#issuecomment-99"
+    spent = json.dumps([[{"body": f"Designer: https://github.com/org/code/issues/6\nCode issue: org/code#6\n"
+                                  f"Approval: {approval}\n"}]])
+    calls = []
+    gh_router(monkeypatch, [
+        (("issues/comments/99",), json.dumps({"body": "Designer: user decision\nFile it."})),
+        (("--paginate",), spent), (("repos/me/kitchen/issues/42",), json.dumps({"body": ""})),
+    ], calls)
+    args = SimpleNamespace(ticket=42, title="Loader drops rows", body_file=tmp_path / "issue.md", approval=approval,
+                           sender="Designer")
+    assert outbound.code_issue(args, loaded) == 1
+    assert "already approved a code issue" in capsys.readouterr().err
+    assert not any(call[:3] == ("gh", "issue", "create") for call in calls)
 
 
 def test_pr_cli_takes_one_shape(tmp_path, capsys):

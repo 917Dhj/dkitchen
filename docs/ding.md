@@ -15,6 +15,7 @@ It talks to Codex sessions through the Codex App Server. A Claude Code session c
 - [Run a long job: `launch`](#run-a-long-job-launch)
 - [Wrap a command yourself: `run`](#wrap-a-command-yourself-run)
 - [Kitchen commands](#kitchen-commands)
+- [A kitchen in its own repo](#a-kitchen-in-its-own-repo)
 - [Files `ding` keeps](#files-ding-keeps)
 - [When a wake-up does not arrive](#when-a-wake-up-does-not-arrive)
 
@@ -418,6 +419,10 @@ These commands carry out the kitchen's routine steps, as the house rules in [kit
 | `ding relay 42 --message TEXT [--comment TEXT]` | Orchestrator | Sends the message to ticket #42's executor and, only once the message is delivered or queued in a Claude Code inbox, leaves it (or `--comment`) on the ticket, signed. The message opens with the `[relay] superseding` line and is sent with `--steer --supersede`: it enters the executor's current turn and deletes the orchestrator's relays still queued for it. `--queue` queues it plainly instead; `--interrupt` also stops the current turn first. `--to SESSION` picks the executor when the ticket has no owner line; `--no-comment` only sends. |
 | `ding review 57 a1b2c3d pass --body-file review.md` | Reviewer | Posts the review comment and a commit status on the full PR HEAD, using `[merge] review_check`. Use `changes` for a failed review. |
 | `ding review --ticket 42 pass\|changes --body-file verdict.md` | Verifier | Posts a verdict on a run stage of ticket #42 and tells its executor. See [Stage verdicts](#stage-verdicts). |
+| `ding review 57 a1b2c3d pass --ticket 42 --body-file review.md` | Reviewer, in a shared code repo | Posts the PR review as a verdict on ticket #42, whose `PR:` line names the PR, and leaves the PR alone. See [A kitchen in its own repo](#a-kitchen-in-its-own-repo). |
+| `ding pr 42 --title T --body-file pr.md --draft`<br>`ding pr 42 --ready 57` | Executor, or a role with `--from` | Opens a PR in the code repo from the current, pushed branch and records `PR: owner/code#N` on ticket #42; `--ready` marks the ticket's PR ready for review. See [A kitchen in its own repo](#a-kitchen-in-its-own-repo). |
+| `ding code-issue 42 --title T --body-file issue.md` | Any role | Opens an issue in the code repo and records `Code issue: owner/code#N` on ticket #42. |
+| `ding kitchen`<br>`ding kitchen link CODE_CHECKOUT` | Anyone; once per machine | Prints the kitchen this directory belongs to, its kitchen and code repos, and how it was found; `link`, run in a kitchen repo's checkout, records where the code repo is checked out on this machine. |
 | `ding merge 57 a1b2c3d` | Orchestrator | Merges PR #57 only if its HEAD is still the reviewed `a1b2c3d`, it is open and not a draft, its base is the default branch, and the required checks and the review status pass on that HEAD. Then it confirms the merge and prints the merge commit. |
 | `ding log --item TEXT [--pending TEXT]` | Orchestrator | Posts a signed, UTC-stamped entry to the orchestrator log ticket: one line per `--item`, then the matters waiting for the user. |
 | `ding night open\|show\|close` | Orchestrator opens/closes; any role reads | Records night orders on `[log] issue`, shows the open orders and their link, or closes them. Orders expire at `--until`. Calls no model. |
@@ -648,7 +653,9 @@ Vendor areas are never checked.
 Put this file at the repo root to change the kitchen's words. Every key is optional; these are the defaults:
 
 ```toml
-repo = "owner/name"                  # default: the repository gh sees here
+repo = "owner/name"                  # the kitchen repo, holding the tickets; default: the repository gh sees here
+# code = "owner/code"               # the code repo, for a kitchen in its own repo; see A kitchen in its own repo
+# shared = false                    # true when other people work in the code repo; needs a code other than repo
 
 [roles]
 orchestrator = "Orchestrator"
@@ -702,6 +709,11 @@ review_check = ""                   # e.g. "review": the status `ding review` wr
 review_pass = "Reviewed {sha}: pass"                              # first line of a passing review
 review_changes = "Reviewed {sha}: changes requested, see below"   # first line of a failing review
 refresh = ""                        # e.g. "python -m hca review {pr} --refresh --base {tip}": `ding merge` runs it first; nonzero refuses
+# by = "orchestrator"               # who merges: "orchestrator" (`ding merge`) or "team" (`ding merge` refuses);
+                                    # default: "team" in a shared code repo, else "orchestrator"
+
+[outbound]                           # `ding pr` and `ding code-issue`, which write into the code repo
+user_decision = "user decision"     # follows a role's signature on a user decision's first line; `--approval` links one
 
 [review]                             # `ding review --ticket N`: a verdict on a ticket's run stage
 verdict_pass = "Verdict: pass"                   # line 2 of a passing verdict
@@ -744,6 +756,47 @@ signatures = ["总设计：", "总设计（训练）："]
 
 `ding board --status` also uses `[status] fields`, after `--status-fields` and `DING_STATUS_FIELDS`. A misspelled key is an error, so a typo cannot silently fall back to a default.
 
+## A kitchen in its own repo
+
+A kitchen can live in a private **kitchen repo** of its own, paired with one **code repo**: the kitchen repo holds the house rules, `.dkitchen.toml` and the tickets; the code repo receives only PRs and code issues, written in the user's name. Nothing of the kitchen lands in the code repo, so it suits a repo other people work in, and also a personal repo you want free of kitchen files. [ADR 0003](adr/0003-kitchen-repo-apart-from-code-repo.md) records why.
+
+```toml
+# .dkitchen.toml in the kitchen repo
+repo = "me/project-kitchen"          # the kitchen repo: tickets, labels, the log
+code = "team/project"                # the code repo: PRs and code issues
+shared = true                        # other people work in team/project
+```
+
+`code` needs `repo`, and `shared = true` needs a `code` other than `repo`: a shared code repo always gets a kitchen of its own. Without `code`, the kitchen is the repo it sits in, as before.
+
+**Linking a machine.** Each machine that runs sessions records where the two checkouts are:
+
+```bash
+cd ~/work/project-kitchen
+ding kitchen link ~/work/project     # records the pair in ~/.config/dkitchen/kitchens.toml
+ding kitchen                         # prints the kitchen, the code repo, and how it was found
+```
+
+The registry is keyed by the code repo's `owner/name`, read from `origin`, so `ding` run anywhere in the code repo's checkout or any of its worktrees finds the kitchen and its `.dkitchen.toml`. When a code checkout also has a `.dkitchen.toml` of its own, the registry wins and `ding` warns once. A machine with no registry runs no extra git command.
+
+**Where sessions run.** The orchestrator, designers and verifier work in the kitchen's checkout and read the code repo's checkout beside it. Executors work in worktrees of the code repo: in a kitchen of its own, `ding new` refuses a `--cwd` that is not a code repo checkout, and gives the executor the kitchen's location. A Codex session gets it as developer instructions, alongside its own: read the kitchen's `AGENTS.md` first, `#N` means a ticket in the kitchen repo, and PRs and code issues go out through `ding pr` and `ding code-issue` as the kitchen's `docs/agents/contributing.md` says. For a Claude Code executor the same paragraph opens the printed first message, and `ding` reminds you on stderr to open the session with `--add-dir <kitchen>`.
+
+**Commands and the two repos.** Tickets, labels, the log and night orders are read and written in the kitchen repo, wherever `ding` runs. `ding merge`, `ding review PR SHA` and the PR checks of `ding watch` and `ding waits` use the code repo. `ding check` and `ding map` run in a code repo checkout, with the kitchen's `[check]`; the guard-change rule then covers the code repo's tool settings and CI files, since `.dkitchen.toml` is not there. `ding check-refs` run in the kitchen's checkout reads `file:line` references from the linked code checkout. `ding board` lists sessions working in either checkout and their worktrees.
+
+**`ding pr` and `ding code-issue`.** `ding pr 42 --title T --body-file pr.md [--draft] [--base B]` opens a PR in the code repo from the current branch, which `origin` must already hold at HEAD, then comments `PR: owner/code#N` on ticket #42. That line ties the PR to the ticket for the watches, `ding waits` and shared reviews. `ding pr 42 --ready 57` marks the ticket's PR 57 ready for review. `ding code-issue 42 --title T --body-file issue.md` opens a code issue and comments `Code issue: owner/code#N`; a ticket that starts from a code issue carries the same line in its body. The ticket comment is signed by `--from ROLE`, or else by the calling executor session, after a status block. Both commands also work in a single-repo kitchen, where the PR goes to the same repo.
+
+Before anything is posted from a kitchen of its own, the title and body are scanned, and refused when a line opens with a role signature, carries a session or owner line, `PR:` or `Code issue:`, names the kitchen repo, or has a bare `#N` other than a code issue the ticket records: the code repo would read `#N` as its own issue. Two or more status-field lines count as a status block. Fix the text and run the command again; there is no bypass.
+
+**A shared code repo.** With `shared = true`:
+
+- `ding pr` runs `ding check` against the PR's base first when `[check]` is set, and refuses on a problem.
+- A PR that is not a draft, `--ready`, and every code issue need `--approval URL`: a link to a user decision on the same ticket, a comment whose first line opens with the orchestrator's or a designer's signature followed by `[outbound] user_decision` (by default `Orchestrator: user decision`), or the night orders open now. A decision may approve a PR's handing over ahead of time; each code issue and each reply to someone in the code repo is approved on its own. The ticket comment records the approval as an `Approval:` line, and `ding code-issue` refuses a user decision that already approved a code issue.
+- `ding review PR SHA pass|changes --ticket N` posts the verdict on ticket N instead of the PR, with a line naming the reviewed HEAD and the PR, and writes no commit status. N's `PR:` line must name the PR. The verdict reaches the executor as a [stage verdict](#stage-verdicts) does.
+- `ding merge` refuses: the team merges. `[merge] by` says who merges, `orchestrator` or `team`; it defaults to `team` in a shared code repo and `orchestrator` elsewhere, so a personal code repo kept apart from its kitchen still merges with `ding merge`.
+- `ding watch` and `ding waits` leave PR waits alone, since the team, not a role, answers them.
+
+**Watching both repos.** A `PR:` line in a new ticket comment reads as `PR owner/code#N opened, recorded on #T`. The orchestrator's watch also wakes for comments by other people on code repo PRs and issues that your account opened, such as `team/project#57 code repo comment by @alice`. Such a comment never counts as your words, even from your own login; an answer goes back through the ticket. Reviews submitted with no line comments are not seen, since GitHub lists them per PR only. Stalled drafts are those you opened in the code repo.
+
 ## Files `ding` keeps
 
 Everything lives under `${XDG_STATE_HOME:-~/.local/state}/ding/`, readable only by you.
@@ -759,6 +812,8 @@ Everything lives under `${XDG_STATE_HOME:-~/.local/state}/ding/`, readable only 
 | `run-locks/<run id>.lock` | Held while a wrapper is alive; this is how `board` tells `running` from `lost` |
 | `inbox/<session>.jsonl` | A Claude Code session's inbox: `message`, `read`, and `withdrawn` events |
 | `inbox/<session>.lock`, `inbox/<session>.waiter.json` | Held by the live `ding inbox --wait`; and what `claim` and the waiters recorded: ticket, claim time, pid, transcript id, working directory, start, heartbeat, stop |
+
+One file lives elsewhere: `${XDG_CONFIG_HOME:-~/.config}/dkitchen/kitchens.toml`, written by `ding kitchen link`, pairs each code repo with the checkouts of its kitchen repo and of the code repo on this machine. Remove an entry by hand to unlink a kitchen.
 
 A `runs.jsonl` line looks like this:
 
