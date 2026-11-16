@@ -3237,7 +3237,6 @@ def test_a_stage_verdict_notification_outcome(verdict, capsys, code, exit_code, 
 
 
 @pytest.mark.parametrize("argv", [
-    ["review", "--ticket", "42", "7", "abc", "pass"],
     ["review", "7", "pass"],
     ["review", "--ticket", "42", "ok"],
     ["review", "x", "abc", "pass"],
@@ -3608,3 +3607,213 @@ def test_ticket_lookups_use_the_kitchen_repo_without_asking_gh(tmp_path, monkeyp
     monkeypatch.setattr(ding, "gh_json", lambda *_: pytest.fail("must not ask gh"))
     monkeypatch.chdir(code)
     assert ding.github_repository() == "me/kitchen"
+
+
+# Writing into the code repo: PR routes, verdicts, and outbound text
+
+SHARED = 'repo = "me/kitchen"\ncode = "org/code"\nshared = true\n'
+TICKET_WITH_PR = json.dumps([[{"body": "Status: in progress\n\nPR: org/code#7\n\nCodex session: t"},
+                              {"body": "Code issue: org/code#5\nmore"}]])
+
+
+def gh_router(monkeypatch, routes, calls):
+    """Fake `call` everywhere: the first route whose words all appear in the command answers it."""
+    from dkitchen import outbound, verdict
+
+    def call(settings, *args):
+        calls.append(args)
+        joined = " ".join(args)
+        for words, answer in routes:
+            if all(word in joined for word in words):
+                code, stdout = answer if isinstance(answer, tuple) else (0, answer)
+                return SimpleNamespace(returncode=code, stdout=stdout, stderr="boom" if code else "")
+        pytest.fail(f"unexpected call: {args}")
+    for module in (orchestrate, verdict, outbound, night):
+        monkeypatch.setattr(module, "call", call)
+
+
+def test_merge_by_defaults_to_the_team_in_a_shared_code_repo(tmp_path, capsys):
+    loaded = settings(tmp_path, SHARED)
+    assert loaded.merger == "team"
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
+    assert "the team merges PRs in org/code" in capsys.readouterr().err
+    assert settings(tmp_path, 'repo = "o/r"\n').merger == "orchestrator"
+    assert settings(tmp_path, SHARED + '[merge]\nby = "orchestrator"\n').merger == "orchestrator"
+    with pytest.raises(ValueError, match="by must be one of"):
+        settings(tmp_path, '[merge]\nby = "anyone"\n')
+
+
+def test_merge_reads_the_pr_from_the_code_repo(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, 'repo = "me/kitchen"\ncode = "org/code"\n')
+    calls = []
+    gh_router(monkeypatch, [(("pr", "view"), (1, ""))], calls)
+    assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
+    assert calls[0][:6] == ("gh", "pr", "view", "7", "--repo", "org/code")
+
+
+def shared_review(tmp_path, monkeypatch, comments=TICKET_WITH_PR):
+    loaded = settings(tmp_path, SHARED)
+    draft = tmp_path / "review.md"
+    draft.write_text("Verifier: the change holds\n\ndetails\n", encoding="utf-8")
+    calls, sent = [], []
+    gh_router(monkeypatch, [
+        (("pr", "view", "org/code"), json.dumps({"headRefOid": "abcdef1234567"})),
+        (("--paginate", "me/kitchen/issues/42/comments"), comments),
+        (("repos/me/kitchen/issues/42",), json.dumps({"body": "Goal"})),
+        (("issue", "comment", "42", "me/kitchen"), "https://github.com/me/kitchen/issues/42#issuecomment-1"),
+    ], calls)
+    monkeypatch.setattr(rule, "deliver", lambda *args, **kw: sent.append(args) or 0)
+    args = SimpleNamespace(pr=7, sha="abcdef", verdict="pass", ticket=42, body_file=draft)
+    return loaded, args, calls, sent
+
+
+def test_shared_pr_verdict_goes_on_the_ticket(tmp_path, monkeypatch):
+    loaded, args, calls, sent = shared_review(tmp_path, monkeypatch)
+    assert orchestrate.review(args, loaded) == 0
+    body = next(call[-1] for call in calls if call[:3] == ("gh", "issue", "comment"))
+    assert body.startswith("Verifier: the change holds\nVerdict: pass\nReviewed abcdef12: pass (org/code#7)\n")
+    assert not any("statuses" in " ".join(call) for call in calls)
+    assert sent and sent[0][0] == "#42"
+
+
+def test_shared_pr_verdict_needs_the_tickets_pr_line(tmp_path, monkeypatch, capsys):
+    loaded, args, calls, _ = shared_review(tmp_path, monkeypatch, comments=json.dumps([[{"body": "nothing"}]]))
+    assert orchestrate.review(args, loaded) == 1
+    assert "has no PR line for org/code#7" in capsys.readouterr().err
+    assert not any(call[:3] == ("gh", "issue", "comment") for call in calls)
+
+
+def test_pr_verdict_ticket_flag_follows_whether_the_repo_is_shared(tmp_path, capsys):
+    shared = settings(tmp_path, SHARED)
+    assert orchestrate.review(SimpleNamespace(pr=7, sha="a", verdict="pass", ticket=None, body_file=None), shared) == 1
+    assert "add --ticket N" in capsys.readouterr().err
+    own = settings(tmp_path, 'repo = "o/r"\n[merge]\nreview_check = "review"\n')
+    assert orchestrate.review(SimpleNamespace(pr=7, sha="a", verdict="pass", ticket=42, body_file=None), own) == 1
+    assert "drop --ticket" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("text", "found"), [
+    ("Fix the loader\n\nDesigner: please look", "opens with the Designer signature"),
+    ("Fix\n\nCodex session: 019a", "kitchen marker 'Codex session:'"),
+    ("Fix\nStatus: done\nWaiting on: none\n", "are a status block"),
+    ("Fix, see https://github.com/me/kitchen/issues/3", "names the kitchen repo me/kitchen"),
+    ("Fixes #12", "bare #12"),
+])
+def test_outbound_text_with_kitchen_internals_is_refused(tmp_path, text, found):
+    from dkitchen import outbound
+    problems = outbound.leaks(settings(tmp_path, SHARED), text, {5})
+    assert any(found in problem for problem in problems), problems
+
+
+def test_outbound_text_without_kitchen_internals_passes(tmp_path):
+    from dkitchen import outbound
+    text = "Fix the loader\n\nStatus: green in CI\nFixes #5, see org/code#12 and https://github.com/org/code/pull/3\n"
+    assert outbound.leaks(settings(tmp_path, SHARED), text, {5}) == []
+    assert outbound.leaks(settings(tmp_path, 'repo = "o/r"\n'), "Designer: #12", set()) == []
+
+
+def open_pr(tmp_path, monkeypatch, text=SHARED, *extra, body="Fix the loader.\n", routes=()):
+    from dkitchen import inbox, outbound
+    loaded = settings(tmp_path, text)
+    (tmp_path / "body.md").write_text(body, encoding="utf-8")
+    calls = []
+    gh_router(monkeypatch, [
+        *routes,
+        (("--paginate", "me/kitchen/issues/42/comments"), TICKET_WITH_PR),
+        (("repos/me/kitchen/issues/42",), json.dumps({"body": "Goal"})),
+        (("pr", "create"), "https://github.com/org/code/pull/45\n"),
+        (("pr", "ready"), ""),
+        (("issue", "create"), "https://github.com/org/code/issues/6\n"),
+        (("issue", "comment", "42", "me/kitchen"), "https://github.com/me/kitchen/issues/42#issuecomment-2"),
+    ], calls)
+    monkeypatch.setattr(outbound, "pushed_branch", lambda: "fix-loader")
+    monkeypatch.setattr(inbox, "current_session", lambda environ=None: ("codex", "019a-thread"))
+    monkeypatch.setattr(config, "load", lambda cwd=None: loaded)
+    code = ding.main(["pr", "42", "--title", "Fix the loader", "--body-file", str(tmp_path / "body.md"), *extra])
+    return code, calls
+
+
+def test_pr_opens_a_draft_and_records_it_on_the_ticket(tmp_path, monkeypatch, capsys):
+    code, calls = open_pr(tmp_path, monkeypatch, SHARED, "--draft")
+    assert code == 0
+    create = next(call for call in calls if call[:3] == ("gh", "pr", "create"))
+    assert ("--repo", "org/code") == create[3:5] and "--draft" in create and "fix-loader" in create
+    comment = next(call for call in calls if call[:3] == ("gh", "issue", "comment"))[-1]
+    assert comment.startswith("Status: in progress\n") and "\n\nPR: org/code#45\n\nCodex session: 019a-thread\n" in comment
+    assert capsys.readouterr().out.strip() == "https://github.com/org/code/pull/45"
+
+
+def test_shared_pr_ready_for_review_needs_approval(tmp_path, monkeypatch, capsys):
+    code, calls = open_pr(tmp_path, monkeypatch, SHARED)
+    assert code == 1 and "needs the user's approval" in capsys.readouterr().err
+    assert not any(call[:3] == ("gh", "pr", "create") for call in calls)
+
+
+def test_user_decision_on_the_ticket_approves_a_ready_pr(tmp_path, monkeypatch):
+    approval = "https://github.com/me/kitchen/issues/42#issuecomment-99"
+    decision = (("issues/comments/99",), json.dumps({"body": "Orchestrator: user decision\nOpen it for review."}))
+    code, calls = open_pr(tmp_path, monkeypatch, SHARED, "--approval", approval, routes=[decision])
+    assert code == 0
+    assert "--draft" not in next(call for call in calls if call[:3] == ("gh", "pr", "create"))
+
+
+@pytest.mark.parametrize(("url", "body", "found"), [
+    ("https://github.com/me/kitchen/issues/41#issuecomment-99", "Orchestrator: user decision", "not a user decision on #42"),
+    ("https://github.com/me/kitchen/issues/42#issuecomment-99", "Designer: I think so", "not a user decision on #42"),
+    ("https://github.com/org/code/issues/42#issuecomment-99", "Orchestrator: user decision", "in the kitchen repo"),
+    ("https://example.com/x", "", "must link an issue comment"),
+])
+def test_approval_must_be_a_user_decision_on_the_ticket(tmp_path, monkeypatch, capsys, url, body, found):
+    route = (("issues/comments/99",), json.dumps({"body": body}))
+    code, calls = open_pr(tmp_path, monkeypatch, SHARED, "--approval", url, routes=[route])
+    assert code == 1 and found in capsys.readouterr().err
+    assert not any(call[:3] == ("gh", "pr", "create") for call in calls)
+
+
+def test_pr_with_kitchen_internals_posts_nothing(tmp_path, monkeypatch, capsys):
+    code, calls = open_pr(tmp_path, monkeypatch, SHARED, "--draft", body="Designer: done\nSee #42\n")
+    err = capsys.readouterr().err
+    assert code == 1 and "carries kitchen internals" in err and "bare #42" in err
+    assert not any(call[:3] in {("gh", "pr", "create"), ("gh", "issue", "comment")} for call in calls)
+
+
+def test_pr_ready_marks_only_the_tickets_own_pr(tmp_path, monkeypatch, capsys):
+    from dkitchen import outbound
+    loaded = settings(tmp_path, 'repo = "me/kitchen"\ncode = "org/code"\n')
+    calls = []
+    gh_router(monkeypatch, [(("--paginate",), TICKET_WITH_PR), (("repos/me/kitchen/issues/42",), json.dumps({"body": ""})),
+                            (("pr", "ready", "7"), "")], calls)
+    args = SimpleNamespace(ticket=42, ready=7, approval=None, sender="Orchestrator")
+    assert outbound.pr(args, loaded) == 0
+    assert ("gh", "pr", "ready", "7", "--repo", "org/code") in calls
+    assert outbound.pr(SimpleNamespace(ticket=42, ready=8, approval=None, sender="Orchestrator"), loaded) == 1
+    assert "no PR line for org/code#8" in capsys.readouterr().err
+
+
+def test_code_issue_needs_approval_when_shared_and_is_signed_by_its_role(tmp_path, monkeypatch, capsys):
+    from dkitchen import outbound
+    loaded = settings(tmp_path, SHARED)
+    (tmp_path / "issue.md").write_text("The loader drops rows.\n", encoding="utf-8")
+    calls = []
+    gh_router(monkeypatch, [
+        (("issues/comments/99",), json.dumps({"body": "Designer: user decision\nFile it."})),
+        (("--paginate",), TICKET_WITH_PR), (("repos/me/kitchen/issues/42",), json.dumps({"body": ""})),
+        (("issue", "create", "org/code"), "https://github.com/org/code/issues/6\n"),
+        (("issue", "comment", "42"), "https://github.com/me/kitchen/issues/42#issuecomment-3"),
+    ], calls)
+    args = SimpleNamespace(ticket=42, title="Loader drops rows", body_file=tmp_path / "issue.md", approval=None,
+                           sender="Designer")
+    assert outbound.code_issue(args, loaded) == 1
+    assert "needs the user's approval" in capsys.readouterr().err
+    args.approval = "https://github.com/me/kitchen/issues/42#issuecomment-99"
+    assert outbound.code_issue(args, loaded) == 0
+    comment = next(call for call in calls if call[:3] == ("gh", "issue", "comment"))[-1]
+    assert comment == "Designer: https://github.com/org/code/issues/6\nCode issue: org/code#6\n"
+
+
+def test_pr_cli_takes_one_shape(tmp_path, capsys):
+    with pytest.raises(SystemExit):
+        ding.main(["pr", "42", "--title", "x"])
+    with pytest.raises(SystemExit):
+        ding.main(["pr", "42", "--ready", "7", "--title", "x", "--body-file", str(tmp_path / "b.md")])
+    assert "pr takes" in capsys.readouterr().err

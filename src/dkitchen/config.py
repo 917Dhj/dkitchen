@@ -69,6 +69,12 @@ Every key is optional. The defaults match the English templates in kitchen/:
     review_pass = "Reviewed {sha}: pass"                                 # first line of a passing review
     review_changes = "Reviewed {sha}: changes requested, see below"      # first line of a failing review
     refresh = ""                        # e.g. "python -m hca review {pr} --refresh --base {tip}": run before merging; nonzero refuses
+    # by = "orchestrator"               # who merges PRs: "orchestrator" (`ding merge`) or "team" (`ding merge` refuses);
+    #                                   # default: "team" in a shared code repo, else "orchestrator"
+
+    [outbound]                           # `ding pr` and `ding code-issue`, which write into the code repo
+    user_decision = "user decision"     # what follows a role's signature on the first line of a user decision,
+                                        # e.g. "Orchestrator: user decision"; `--approval` must link one
 
     [review]                             # `ding review --ticket N`: a verdict on a ticket's run stage
     verdict_pass = "Verdict: pass"                    # line 2 of a passing verdict, after the verifier's line 1
@@ -242,11 +248,20 @@ class Merge:
     review_pass: str = "Reviewed {sha}: pass"
     review_changes: str = "Reviewed {sha}: changes requested, see below"
     refresh: str = ""
+    by: str | None = None
 
     def refresh_argv(self, pr: int, sha: str, tip: str) -> list[str]:
         """The refresh command as argv, with {pr}, {sha} and {tip} substituted in each word."""
         return [word.replace("{pr}", str(pr)).replace("{sha}", sha).replace("{tip}", tip)
                 for word in shlex.split(self.refresh)]
+
+
+MERGE_BY = ("orchestrator", "team")
+
+
+@dataclass(frozen=True)
+class Outbound:
+    user_decision: str = "user decision"
 
 
 @dataclass(frozen=True)
@@ -368,6 +383,7 @@ class Config:
     watch: Watch = Watch()
     merge: Merge = Merge()
     review: Review = Review()
+    outbound: Outbound = Outbound()
     check: Check | None = None
 
     @property
@@ -378,6 +394,11 @@ class Config:
     def split(self) -> bool:
         """Whether the kitchen lives in its own repo, apart from the code repo."""
         return self.code is not None and self.code != self.repo
+
+    @property
+    def merger(self) -> str:
+        """Who merges PRs: [merge] by, else the team in a shared code repo and the orchestrator otherwise."""
+        return self.merge.by or ("team" if self.shared else "orchestrator")
 
     def code_repo(self) -> str:
         """The repo the work lands in, as commits and PRs."""
@@ -488,6 +509,9 @@ def section(cls, values: object, name: str):
                 value.format(parent=1)
             except (ValueError, KeyError, IndexError) as exc:
                 raise ValueError(f"{FILE}: [sessions] parent is not a valid template: {exc}") from exc
+        elif key == "by" and cls is Merge:
+            if value not in MERGE_BY:
+                raise ValueError(f"{FILE}: [merge] by must be one of: {', '.join(MERGE_BY)}")
         elif key == "default" and cls is Executor:
             if value not in EXECUTOR_KINDS:
                 raise ValueError(f"{FILE}: [executor] default must be one of: {', '.join(EXECUTOR_KINDS)}")
@@ -560,7 +584,7 @@ def read(path: Path, root: Path) -> Config:
         raise ValueError(f"{path}: {exc}") from exc
     sections = {"roles": Roles, "status": Status, "labels": Labels, "log": Log, "sessions": Sessions, "relay": Relay,
                 "rule": Rule, "launch": Launch, "executor": Executor, "watch": Watch, "night": Night, "merge": Merge,
-                "review": Review}
+                "review": Review, "outbound": Outbound}
     if "stations" in data:
         if "roles" in data:
             raise ValueError(f"{FILE}: [stations] and [roles] are the same section; keep only [roles]")

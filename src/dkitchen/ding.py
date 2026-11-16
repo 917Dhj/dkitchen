@@ -2033,10 +2033,12 @@ def main(argv=None) -> int:
     sub.add_argument("--socket", help="Existing local App Server Unix socket path")
     sub = commands.add_parser(
         "review", help="Record a review verdict on the PR HEAD, or a verdict on a ticket's run stage",
-        usage="%(prog)s PR SHA {pass,changes} --body-file FILE\n"
+        usage="%(prog)s PR SHA {pass,changes} [--ticket N] --body-file FILE\n"
               "       %(prog)s --ticket N {pass,changes} --body-file FILE",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="With PR SHA: post a review comment and success/failure commit status using [merge] review_check.\n"
+                    "In a shared code repo (shared = true), the PR is left alone: add --ticket N, the ticket whose\n"
+                    "PR line names the PR, and the verdict is posted there as below, with a line naming the HEAD.\n"
                     "With --ticket N: post a verdict on a run stage of ticket N (a PR number is refused). The\n"
                     "file's line 1 must start with the verifier's signature; the comment adds [review] verdict_pass\n"
                     "or verdict_changes as line 2, and on changes a handoff to the ticket's design line (named in its\n"
@@ -2123,6 +2125,36 @@ def main(argv=None) -> int:
                      help="Orchestrator only: on the stale check, report each open draft PR and each in-progress "
                           "ticket naming no wait not updated for this long, once a day (default: 48; 0 disables)")
     sub.add_argument("--max-errors", type=int, default=10, help="Consecutive failed polls before exiting (default: 10)")
+    sub = commands.add_parser(
+        "pr", help="Open a PR in the code repo from the current branch and record it on the ticket",
+        usage="%(prog)s TICKET --title T --body-file F [--draft] [--base B] [--approval URL] [--from ROLE]\n"
+              "       %(prog)s TICKET --ready N [--approval URL] [--from ROLE]",
+        description="Open a PR in the code repo from the current branch, which origin must already hold at HEAD, "
+                    "then comment `PR: owner/code#N` on the ticket in the kitchen repo; that line ties the PR to "
+                    "the ticket. With --ready N, mark the ticket's PR N ready for review. When the kitchen lives in "
+                    "its own repo, the title and body are refused if they carry role or session signatures, a status "
+                    "block, the kitchen repo's name, or a bare #N other than a code issue the ticket records. In a "
+                    "shared code repo, a PR that is not a draft, and --ready, need --approval: a user decision on the "
+                    "ticket or the night orders open now. The comment is signed by --from ROLE, else by this "
+                    "executor session.")
+    sub.add_argument("ticket", type=int, help="The ticket the PR belongs to, in the kitchen repo")
+    sub.add_argument("--title", help="PR title")
+    sub.add_argument("--body-file", type=Path, help="UTF-8 PR body, written as the contribution guide says")
+    sub.add_argument("--draft", action="store_true", help="Open it as a draft")
+    sub.add_argument("--base", help="Base branch (default: the code repo's default branch)")
+    sub.add_argument("--ready", type=int, metavar="N", help="Mark the ticket's PR N ready for review instead")
+    sub.add_argument("--approval", metavar="URL", help="Link to the user decision or open night orders that allow it")
+    sub.add_argument("--from", dest="sender", metavar="ROLE", help="Sign the ticket comment as this role")
+    sub = commands.add_parser(
+        "code-issue", help="Open an issue in the code repo and record it on the ticket",
+        description="Open an issue in the code repo in the user's name, then comment `Code issue: owner/code#N` on the "
+                    "ticket. The text is checked as `ding pr` checks it, and in a shared code repo it needs --approval: "
+                    "a user decision on the ticket or the night orders open now.")
+    sub.add_argument("ticket", type=int, help="The ticket it comes from, in the kitchen repo")
+    sub.add_argument("--title", required=True, help="Issue title")
+    sub.add_argument("--body-file", required=True, type=Path, help="UTF-8 issue body")
+    sub.add_argument("--approval", metavar="URL", help="Link to the user decision or open night orders that allow it")
+    sub.add_argument("--from", dest="sender", metavar="ROLE", help="Sign the ticket comment as this role")
     sub = commands.add_parser("kitchen", help="Show which kitchen this directory belongs to, or link one on this machine",
                               description="ding kitchen: print the kitchen this directory belongs to, its kitchen "
                                           "and code repos, and how it was found. ding kitchen link CODE_CHECKOUT: run "
@@ -2278,6 +2310,11 @@ def main(argv=None) -> int:
         if args.action == "check-refs":
             from dkitchen import refs
             return refs.check_refs(args)
+        if args.action in {"pr", "code-issue"}:
+            from dkitchen import config, outbound
+            if args.action == "pr" and (args.ready is None) == (args.title is None or args.body_file is None):
+                parser.error("pr takes --title and --body-file to open a PR, or --ready N to mark one ready")
+            return (outbound.pr if args.action == "pr" else outbound.code_issue)(args, config.load())
         if args.action == "kitchen":
             from dkitchen import config, kitchens
             if args.words and (args.words[0] != "link" or len(args.words) != 2):
@@ -2292,15 +2329,16 @@ def main(argv=None) -> int:
             from dkitchen import config, night
             return night.night(args, config.load())
         if args.action == "review":
-            shape = (["verdict"] if args.ticket is not None else ["pr", "sha", "verdict"])
+            shape = ["verdict"] if len(args.words) == 1 and args.ticket is not None else ["pr", "sha", "verdict"]
             if len(args.words) != len(shape) or args.words[-1] not in {"pass", "changes"}:
-                parser.error("review takes PR SHA pass|changes, or --ticket N pass|changes")
+                parser.error("review takes PR SHA pass|changes (with --ticket N in a shared code repo), "
+                             "or --ticket N pass|changes")
             values = dict(zip(shape, args.words))
             if "pr" in values and not values["pr"].isdigit():
                 parser.error(f"review: PR must be a number, not {values['pr']!r}")
             args.pr = int(values["pr"]) if "pr" in values else None
             args.sha, args.verdict = values.get("sha"), values["verdict"]
-            if args.ticket is not None:
+            if args.pr is None:
                 from dkitchen import config, verdict
                 return verdict.review_ticket(args, config.load())
         if args.action in {"relay", "merge", "review", "log", "watch", "waits"}:
