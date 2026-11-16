@@ -140,3 +140,30 @@ def link(settings, code_path: str, here: Path) -> int:
     write(known)
     print(f"linked {settings.code}: kitchen {here}, code {code} ({registry_path()})")
     return 0
+
+
+def executor_pointer(settings) -> str:
+    """What an executor working in a code repo worktree must know about its kitchen, given at dispatch.
+
+    Codex receives it as the thread's developer instructions, which stay through compaction; a Claude Code executor
+    gets it at the top of its first message."""
+    root = settings.root
+    return (f"This session works for a dkitchen kitchen kept apart from this repository. Its house rules are in "
+            f"{root}: read {root / 'AGENTS.md'} before anything else and follow it, reading its docs/agents/ links "
+            f"under {root}. Tickets are issues in {settings.kitchen_repo()}, and '#N' means a ticket there. This "
+            f"repository, {settings.code_repo()}, receives only PRs and code issues: open them with `ding pr` and "
+            f"`ding code-issue`, written as {root / 'docs/agents/contributing.md'} says. `ding` run anywhere in "
+            "this repository finds the kitchen by itself.")
+
+
+def code_checkout(settings, where: Path | None = None) -> Path:
+    """The code repo checkout holding `where` (default: the working directory): the kitchen's own checkout in a
+    single-repo kitchen, refused when a split kitchen's code repo is not checked out there."""
+    from dkitchen import config
+
+    if not settings.split:
+        return settings.root
+    root = config.repository_root(where)
+    if origin(root) != settings.code:
+        raise ValueError(f"{root} is not a checkout of the code repo {settings.code}; run this in one of its worktrees")
+    return root

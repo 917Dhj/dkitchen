@@ -3714,7 +3714,8 @@ def test_outbound_text_without_kitchen_internals_passes(tmp_path):
 
 def open_pr(tmp_path, monkeypatch, text=SHARED, *extra, body="Fix the loader.\n", routes=()):
     from dkitchen import inbox, outbound
-    loaded = settings(tmp_path, text)
+    (tmp_path / config.FILE).write_text(text, encoding="utf-8")
+    loaded = config.read(tmp_path / config.FILE, tmp_path)  # config.load may be patched by an earlier call
     (tmp_path / "body.md").write_text(body, encoding="utf-8")
     calls = []
     gh_router(monkeypatch, [
@@ -3917,3 +3918,109 @@ def test_board_covers_both_checkouts_of_a_split_kitchen(tmp_path, monkeypatch):
     for where in (kitchen, tmp_path / "wt"):
         monkeypatch.chdir(where)
         assert set(ding.repository_roots()) == {kitchen, code, (tmp_path / "wt").resolve()}
+
+
+# Dispatch and checks in a kitchen kept in its own repo
+
+def linked_pair(tmp_path, kitchen_text=SPLIT):
+    from dkitchen import kitchens
+    kitchen, code = split_pair(tmp_path, kitchen_text)
+    run_git(code, "worktree", "add", "-q", str(tmp_path / "wt"), "-b", "issue12")
+    kitchens.write({"org/code": kitchens.Entry(kitchen=kitchen, code=code)})
+    return kitchen, code, (tmp_path / "wt").resolve()
+
+
+def recorded_server(monkeypatch, requests):
+    from contextlib import contextmanager
+    thread = "00000000-0000-4000-8000-0000000000ab"
+
+    def call(method, params):
+        requests.append((method, params))
+        return {"thread/start": {"thread": {"id": thread}}, "thread/name/set": {},
+                "turn/start": {"turn": {"id": "turn-1", "status": "inProgress"}}}[method]
+
+    @contextmanager
+    def server(path):
+        yield call
+    monkeypatch.setattr(ding, "app_server", server)
+
+
+def test_new_gives_a_codex_executor_its_kitchen_in_developer_instructions(tmp_path, monkeypatch, capsys):
+    kitchen, _, worktree = linked_pair(tmp_path)
+    requests = []
+    recorded_server(monkeypatch, requests)
+    assert ding.main(["new", "--cwd", str(worktree), "--name", "Run", "--message", "Brief", "--socket", "/s"]) == 0
+    start = requests[0][1]
+    assert start["cwd"] == str(worktree)
+    assert f"read {kitchen / 'AGENTS.md'} before anything else" in start["developerInstructions"]
+    assert "Tickets are issues in me/kitchen" in start["developerInstructions"]
+    assert requests[2][1]["input"][0]["text"] == "Brief"
+
+
+def test_new_refuses_an_executor_outside_the_code_repo(tmp_path, monkeypatch, capsys):
+    kitchen, _, _ = linked_pair(tmp_path)
+    monkeypatch.setattr(ding, "app_server", lambda path: pytest.fail("must not connect"))
+    assert ding.main(["new", "--cwd", str(kitchen), "--name", "Run", "--message", "Brief"]) == 1
+    assert "is not a checkout of the code repo org/code" in capsys.readouterr().err
+
+
+def test_new_prints_the_kitchen_pointer_for_a_claude_executor(tmp_path, capsys):
+    kitchen, _, worktree = linked_pair(tmp_path)
+    assert ding.main(["new", "--executor", "claude", "--cwd", str(worktree), "--message", "Brief"]) == 0
+    captured = capsys.readouterr()
+    assert captured.out.startswith("This session works for a dkitchen kitchen") and captured.out.endswith("\n\nBrief\n")
+    assert "--add-dir" in captured.err
+
+
+CHECKED = SPLIT + '[check]\nlibrary = ["src"]\nruff = false\nimports = false\n'
+
+
+def test_check_runs_on_the_code_worktree_with_the_kitchens_rules(tmp_path, monkeypatch, capsys):
+    from dkitchen import check
+    kitchen, _, worktree = linked_pair(tmp_path, CHECKED)
+    monkeypatch.chdir(worktree)
+    (worktree / "src").mkdir()
+    (worktree / "src/loader.py").write_text('"""Loads rows."""\n', encoding="utf-8")
+    assert check.check(SimpleNamespace(base="HEAD", json=False), config.load(worktree)) == 0
+    (worktree / "src/loader_issue12.py").write_text('"""Loads rows again."""\n', encoding="utf-8")
+    assert check.check(SimpleNamespace(base="HEAD", json=False), config.load(worktree)) == 1
+    assert f"rules in {kitchen / 'docs/agents/code.md'}" in capsys.readouterr().out
+    assert check.module_map(SimpleNamespace(paths=[]), config.load(worktree)) == 0
+    assert "src/loader.py: Loads rows." in capsys.readouterr().out
+
+
+def test_check_refuses_to_run_outside_the_code_repo(tmp_path, capsys):
+    from dkitchen import check
+    kitchen, _, _ = linked_pair(tmp_path, CHECKED)
+    assert check.check(SimpleNamespace(base="HEAD", json=False), config.load(kitchen)) == 2
+    assert "is not a checkout of the code repo org/code" in capsys.readouterr().err
+
+
+def test_check_refs_from_the_kitchen_read_the_code_repo(tmp_path, monkeypatch, capsys):
+    kitchen, code, _ = linked_pair(tmp_path)
+    monkeypatch.chdir(kitchen)
+    assert refs.code_repository() == code
+    assert refs.Source("main", None, code).read("README.md") == b"code\n"
+    monkeypatch.chdir(code)
+    assert refs.code_repository() is None
+
+
+def test_check_refs_from_an_unlinked_kitchen_say_so(tmp_path, monkeypatch, capsys):
+    kitchen, _ = split_pair(tmp_path)
+    (tmp_path / "draft.md").write_text("Verifier: `README.md:1`\n", encoding="utf-8")
+    monkeypatch.chdir(kitchen)
+    assert ding.main(["check-refs", str(tmp_path / "draft.md"), "--offline"]) == 2
+    assert "run `ding kitchen link`" in capsys.readouterr().err
+
+
+def test_shared_pr_runs_the_checks_first(tmp_path, monkeypatch, capsys):
+    from dkitchen import outbound
+    ran = []
+    monkeypatch.setattr(outbound, "checks_pass", lambda settings, base: ran.append(base) or False)
+    code, calls = open_pr(tmp_path, monkeypatch, SHARED + '[check]\nlibrary = ["src"]\n', "--draft", "--base", "dev")
+    assert code == 1 and ran == ["dev"] and "`ding check` did not pass" in capsys.readouterr().err
+    assert not any(call[:3] == ("gh", "pr", "create") for call in calls)
+    ran.clear()
+    (tmp_path / "plain").mkdir()
+    code, _ = open_pr(tmp_path / "plain", monkeypatch, SHARED, "--draft")
+    assert code == 0 and ran == []

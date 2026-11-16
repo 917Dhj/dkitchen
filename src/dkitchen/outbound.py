@@ -8,7 +8,8 @@ When the kitchen lives in its own repo, the title and body are scanned first, an
 kitchen internals: role or session signatures, a status block, the kitchen repo's name, or a bare `#N`, which the
 code repo would read as one of its own issues (allowed only for the code issues the ticket records).
 
-In a shared code repo, opening a PR that is not a draft, marking one ready, and opening a code issue each need
+In a shared code repo, `ding pr` first runs `ding check` in the worktree when [check] is set, and refuses on a
+problem. Opening a PR that is not a draft, marking one ready, and opening a code issue each need
 `--approval URL`: a user decision on the ticket, opening `<role>: user decision` ([outbound] user_decision), or the
 night orders open now.
 
@@ -164,6 +165,20 @@ def pushed_branch() -> str:
     return branch
 
 
+def checks_pass(config: Config, base: str | None) -> bool:
+    """Whether `ding check` passes here against the PR's base; a shared code repo's checks run before its PRs open."""
+    from types import SimpleNamespace
+
+    from dkitchen import check
+
+    if base is None:
+        try:
+            base = git("rev-parse", "--abbrev-ref", "origin/HEAD").removeprefix("origin/")
+        except RuntimeError:
+            base = "main"
+    return check.check(SimpleNamespace(base=f"origin/{base}", json=False), config) == 0
+
+
 def created(output: str, kind: str) -> tuple[str, int, str]:
     lines = output.strip().splitlines()
     match = CREATED_URL.fullmatch(lines[-1].strip()) if lines else None
@@ -225,6 +240,8 @@ def pr(args, config: Config) -> int:
         checked(config, args.ticket, title, body)
         if config.shared and not args.draft and (problem := approval_problem(config, args.approval, args.ticket)):
             return fail(f"{problem}; or open it with --draft. Nothing posted")
+        if config.shared and config.check is not None and not checks_pass(config, args.base):
+            return fail("`ding check` did not pass in this worktree; fix what it lists, then open the PR. Nothing posted")
         branch = pushed_branch()
         command = ["gh", "pr", "create", "--repo", repo, "--head", branch, "--title", title,
                    "--body-file", str(Path(args.body_file).resolve())]

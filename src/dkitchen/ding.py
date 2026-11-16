@@ -1476,16 +1476,26 @@ def new_task(args) -> int:
             if printing and cwd is not None:
                 note += f"Work in {cwd}.\n\n"
             message = note + message
+        pointer = getattr(args, "pointer", None)
         if printing:
+            if pointer:
+                message = f"{pointer}\n\n{message}"
             if executor == "claude":
                 print("ding: the executor is a Claude Code session, which ding cannot open: open a session with "
                       "the message below, or hand it to the user to open; nothing was created", file=sys.stderr)
+                if pointer:
+                    print("ding: give that session the kitchen's checkout as an additional directory (`claude "
+                          "--add-dir <kitchen>`, or add the folder to the session), so it can read the house rules",
+                          file=sys.stderr)
             sys.stdout.write(message if message.endswith("\n") else message + "\n")
             return 0
         stage = "connection"
         with app_server(socket_path(args.socket)) as call:
             stage = "thread/start"
-            thread = call(stage, {"cwd": str(cwd), "ephemeral": False}).get("thread")
+            params = {"cwd": str(cwd), "ephemeral": False}
+            if pointer:
+                params["developerInstructions"] = pointer
+            thread = call(stage, params).get("thread")
             try:
                 thread_id = str(UUID(thread["id"]))
             except (KeyError, ValueError, TypeError, AttributeError) as exc:
@@ -2303,6 +2313,12 @@ def main(argv=None) -> int:
             where = Path(args.cwd).expanduser().resolve() if args.cwd and Path(args.cwd).expanduser().is_dir() else None
             settings = config.load(where)
             args.executor = args.executor or settings.executor.default
+            if settings.split:
+                from dkitchen import kitchens
+                if where is None:
+                    parser.error(f"--cwd must name a worktree of the code repo {settings.code}")
+                kitchens.code_checkout(settings, where)
+                args.pointer = kitchens.executor_pointer(settings)
             if args.executor == "codex" and not args.print:
                 for flag, value in (("--cwd", args.cwd), ("--name", args.name)):
                     if value is None:

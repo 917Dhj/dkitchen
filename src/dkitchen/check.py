@@ -22,6 +22,7 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 
+from dkitchen import kitchens
 from dkitchen.config import FILE, Check, Config
 
 ROOT_FILES = ("README*", "LICENSE*", "COPYING*", "NOTICE*", "CHANGELOG*", "CONTRIBUTING*", "CODE_OF_CONDUCT*",
@@ -158,12 +159,17 @@ def toml_at(root: Path, revision: str | None, name: str) -> dict:
         raise CheckError(f"{name} at {revision or 'the working tree'}: {exc}") from exc
 
 
-def guard_changes(root: Path, base: str, check: Check) -> list[str]:
-    """What this change does to the checks: their settings, CI, and the repo's own check scripts."""
-    before, after = toml_at(root, base, FILE), toml_at(root, None, FILE)
-    if "check" not in before:
-        return []  # the checks are being installed
-    changes = [f"{FILE} [{name}]" for name in ("check", "merge") if before.get(name) != after.get(name)]
+def guard_changes(root: Path, base: str, check: Check, *, own_config: bool = True) -> list[str]:
+    """What this change does to the checks: their settings, CI, and the repo's own check scripts.
+
+    `own_config` is false when the checks' settings live in a kitchen repo apart from the code repo; changes to
+    them are that repo's business, and the code repo's tools and CI are still guarded."""
+    changes = []
+    if own_config:
+        before, after = toml_at(root, base, FILE), toml_at(root, None, FILE)
+        if "check" not in before:
+            return []  # the checks are being installed
+        changes = [f"{FILE} [{name}]" for name in ("check", "merge") if before.get(name) != after.get(name)]
     old, new = toml_at(root, base, "pyproject.toml"), toml_at(root, None, "pyproject.toml")
     changes += [f"pyproject.toml [tool.{name}]" for name in ("ruff", "importlinter")
                 if old.get("tool", {}).get(name) != new.get("tool", {}).get(name)]
@@ -194,7 +200,12 @@ def check(args, config: Config) -> int:
     if settings is None:
         print(f"ding check: {FILE} has no [check] table; the build-repo skill sets it up", file=sys.stderr)
         return 2
-    root = config.root
+    try:
+        root = kitchens.code_checkout(config)
+    except (OSError, ValueError) as error:
+        print(f"ding check: {error}", file=sys.stderr)
+        return 2
+    standard = STANDARD if not config.split else str(config.root / STANDARD)
     try:
         base = git(root, "rev-parse", "--verify", "--end-of-options", f"{args.base}^{{commit}}").strip()
         findings = layout(root, base, settings)
@@ -208,7 +219,7 @@ def check(args, config: Config) -> int:
             tools.append(("imports", ["lint-imports"]))
         tools += [("command", [*argv, "--base", base]) for argv in settings.commands]
         findings += [item for rule, argv in tools if (item := run_tool(root, rule, argv))]
-        changes, trailers = guard_changes(root, base, settings), guard_trailers(root, base)
+        changes, trailers = guard_changes(root, base, settings, own_config=not config.split), guard_trailers(root, base)
         if changes and not trailers:
             findings.append(finding(".", "guard-change", "this change touches the checks (" + ", ".join(changes) +
                                     "); add a commit trailer `Guard-change: #<ticket> <reason>`"))
@@ -224,7 +235,7 @@ def check(args, config: Config) -> int:
             print(f"{location}: {item['rule']}: {item['message']}")
         for trailer in trailers:
             print(f"Guard-change: {trailer}")
-        print(f"ding check: {len(findings)} problem(s); rules in {STANDARD}" if findings else "ding check: passed")
+        print(f"ding check: {len(findings)} problem(s); rules in {standard}" if findings else "ding check: passed")
     return int(bool(findings))
 
 
@@ -235,12 +246,13 @@ def module_map(args, config: Config) -> int:
         return 2
     folders = [path.strip("/") for path in args.paths] or list(settings.library)
     try:
-        files = set(paths(git(config.root, "ls-files", "-z", "--", *folders))) | {
-            path for path in untracked(config.root) if area_of(path, dict.fromkeys(folders, "")) is not None}
-    except CheckError as error:
+        root = kitchens.code_checkout(config)
+        files = set(paths(git(root, "ls-files", "-z", "--", *folders))) | {
+            path for path in untracked(root) if area_of(path, dict.fromkeys(folders, "")) is not None}
+    except (CheckError, OSError, ValueError) as error:
         print(f"ding map: {error}", file=sys.stderr)
         return 2
     for path in sorted(path for path in files if path.endswith(".py")):
-        source = (config.root / path).read_text(encoding="utf-8", errors="replace")
+        source = (root / path).read_text(encoding="utf-8", errors="replace")
         print(f"{path}: {docstring_line(source) or '(no docstring)'}")
     return 0
