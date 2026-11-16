@@ -13,4 +13,5 @@ def private_ding_state(tmp_path_factory, monkeypatch):
     """Inbox records and transcripts on the host running the tests must not show up in them."""
     root = tmp_path_factory.mktemp("host")
     monkeypatch.setenv("XDG_STATE_HOME", str(root / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(root / "config"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root / "claude"))

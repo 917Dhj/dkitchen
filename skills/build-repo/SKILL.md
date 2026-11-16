@@ -9,6 +9,8 @@ Install the rules that keep the repo from filling up with copies: `docs/agents/c
 
 The checks are preventive: they hold from the first PR, with no baseline and no exception list. Layout rules look only at what a PR adds, so existing files never turn CI red. Ruff and the import contracts look at the whole tree, so the existing violations they find are cleaned up first, in a ticket of their own, before those checks are switched on.
 
+**A kitchen in its own repo.** When `.dkitchen.toml` sets `code`, `code.md` and `[check]` go in the kitchen, and everything this skill reads about layout, tools, and violations is read in the code repo's checkout, where `ding check` and `ding map` also run. The code repo's own files, its `pyproject.toml` tables and CI workflow, change only as a PR the user approves. When the code repo is shared, recommend installing nothing into it: executors run `ding check` in their worktrees, and `ding pr` runs it before each PR opens. Offer the tables and the workflow as a PR to the team only when the user says the team adopts the checks, and leave `[merge] required_checks` to the team.
+
 Follow [Installing](../../kitchen/README.md#installing) for the prerequisites, language, rendering, updating in place, pointer blocks, and approval. When `/setup-dkitchen` brought you here, the prerequisites and the language are already settled: skip them. The checks themselves are `ding check` and `ding map` ([docs/ding.md](../../docs/ding.md#repo-checks)).
 
 ## Sources
@@ -74,7 +76,7 @@ Done when every approved file exists with its approved content and every cleanup
 
 Run the checks in [Installing](../../kitchen/README.md#installing), then:
 
-- `ding check --base HEAD` passes on the working tree, with the switches as approved.
+- `ding check --base HEAD` passes on the working tree, with the switches as approved; in a kitchen of its own, on the code repo's checkout.
 - `ding map` lists the library modules.
 - A scratch file `<library>/scratch_v2.py` makes `ding check --base HEAD` fail with `version-copy`; delete it afterwards.
 

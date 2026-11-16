@@ -2,15 +2,41 @@
 
 dkitchen runs a repo's work through a team of agent sessions coordinated on GitHub issues, with the user as head chef. These are the words its rules, skills, and `ding` share.
 
+## Repos
+
+**Code repo**:
+The repo the kitchen's work lands in, as commits and PRs; it may be shared with other people.
+_Avoid_: Production repo, target repo, upstream
+
+**Kitchen repo**:
+The repo that holds a kitchen's house rules, settings, and tickets, kept to its user; one per code repo, and in a single-repo kitchen the code repo itself.
+_Avoid_: Control repo, meta repo, home repo
+
+**Shared code repo**:
+A code repo that other people also work in and merge into.
+_Avoid_: Team repo, public repo
+
+**Code issue**:
+An issue in the code repo, written by people or by agents in the user's name; never a ticket.
+_Avoid_: Team issue, upstream issue
+
+**Contribution guide**:
+A kitchen's rules for what it writes into the code repo in the user's name, such as PR text, branch names, and code issues, following that repo's own conventions.
+_Avoid_: PR template (GitHub's file), style guide
+
 ## The team
 
 **Kitchen**:
-The installed set of house rules, settings, and repo scripts that lets a team of agent sessions work on one repo.
+The installed set of house rules, settings, and scripts that lets a team of agent sessions work on one code repo.
 _Avoid_: Workflow, setup
 
 **Role**:
 A part of the kitchen's team, filled by one agent session at a time: the orchestrator, a designer, the verifier, or an executor. `.dkitchen.toml` names the roles under `[roles]`.
 _Avoid_: Station (in a real kitchen, one cook's place on the line), agent, seat
+
+**Standing role**:
+A role one session holds across many tickets: the orchestrator, a design line, or the verifier; every role but the executor.
+_Avoid_: Long-lived role, resident role, fixed role
 
 **Design line**:
 One designer role and the tickets it owns, when a kitchen splits design between several designers.
@@ -27,8 +53,8 @@ _Avoid_: Handoff (Matt Pocock's skill of that name is general-purpose)
 ## Work
 
 **Ticket**:
-A GitHub issue that holds one piece of work: its task, decisions, requests, and results.
-_Avoid_: Task, job, issue (when the unit of work is meant)
+A GitHub issue in the kitchen repo that holds one piece of work: its task, decisions, requests, and results.
+_Avoid_: Task, job, issue (when the unit of work is meant), code issue
 
 **Gate**:
 An exit condition of a ticket, judged by a number or a command and reported as one row of the gate table.

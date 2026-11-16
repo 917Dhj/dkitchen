@@ -8,6 +8,7 @@ Every session loads these lines, so each one is a pointer to a doc under `docs/a
 - **Roles**: at session start, read [docs/agents/roles.md](docs/agents/roles.md) once.
 - **Relaying**: before messaging another session, read [docs/agents/relaying.md](docs/agents/relaying.md).
 - **PRs**: before handing over, reviewing, or merging a PR, read [docs/agents/reviewing.md](docs/agents/reviewing.md).
+- **Contributing**: before writing a PR<!-- module:split -->, a code issue, or a reply<!-- /module:split --> for the code repo, read [docs/agents/contributing.md](docs/agents/contributing.md).
 - **Code**: before writing or changing code, read [docs/agents/code.md](docs/agents/code.md).
 - **Runs**: before writing or starting a run, read [docs/agents/runner.md](docs/agents/runner.md).
 - **Long-running jobs** (Codex): start every tmux job with `ding launch`; compute and shared services are in [docs/agents/long-running-jobs.md](docs/agents/long-running-jobs.md).
@@ -22,6 +23,9 @@ Every session loads these lines, so each one is a pointer to a doc under `docs/a
 
 - **Watch**: at session start, start your role's watch as in [docs/agents/watch.md](docs/agents/watch.md).
 - **While the user is away** (orchestrator): move work forward as in [docs/agents/unattended.md](docs/agents/unattended.md).
+<!-- module:split -->
+- **Code repo**: the work lands in the code repo; `CLAUDE.local.md` names its checkout on this machine. Read its own `AGENTS.md` before changing or judging its code.
+<!-- /module:split -->
 
 ## Execution boundaries
 

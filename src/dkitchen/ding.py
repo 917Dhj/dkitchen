@@ -308,8 +308,28 @@ def repository_roots() -> list[Path]:
         return [cwd]
     if root.returncode:
         return [cwd]
+    roots = worktrees(None)
+    # A kitchen kept in its own repo works across two checkouts: its standing roles sit in the kitchen's, its
+    # executors in the code repo's worktrees. The board covers both, from either side.
+    from dkitchen import config
+
+    try:
+        settings = config.load()
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return roots
+    if settings.split and settings.code_root is not None:
+        for other in (settings.root, settings.code_root):
+            try:
+                roots += [path for path in worktrees(other) if path not in roots]
+            except (OSError, subprocess.SubprocessError) as exc:
+                print(f"ding: cannot list the worktrees of {other}: {exc}", file=sys.stderr)
+    return roots
+
+
+def worktrees(checkout: Path | None) -> list[Path]:
+    """Every worktree of the repository at checkout (default: the working directory's)."""
     result = subprocess.run(["git", "-c", "core.quotePath=false", "worktree", "list", "--porcelain"],
-                            capture_output=True, text=True, timeout=10, check=True)
+                            cwd=checkout, capture_output=True, text=True, timeout=10, check=True)
     paths = [field[len("worktree "):] for field in result.stdout.splitlines()
              if field.startswith("worktree ")]
     return [Path(ast.literal_eval(path) if path.startswith('"') else path).resolve() for path in paths]
@@ -333,9 +353,11 @@ def gh_records(resource: str) -> list[dict]:
 
 
 def github_repository() -> str:
-    result = gh_json(["repo", "view", "--json", "nameWithOwner"])
-    repo = result.get("nameWithOwner") if isinstance(result, dict) else None
-    if not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+    """The kitchen repo, which holds the tickets, for the directory `ding` runs in."""
+    from dkitchen import config
+
+    repo = config.load().kitchen_repo()
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
         raise ValueError("Malformed gh repository name.")
     return repo
 
@@ -1454,16 +1476,26 @@ def new_task(args) -> int:
             if printing and cwd is not None:
                 note += f"Work in {cwd}.\n\n"
             message = note + message
+        pointer = getattr(args, "pointer", None)
         if printing:
+            if pointer:
+                message = f"{pointer}\n\n{message}"
             if executor == "claude":
                 print("ding: the executor is a Claude Code session, which ding cannot open: open a session with "
                       "the message below, or hand it to the user to open; nothing was created", file=sys.stderr)
+                if pointer:
+                    print("ding: give that session the kitchen's checkout as an additional directory (`claude "
+                          "--add-dir <kitchen>`, or add the folder to the session), so it can read the house rules",
+                          file=sys.stderr)
             sys.stdout.write(message if message.endswith("\n") else message + "\n")
             return 0
         stage = "connection"
         with app_server(socket_path(args.socket)) as call:
             stage = "thread/start"
-            thread = call(stage, {"cwd": str(cwd), "ephemeral": False}).get("thread")
+            params = {"cwd": str(cwd), "ephemeral": False}
+            if pointer:
+                params["developerInstructions"] = pointer
+            thread = call(stage, params).get("thread")
             try:
                 thread_id = str(UUID(thread["id"]))
             except (KeyError, ValueError, TypeError, AttributeError) as exc:
@@ -2031,10 +2063,12 @@ def main(argv=None) -> int:
     sub.add_argument("--socket", help="Existing local App Server Unix socket path")
     sub = commands.add_parser(
         "review", help="Record a review verdict on the PR HEAD, or a verdict on a ticket's run stage",
-        usage="%(prog)s PR SHA {pass,changes} --body-file FILE\n"
+        usage="%(prog)s PR SHA {pass,changes} [--ticket N] --body-file FILE\n"
               "       %(prog)s --ticket N {pass,changes} --body-file FILE",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="With PR SHA: post a review comment and success/failure commit status using [merge] review_check.\n"
+                    "In a shared code repo (shared = true), the PR is left alone: add --ticket N, the ticket whose\n"
+                    "PR line names the PR, and the verdict is posted there as below, with a line naming the HEAD.\n"
                     "With --ticket N: post a verdict on a run stage of ticket N (a PR number is refused). The\n"
                     "file's line 1 must start with the verifier's signature; the comment adds [review] verdict_pass\n"
                     "or verdict_changes as line 2, and on changes a handoff to the ticket's design line (named in its\n"
@@ -2121,6 +2155,45 @@ def main(argv=None) -> int:
                      help="Orchestrator only: on the stale check, report each open draft PR and each in-progress "
                           "ticket naming no wait not updated for this long, once a day (default: 48; 0 disables)")
     sub.add_argument("--max-errors", type=int, default=10, help="Consecutive failed polls before exiting (default: 10)")
+    sub = commands.add_parser(
+        "pr", help="Open a PR in the code repo from the current branch and record it on the ticket",
+        usage="%(prog)s TICKET --title T --body-file F [--draft] [--base B] [--approval URL] [--from ROLE]\n"
+              "       %(prog)s TICKET --ready N [--approval URL] [--from ROLE]",
+        description="Open a PR in the code repo from the current branch, which origin must already hold at HEAD, "
+                    "then comment `PR: owner/code#N` on the ticket in the kitchen repo; that line ties the PR to "
+                    "the ticket. With --ready N, mark the ticket's PR N ready for review. When the kitchen lives in "
+                    "its own repo, the title and body are refused if they carry role or session signatures, a status "
+                    "block, the kitchen repo's name, or a bare #N other than a code issue the ticket records. In a "
+                    "shared code repo, a PR that is not a draft, and --ready, need --approval: a user decision on the "
+                    "ticket or the night orders open now. The comment is signed by --from ROLE, else by this "
+                    "executor session.")
+    sub.add_argument("ticket", type=int, help="The ticket the PR belongs to, in the kitchen repo")
+    sub.add_argument("--title", help="PR title")
+    sub.add_argument("--body-file", type=Path, help="UTF-8 PR body, written as the contribution guide says")
+    sub.add_argument("--draft", action="store_true", help="Open it as a draft")
+    sub.add_argument("--base", help="Base branch (default: the code repo's default branch)")
+    sub.add_argument("--ready", type=int, metavar="N", help="Mark the ticket's PR N ready for review instead")
+    sub.add_argument("--approval", metavar="URL", help="Link to the user decision or open night orders that allow it")
+    sub.add_argument("--from", dest="sender", metavar="ROLE", help="Sign the ticket comment as this role")
+    sub = commands.add_parser(
+        "code-issue", help="Open an issue in the code repo and record it on the ticket",
+        description="Open an issue in the code repo in the user's name, then comment `Code issue: owner/code#N` on the "
+                    "ticket. The text is checked as `ding pr` checks it, and in a shared code repo it needs --approval: "
+                    "a user decision on the ticket or the night orders open now.")
+    sub.add_argument("ticket", type=int, help="The ticket it comes from, in the kitchen repo")
+    sub.add_argument("--title", required=True, help="Issue title")
+    sub.add_argument("--body-file", required=True, type=Path, help="UTF-8 issue body")
+    sub.add_argument("--approval", metavar="URL", help="Link to the user decision or open night orders that allow it")
+    sub.add_argument("--from", dest="sender", metavar="ROLE", help="Sign the ticket comment as this role")
+    sub = commands.add_parser("kitchen", help="Show which kitchen this directory belongs to, or link one on this machine",
+                              description="ding kitchen: print the kitchen this directory belongs to, its kitchen "
+                                          "and code repos, and how it was found. ding kitchen link CODE_CHECKOUT: run "
+                                          "in a kitchen repo's checkout whose .dkitchen.toml sets code, to record on "
+                                          "this machine where the kitchen and the code repo's checkout are, so "
+                                          "`ding` run anywhere in the code repo or its worktrees finds the kitchen. "
+                                          "The registry is $XDG_CONFIG_HOME/dkitchen/kitchens.toml "
+                                          "(default ~/.config/dkitchen/kitchens.toml).")
+    sub.add_argument("words", nargs="*", metavar="[link CODE_CHECKOUT]")
     sub = commands.add_parser("role", help="Record or print which session holds each role, by session id",
                               description="ding role: list every role with a holder (role, kind, id, since). "
                                           "ding role NAME: print only NAME's holder id; exit 1 when nobody holds it. "
@@ -2240,6 +2313,12 @@ def main(argv=None) -> int:
             where = Path(args.cwd).expanduser().resolve() if args.cwd and Path(args.cwd).expanduser().is_dir() else None
             settings = config.load(where)
             args.executor = args.executor or settings.executor.default
+            if settings.split:
+                from dkitchen import kitchens
+                if where is None:
+                    parser.error(f"--cwd must name a worktree of the code repo {settings.code}")
+                kitchens.code_checkout(settings, where)
+                args.pointer = kitchens.executor_pointer(settings)
             if args.executor == "codex" and not args.print:
                 for flag, value in (("--cwd", args.cwd), ("--name", args.name)):
                     if value is None:
@@ -2267,6 +2346,18 @@ def main(argv=None) -> int:
         if args.action == "check-refs":
             from dkitchen import refs
             return refs.check_refs(args)
+        if args.action in {"pr", "code-issue"}:
+            from dkitchen import config, outbound
+            if args.action == "pr" and (args.ready is None) == (args.title is None or args.body_file is None):
+                parser.error("pr takes --title and --body-file to open a PR, or --ready N to mark one ready")
+            return (outbound.pr if args.action == "pr" else outbound.code_issue)(args, config.load())
+        if args.action == "kitchen":
+            from dkitchen import config, kitchens
+            if args.words and (args.words[0] != "link" or len(args.words) != 2):
+                parser.error("kitchen takes no words, or link CODE_CHECKOUT")
+            here = config.repository_root()
+            settings = config.load()
+            return kitchens.link(settings, args.words[1], here) if args.words else kitchens.show(settings, here)
         if args.action == "role":
             from dkitchen import config, roles
             return roles.role(args, config.load())
@@ -2274,15 +2365,16 @@ def main(argv=None) -> int:
             from dkitchen import config, night
             return night.night(args, config.load())
         if args.action == "review":
-            shape = (["verdict"] if args.ticket is not None else ["pr", "sha", "verdict"])
+            shape = ["verdict"] if len(args.words) == 1 and args.ticket is not None else ["pr", "sha", "verdict"]
             if len(args.words) != len(shape) or args.words[-1] not in {"pass", "changes"}:
-                parser.error("review takes PR SHA pass|changes, or --ticket N pass|changes")
+                parser.error("review takes PR SHA pass|changes (with --ticket N in a shared code repo), "
+                             "or --ticket N pass|changes")
             values = dict(zip(shape, args.words))
             if "pr" in values and not values["pr"].isdigit():
                 parser.error(f"review: PR must be a number, not {values['pr']!r}")
             args.pr = int(values["pr"]) if "pr" in values else None
             args.sha, args.verdict = values.get("sha"), values["verdict"]
-            if args.ticket is not None:
+            if args.pr is None:
                 from dkitchen import config, verdict
                 return verdict.review_ticket(args, config.load())
         if args.action in {"relay", "merge", "review", "log", "watch", "waits"}:

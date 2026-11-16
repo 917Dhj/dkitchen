@@ -18,10 +18,11 @@ from dkitchen.orchestrate import call, fail
 FIRST_LINES = 3  # where a ticket names its design line: the second line of the layout, after an optional parent line
 
 
-def comment_body(draft: str, verdict: str, config: Config, design: str | None) -> str:
-    """The draft with the verdict line, and on `changes` the handoff to the design line, after line 1."""
+def comment_body(draft: str, verdict: str, config: Config, design: str | None, reviewed: str | None = None) -> str:
+    """The draft with the verdict line, the reviewed PR line if any, and on `changes` the handoff to the design line,
+    after line 1."""
     first, _, rest = draft.partition("\n")
-    lines = [first, config.review.verdict(verdict)]
+    lines = [first, config.review.verdict(verdict), *([reviewed] if reviewed else [])]
     if design is not None:
         lines.append(f"{config.watch.handoff[0]}{design}")
     return "\n".join(lines) + ("\n" + rest if rest else "\n")
@@ -61,7 +62,8 @@ def design_line(config: Config, repo: str, issue: dict) -> str:
     return config.roles.designer
 
 
-def review_ticket(args, config: Config) -> int:
+def review_ticket(args, config: Config, reviewed: str | None = None) -> int:
+    """Post the verdict on ticket args.ticket; `reviewed` names the PR HEAD when it is a shared code repo's PR review."""
     ticket, verdict = args.ticket, args.verdict
     signature = config.roles.signature(config.roles.verifier)
     try:
@@ -82,7 +84,7 @@ def review_ticket(args, config: Config) -> int:
         design = design_line(config, repo, issue) if verdict == "changes" else None
     except (RuntimeError, ValueError, KeyError, TypeError) as error:
         return fail(f"{error}. Nothing posted")
-    body = comment_body(draft, verdict, config, design)
+    body = comment_body(draft, verdict, config, design, reviewed)
     result = call(config, "gh", "issue", "comment", str(ticket), "--repo", repo, "--body", body)
     url = result.stdout.strip()
     if result.returncode:

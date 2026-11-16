@@ -111,6 +111,7 @@ The roles' everyday steps are `ding` commands too, so they run the same careful 
 - `ding night` opens, shows, and closes time-limited night orders on that log. Run `/goodnight` and `/goodmorning` in the orchestrator session to collect the orders and report their use.
 - `ding check-refs` checks every file, line, and digest the verifier cites.
 - `ding check` runs the repo's checks on every PR, and `ding map` lists the library's modules, so a change goes to the module that already exists.
+- `ding pr` and `ding code-issue` open a PR or an issue in the code repo and record it on the ticket. When the kitchen lives in its own repo, they refuse text that carries the kitchen's internals, and in a repo other people work in they need your approval. `ding kitchen link` tells a machine where the kitchen and the code repo are checked out.
 
 ### 📜 The house rules
 
@@ -118,7 +119,7 @@ The rules every role follows live in [kitchen/](https://github.com/917Dhj/dkitch
 
 ### 🧩 The skills
 
-The plugin installs ten skills. The build skills set up one part of the kitchen each and can run again to update it:
+The plugin installs eleven skills. The build skills set up one part of the kitchen each and can run again to update it:
 
 | Skill | What it does |
 | --- | --- |
@@ -133,6 +134,7 @@ The everyday skills run while the kitchen works:
 | Skill | When |
 | --- | --- |
 | `write-ticket` | Every time a role writes a ticket; the model reaches for it on its own |
+| `write-contribution` | Every time a role writes a PR, a code issue, or a reply in the code repo, in that repo's own conventions |
 | `/shift-change` | When a role's session is replaced by a fresh one |
 | `/improve-kitchen` | Every couple of weeks: turns what keeps going wrong into checks, tools, or rules, and retires the text they replace |
 | `/goodnight`, `/goodmorning` | Before you leave and when you are back |
@@ -167,7 +169,7 @@ In Claude Code, inside your repo, run:
 /setup-dkitchen
 ```
 
-The skill reads your repo to learn what you work on and what you already have: agent instructions, tests, GPUs, model calls, long jobs. It checks the prerequisites, settles the language, and asks which parts you need: the team, the code rules, the runner, the night shift. Then it walks through each part's build skill, which asks its own questions one at a time and shows you every rule, script, and GitHub change before writing anything. Run it again any time to change the setup.
+The skill reads your repo to learn what you work on and what you already have: agent instructions, tests, GPUs, model calls, long jobs. It checks the prerequisites, settles the language, asks where the kitchen lives, in your repo or in a private repo of its own, and asks which parts you need: the team, the code rules, the runner, the night shift. Then it walks through each part's build skill, which asks its own questions one at a time and shows you every rule, script, and GitHub change before writing anything. Run it again any time to change the setup.
 
 Upgrading from 0.5? Read *Upgrading* in the [changelog](https://github.com/917Dhj/dkitchen/blob/main/CHANGELOG.md) first.
 
@@ -178,6 +180,9 @@ They stop for anything that changes direction, results, or spending, and approva
 
 **Will it fit my repo?**
 The rules were written for computational research, and most of them carry over to any repo with long-running jobs. The setup skill adapts them to your repo. The team and the night shift fit a repo in any programming language; the code checks and the runner are for Python repos.
+
+**Can I use it in a repo other people work in?**
+Yes, with the kitchen in a private repo of its own. The rules, the tickets, and `.dkitchen.toml` stay there; your team's repo receives only PRs and issues, written in your name and in its own conventions, with nothing of the kitchen in them. In a shared repo, a PR goes ready for review and an issue goes out only with your approval, verdicts stay on your tickets, and the team merges. Comments from your teammates wake the orchestrator but never count as your words. `/setup-dkitchen` recommends this setup when it finds other people in the repo; see [A kitchen in its own repo](https://github.com/917Dhj/dkitchen/blob/main/docs/ding.md#a-kitchen-in-its-own-repo).
 
 **Do I need both Claude Code and Codex?**
 For now, yes. That is the combination I run every day.

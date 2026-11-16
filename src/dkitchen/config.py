@@ -2,7 +2,10 @@
 
 Every key is optional. The defaults match the English templates in kitchen/:
 
-    repo = "owner/name"                  # default: the repository gh sees here
+    repo = "owner/name"                  # the kitchen repo, holding the tickets; default: the repository gh sees here
+    # code = "owner/code"               # the code repo, when the kitchen lives in a repo of its own; needs repo.
+    #                                   # Each machine links the two with `ding kitchen link CODE_CHECKOUT`.
+    # shared = false                    # true when other people work in the code repo; needs a separate code repo
 
     [roles]
     orchestrator = "Orchestrator"
@@ -66,6 +69,12 @@ Every key is optional. The defaults match the English templates in kitchen/:
     review_pass = "Reviewed {sha}: pass"                                 # first line of a passing review
     review_changes = "Reviewed {sha}: changes requested, see below"      # first line of a failing review
     refresh = ""                        # e.g. "python -m hca review {pr} --refresh --base {tip}": run before merging; nonzero refuses
+    # by = "orchestrator"               # who merges PRs: "orchestrator" (`ding merge`) or "team" (`ding merge` refuses);
+    #                                   # default: "team" in a shared code repo, else "orchestrator"
+
+    [outbound]                           # `ding pr` and `ding code-issue`, which write into the code repo
+    user_decision = "user decision"     # what follows a role's signature on the first line of a user decision,
+                                        # e.g. "Orchestrator: user decision"; `--approval` must link one
 
     [review]                             # `ding review --ticket N`: a verdict on a ticket's run stage
     verdict_pass = "Verdict: pass"                    # line 2 of a passing verdict, after the verifier's line 1
@@ -105,10 +114,11 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 
-from dkitchen import ding
+from dkitchen import ding, kitchens
 
 FILE = ".dkitchen.toml"
 RENAME_WARNED: set[Path] = set()  # files already warned about [stations] in this process
+BOTH_WARNED: set[Path] = set()  # checkouts already warned that the registry overrides their own .dkitchen.toml
 
 
 @dataclass(frozen=True)
@@ -238,11 +248,20 @@ class Merge:
     review_pass: str = "Reviewed {sha}: pass"
     review_changes: str = "Reviewed {sha}: changes requested, see below"
     refresh: str = ""
+    by: str | None = None
 
     def refresh_argv(self, pr: int, sha: str, tip: str) -> list[str]:
         """The refresh command as argv, with {pr}, {sha} and {tip} substituted in each word."""
         return [word.replace("{pr}", str(pr)).replace("{sha}", sha).replace("{tip}", tip)
                 for word in shlex.split(self.refresh)]
+
+
+MERGE_BY = ("orchestrator", "team")
+
+
+@dataclass(frozen=True)
+class Outbound:
+    user_decision: str = "user decision"
 
 
 @dataclass(frozen=True)
@@ -346,8 +365,11 @@ def session_template(value: object) -> str:
 
 @dataclass(frozen=True)
 class Config:
-    root: Path
-    repo: str | None = None
+    root: Path                           # the kitchen's checkout: where .dkitchen.toml and the house rules live
+    repo: str | None = None              # the kitchen repo, which holds the tickets
+    code: str | None = None              # the code repo, when it is not the kitchen repo
+    shared: bool = False                 # whether other people also work in and merge into the code repo
+    code_root: Path | None = None        # the code repo's main checkout on this machine, from the registry
     roles: Roles = Roles()
     status: Status = Status()
     labels: Labels = Labels()
@@ -361,14 +383,33 @@ class Config:
     watch: Watch = Watch()
     merge: Merge = Merge()
     review: Review = Review()
+    outbound: Outbound = Outbound()
     check: Check | None = None
 
     @property
     def designer_signatures(self) -> tuple[str, ...]:
         return self.rule.signatures or (self.roles.signature(self.roles.designer),)
 
+    @property
+    def split(self) -> bool:
+        """Whether the kitchen lives in its own repo, apart from the code repo."""
+        return self.code is not None and self.code != self.repo
+
+    @property
+    def merger(self) -> str:
+        """Who merges PRs: [merge] by, else the team in a shared code repo and the orchestrator otherwise."""
+        return self.merge.by or ("team" if self.shared else "orchestrator")
+
+    def code_repo(self) -> str:
+        """The repo the work lands in, as commits and PRs."""
+        return self.code or self.kitchen_repo()
+
     def repository(self) -> str:
-        """The configured repository, or the one gh sees from the repository root."""
+        """The kitchen repo; kept for callers that predate the split."""
+        return self.kitchen_repo()
+
+    def kitchen_repo(self) -> str:
+        """The repo holding the tickets: the configured one, or the one gh sees from the kitchen's checkout."""
         if self.repo:
             return self.repo
         result = subprocess.run(["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
@@ -468,6 +509,9 @@ def section(cls, values: object, name: str):
                 value.format(parent=1)
             except (ValueError, KeyError, IndexError) as exc:
                 raise ValueError(f"{FILE}: [sessions] parent is not a valid template: {exc}") from exc
+        elif key == "by" and cls is Merge:
+            if value not in MERGE_BY:
+                raise ValueError(f"{FILE}: [merge] by must be one of: {', '.join(MERGE_BY)}")
         elif key == "default" and cls is Executor:
             if value not in EXECUTOR_KINDS:
                 raise ValueError(f"{FILE}: [executor] default must be one of: {', '.join(EXECUTOR_KINDS)}")
@@ -502,17 +546,45 @@ def repository_root(cwd: Path | None = None) -> Path:
 
 
 def load(cwd: Path | None = None) -> Config:
+    """The kitchen the directory belongs to.
+
+    A code repo registered on this machine (`ding kitchen link`) uses its registered kitchen, so an executor's worktree
+    finds the kitchen kept in its own repo. Otherwise the kitchen is the .dkitchen.toml at the checkout's root, if any."""
     root = repository_root(cwd)
+    registered = kitchens.lookup(root)
+    if registered is not None:
+        code, entry = registered
+        if (root / FILE).exists() and root not in BOTH_WARNED:
+            BOTH_WARNED.add(root)
+            print(f"ding: {root / FILE} is ignored: {code} is linked to the kitchen at {entry.kitchen} "
+                  f"({kitchens.registry_path()})", file=sys.stderr)
+        if not (entry.kitchen / FILE).exists():
+            raise ValueError(f"{kitchens.registry_path()}: {code} is linked to {entry.kitchen}, which has no {FILE}; "
+                             "run `ding kitchen link` there again")
+        settings = read(entry.kitchen / FILE, entry.kitchen)
+        if settings.code != code:
+            raise ValueError(f"{kitchens.registry_path()}: {code} is linked to {entry.kitchen}, whose {FILE} "
+                             f"sets code = {settings.code!r}; run `ding kitchen link` there again")
+        return replace(settings, code_root=entry.code)
     path = root / FILE
     if not path.exists():
         return Config(root=root)
+    settings = read(path, root)
+    if settings.split:
+        entry = kitchens.entries().get(settings.code)
+        if entry is not None and entry.kitchen == root:
+            settings = replace(settings, code_root=entry.code)
+    return settings
+
+
+def read(path: Path, root: Path) -> Config:
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(f"{path}: {exc}") from exc
     sections = {"roles": Roles, "status": Status, "labels": Labels, "log": Log, "sessions": Sessions, "relay": Relay,
                 "rule": Rule, "launch": Launch, "executor": Executor, "watch": Watch, "night": Night, "merge": Merge,
-                "review": Review}
+                "review": Review, "outbound": Outbound}
     if "stations" in data:
         if "roles" in data:
             raise ValueError(f"{FILE}: [stations] and [roles] are the same section; keep only [roles]")
@@ -520,14 +592,22 @@ def load(cwd: Path | None = None) -> Config:
             RENAME_WARNED.add(path)
             print(f"{FILE}: [stations] is now [roles]; rename the section", file=sys.stderr)
         data["roles"] = data.pop("stations")
-    unknown = sorted(set(data) - {"repo", "check", "build", *sections})
+    unknown = sorted(set(data) - {"repo", "code", "shared", "check", "build", *sections})
     if unknown:
         raise ValueError(f"{FILE}: unknown keys: {', '.join(unknown)}")
-    repo = data.get("repo")
-    if repo is not None and (not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo)):
-        raise ValueError(f"{FILE}: repo must look like owner/name")
+    repo, code, shared = data.get("repo"), data.get("code"), data.get("shared", False)
+    for key, value in (("repo", repo), ("code", code)):
+        if value is not None and (not isinstance(value, str) or not kitchens.REPO.fullmatch(value)):
+            raise ValueError(f"{FILE}: {key} must look like owner/name")
+    if not isinstance(shared, bool):
+        raise ValueError(f"{FILE}: shared must be true or false")
+    if code is not None and repo is None:
+        raise ValueError(f"{FILE}: code needs repo too: repo is the kitchen repo, which holds the tickets")
+    if shared and (code is None or code == repo):
+        raise ValueError(f"{FILE}: a shared code repo needs a kitchen repo of its own: "
+                         "set code to the code repo and repo to a separate kitchen repo")
     if "build" in data and not isinstance(data["build"], dict):
         raise ValueError(f"{FILE}: [build] must be a table")
     check = check_section(data["check"]) if "check" in data else None
-    return Config(root=root, repo=repo, check=check, **{name: section(cls, data[name], name)
-                                                        for name, cls in sections.items() if name in data})
+    return Config(root=root, repo=repo, code=code, shared=shared, check=check,
+                  **{name: section(cls, data[name], name) for name, cls in sections.items() if name in data})

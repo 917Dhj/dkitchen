@@ -43,7 +43,9 @@ from dkitchen import inbox, truncate
 from dkitchen.config import Config, Sessions
 
 SHELLS = {"bash", "sh", "zsh", "dash", "fish"}
-PR_NAMED = re.compile(r"(?<![A-Za-z])PR\s*#?\s*(\d+)|https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)")
+PR_NAMED = re.compile(r"(?<![A-Za-z])PR\s*#?\s*(\d+)|https://github\.com/([\w.-]+/[\w.-]+)/pull/(\d+)"
+                      r"|(?<![A-Za-z])PR\s+([\w.-]+/[\w.-]+)#(\d+)")
+VIEWER: list[str] = []  # the gh login, read once: in a split kitchen, the user's and the agents' code repo account
 STALLED_EVERY_HOURS = 24  # the orchestrator's watch reports each stalled item at most once a day
 WAITER_LOOKBACK_DAYS = 7  # older inbox records are not rechecked; a silent executor was reported long before
 
@@ -64,6 +66,37 @@ def newer(path: str, field: str, since: str, pages: int = 3) -> list[dict]:
         if len(batch) < 100 or batch[-1][field] < since:
             break
     return items
+
+
+def viewer() -> str:
+    """The login gh posts as; the kitchen's PRs and code issues are opened under it."""
+    if not VIEWER:
+        VIEWER.append(gh("user")["login"])
+    return VIEWER[0]
+
+
+def outside_comments(config: Config, since: str) -> list[tuple[str, str, bool]]:
+    """Comments by other people, since `since`, on code repo PRs and issues the kitchen's account opened.
+
+    They wake the orchestrator; they never count as the user's words, even when they come from the user's login."""
+    code, me, targets = config.code_repo(), viewer(), {}
+    items = newer(f"repos/{code}/issues/comments?since={since}&sort=updated&direction=desc", "updated_at", since)
+    items += newer(f"repos/{code}/pulls/comments?since={since}&sort=updated&direction=desc", "updated_at", since)
+    found = []
+    for comment in items:
+        author = (comment.get("user") or {}).get("login", "")
+        if author == me:
+            continue
+        number = issue_number(comment.get("issue_url") or comment.get("pull_request_url"))
+        if number not in targets:
+            targets[number] = gh(f"repos/{code}/issues/{number}")
+        if (targets[number].get("user") or {}).get("login") != me:
+            continue
+        edited = " (edited)" if comment["created_at"] < since else ""
+        first = next((line.strip() for line in (comment.get("body") or "").splitlines() if line.strip()), "")
+        found.append((comment["updated_at"], f"{code}#{number} code repo comment by @{author}{edited}: "
+                      f"{truncate(first, 120)} {comment['html_url']}", True))
+    return found
 
 
 def stamp(moment: datetime) -> str:
@@ -251,6 +284,11 @@ def collect(config: Config, repo: str, since: str, labels_since: str, seen: set[
         who = signer(body, config)
         if number in skip:
             continue
+        if role is None and config.split and comment["created_at"] >= since:
+            from dkitchen.outbound import PR_LINE
+            for code, pull in PR_LINE.findall(body):
+                found.append((comment["updated_at"], f"PR {code}#{pull} opened, recorded on #{number} "
+                              f"{comment['html_url']}", True))
         if role is not None:
             if not role_wakes(body, role, config):
                 continue
@@ -270,6 +308,8 @@ def collect(config: Config, repo: str, since: str, labels_since: str, seen: set[
                 found.append((event["created_at"], f"#{event['issue']['number']} label +{label} {event['issue']['html_url']}", True))
         for pull in newer(f"repos/{repo}/pulls?state=all&sort=created&direction=desc", "created_at", since, pages=1):
             found.append((pull["created_at"], f"PR #{pull['number']} opened: {truncate(pull['title'], 80)} {pull['html_url']}", True))
+        if config.split:
+            found += outside_comments(config, since)
     # Times have one-second resolution: the boundary second is rechecked and its reported lines skipped.
     return sorted({item for item in found if item[1] not in seen})
 
@@ -379,14 +419,28 @@ def answered_by(body: str, role: str, config: Config) -> bool:
 
 
 def named_prs(waiting: str, repo: str) -> set[int]:
-    """The PRs of this repository a wait field names, as `PR #N`, `PRN`, or a /pull/ link."""
+    """The PRs of this repository a wait field names, as `PR #N`, `PRN`, `PR owner/name#N`, or a /pull/ link."""
     numbers = set()
     for match in PR_NAMED.finditer(normalized(waiting)):
         if match.group(1):
             numbers.add(int(match.group(1)))
-        elif match.group(2).lower() == repo.lower():
+        elif match.group(2) and match.group(2).lower() == repo.lower():
             numbers.add(int(match.group(3)))
+        elif match.group(4) and match.group(4).lower() == repo.lower():
+            numbers.add(int(match.group(5)))
     return numbers
+
+
+def ticket_prs(config: Config, ticket: int, cache: dict) -> set[int]:
+    """The code repo PRs the ticket's `PR:` lines record, read once per cache."""
+    key = ("links", ticket)
+    if key not in cache:
+        from dkitchen.outbound import PR_LINE
+        kitchen, code = config.kitchen_repo(), config.code_repo()
+        issue = gh(f"repos/{kitchen}/issues/{ticket}")
+        texts = [issue.get("body") or "", *(comment["body"] or "" for comment in comments_backwards(kitchen, issue))]
+        cache[key] = {int(number) for text in texts for repo, number in PR_LINE.findall(text) if repo == code}
+    return cache[key]
 
 
 def own_pr(pr: dict, ticket: int) -> bool:
@@ -405,6 +459,7 @@ def finished_prs(waiting: str, ticket: int, config: Config, repo: str,
     When every PR named is merged or closed and is the ticket's own, the review and merge are over: the orchestrator,
     the verifier, and each PR's `review:<NAME>` reviewer are dropped. When a finished PR belongs to another ticket,
     the wait is a dependency that is now ready, so every row stays, noted with what happened to that PR."""
+    repo = config.code_repo()
     numbers = sorted(named_prs(waiting, repo))
     if not numbers:
         return set(), ""
@@ -418,7 +473,9 @@ def finished_prs(waiting: str, ticket: int, config: Config, repo: str,
                 cache[number] = {"state": "open"}  # `PR #N` naming no PR: keep the wait as written
     prs = {number: cache[number] for number in numbers}
     finished = {number: pr for number, pr in prs.items() if pr.get("state") != "open"}
-    if len(finished) == len(prs) and all(own_pr(pr, ticket) for pr in prs.values()):
+    own = ((lambda number, pr: number in ticket_prs(config, ticket, cache)) if config.split
+           else (lambda number, pr: own_pr(pr, ticket)))
+    if len(finished) == len(prs) and all(own(number, pr) for number, pr in prs.items()):
         roles = {config.roles.orchestrator, config.roles.verifier}
         for pr in prs.values():
             roles.update(label["name"][7:].strip() for label in pr.get("labels", [])
@@ -467,7 +524,10 @@ def unanswered_waits(config: Config, repo: str, minutes: float, skip: set[int], 
 
 
 def pr_waits(config: Config, repo: str, skip: set[int]) -> list[dict]:
-    if not config.merge.review_check:
+    """Open PRs of the code repo `repo` waiting on a review or a merge, judged by [merge] review_check.
+
+    A shared code repo has none: its verdicts go on tickets and its team merges, so the tickets' own waits route it."""
+    if config.shared or not config.merge.review_check:
         return []
     from dkitchen import orchestrate
     owner, name = repo.split("/", 1)
@@ -605,14 +665,19 @@ def stalled(config: Config, repo: str, checkout: Path, hours: float, skip: set[i
     age = lambda updated: (moment - datetime.fromisoformat(updated.replace("Z", "+00:00"))).total_seconds() / 60
     found = []
     page = 1
+    # In a split kitchen the drafts are the code repo's, and only those the kitchen's account opened; ticket numbers
+    # to skip name kitchen issues, not code repo PRs.
+    code, mine = config.code_repo(), viewer() if config.split else None
+    pr_skip = set() if config.split else skip
     while True:
-        pulls = gh(f"repos/{repo}/pulls?state=open&sort=updated&direction=asc&per_page=100&page={page}")
-        fresh = [pull for pull in pulls if pull["updated_at"] >= cutoff]
+        batch = gh(f"repos/{code}/pulls?state=open&sort=updated&direction=asc&per_page=100&page={page}")
+        pulls = batch if mine is None else [pull for pull in batch if (pull.get("user") or {}).get("login") == mine]
         found += [{"ticket": pull["number"], "pr": True, "kind": "stalled", "role": config.roles.orchestrator,
                    "minutes": age(pull["updated_at"]), "created_at": pull["updated_at"], "url": pull["html_url"],
-                   "summary": f"draft: {truncate(pull['title'], 120)}"}
-                  for pull in pulls if pull["updated_at"] < cutoff and pull.get("draft") and pull["number"] not in skip]
-        if fresh or len(pulls) < 100:
+                   "summary": f"draft: {truncate(pull['title'], 120)}",
+                   **({"ref": f"{code}#{pull['number']}"} if config.split else {})}
+                  for pull in pulls if pull["updated_at"] < cutoff and pull.get("draft") and pull["number"] not in pr_skip]
+        if any(pull["updated_at"] >= cutoff for pull in batch) or len(batch) < 100:
             break
         page += 1
     candidates = [issue for issue in open_issues(repo)
@@ -637,7 +702,7 @@ def stalled(config: Config, repo: str, checkout: Path, hours: float, skip: set[i
 
 
 def stalled_line(item: dict) -> str:
-    return (f"{'PR ' if item['pr'] else ''}#{item['ticket']} stalled, not updated for {item['minutes'] / 60:.0f} hours: "
+    return (f"{'PR ' if item['pr'] else ''}{item.get('ref', '#' + str(item['ticket']))} stalled, not updated for {item['minutes'] / 60:.0f} hours: "
             f"{item['summary']} {item['url']}")
 
 
@@ -647,7 +712,7 @@ def waits(args, config: Config) -> int:
         names = [name for name in names if role_variants(name, config) & role_variants(args.role, config)]
     minutes = config.watch.design_answer_minutes if args.minutes is None else args.minutes
     found = unanswered_waits(config, config.repository(), minutes, set(), roles=names) if names else []
-    found += [item for item in pr_waits(config, config.repository(), set())
+    found += [item for item in pr_waits(config, config.code_repo(), set())
               if item["minutes"] > minutes and (args.role is None or
                  role_variants(args.role, config) & role_variants(item["role"], config))]
     found.sort(key=lambda item: (item["created_at"], item["ticket"], item["role"]))
@@ -803,7 +868,7 @@ def stalled_wakes(config: Config, repo: str, checkout: Path, hours: float, repor
     cutoff = stamp(datetime.now(timezone.utc) - timedelta(hours=STALLED_EVERY_HOURS))
     found, current = [], set()
     for item in stalled(config, repo, checkout, hours, skip):
-        key = f"{'PR ' if item['pr'] else ''}#{item['ticket']}"
+        key = f"{'PR ' if item['pr'] else ''}{item.get('ref', '#' + str(item['ticket']))}"
         current.add(key)
         if reported.get(key, "") < cutoff:
             found.append((item["created_at"], stalled_line(item), key))
@@ -889,7 +954,8 @@ def watch(args, config: Config) -> int:
     labels_since = state.get("labels_since", max(since, started) if path.exists() else since)
     detail = (f"comments and PRs since {since}, labels since {labels_since}" if role is None
               else f"requests and handoffs to {role!r} since {since}")
-    print(f"Watching {repo}: {detail}", file=sys.stderr)
+    print(f"Watching {repo}{f' and its code repo {config.code_repo()}' if config.split else ''}: {detail}",
+          file=sys.stderr)
     errors = 0
     next_stale = next_idle = 0.0 if role is None else float("inf")
     threshold = (config.watch.idle_minutes or config.watch.design_answer_minutes or config.watch.unrouted_wait_minutes
@@ -902,7 +968,8 @@ def watch(args, config: Config) -> int:
         polled = now()
         try:
             found = collect(config, repo, since, labels_since, seen, skip, **collect_options)
-            pr_found, pr_pending = pr_wakes(config, repo, role, pr_reported, pr_observed, skip)
+            pr_found, pr_pending = pr_wakes(config, config.code_repo(), role, pr_reported, pr_observed,
+                                            set() if config.split else skip)
             quiet, idle_found, design_found, pending, stale_ids = [], [], [], observed, set()
             unrouted_found, waiter_found, stalled_found, stalled_current = [], [], [], None
             checked_at = time.monotonic()

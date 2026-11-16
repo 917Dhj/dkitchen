@@ -11,6 +11,7 @@ Relay and log comments carry the orchestrator signature; review comments identif
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 import json
@@ -117,9 +118,15 @@ def readiness(config: Config, repo: str, pr: dict, branch: str, checks: dict | N
 
 
 def review(args, config: Config) -> int:
-    if not config.merge.review_check:
+    """Record a verdict on a PR HEAD: as a PR comment and commit status, or, in a shared code repo, on its ticket."""
+    if config.shared and getattr(args, "ticket", None) is None:
+        return fail(f"{config.code_repo()} is shared, so a PR verdict goes on its ticket, not the PR: "
+                    "add --ticket N, the ticket whose PR line names it")
+    if not config.shared and getattr(args, "ticket", None) is not None:
+        return fail(f"{config.code_repo()} is not shared, so a PR verdict goes on the PR; drop --ticket")
+    if not config.shared and not config.merge.review_check:
         return fail("ding review requires [merge] review_check")
-    repo = config.repository()
+    repo = config.code_repo()
     result = call(config, "gh", "pr", "view", str(args.pr), "--repo", repo, "--json", "headRefOid")
     if result.returncode:
         return fail(f"cannot read PR HEAD: {result.stderr.strip()}")
@@ -132,6 +139,17 @@ def review(args, config: Config) -> int:
     if not args.sha or not sha.startswith(args.sha):
         return fail(f"PR #{args.pr} HEAD is now {sha}, not the reviewed {args.sha}; review it again")
     line = config.merge.review_pass if args.verdict == "pass" else config.merge.review_changes
+    if config.shared:
+        from dkitchen import outbound, verdict
+
+        try:
+            linked = outbound.links(config, args.ticket).prs
+        except (RuntimeError, ValueError, KeyError, TypeError) as error:
+            return fail(f"cannot read #{args.ticket}: {error}. Nothing posted")
+        if (repo, args.pr) not in linked:
+            return fail(f"#{args.ticket} has no PR line for {repo}#{args.pr}; `ding pr` writes one when it opens "
+                        "the PR. Nothing posted")
+        return verdict.review_ticket(args, config, f"{line.replace('{sha}', sha[:8])} ({repo}#{args.pr})")
     body = f"{line.replace('{sha}', sha[:8])}\n\n{Path(args.body_file).read_text(encoding='utf-8')}"
     result = call(config, "gh", "api", f"repos/{repo}/issues/{args.pr}/comments", "-f", f"body={body}")
     if result.returncode:
@@ -171,13 +189,16 @@ def refresh(config: Config, repo: str, number: int, pr: dict, branch: str) -> st
     Each run gets the tip it must validate against as {tip}; the merge is safe only if that same tip is still the
     tip afterwards. The command may replace a status on the HEAD, so the required checks are read again after each run.
     """
+    if config.split and config.code_root is None:
+        return f"{repo}'s checkout is not linked on this machine, so refresh cannot run; run `ding kitchen link` first"
     sha = pr["headRefOid"]
     tip = branch_tip(config, repo, branch)
     for _ in range(REFRESH_RUNS):
         argv = config.merge.refresh_argv(number, sha, tip)
         print(f"ding: refresh against {branch} {tip[:8]}: {shlex.join(argv)}", file=sys.stderr, flush=True)
         try:
-            result = call(config, *argv)
+            # The refresh command validates the code, so it runs in the code repo's checkout.
+            result = call(replace(config, root=config.code_root) if config.split else config, *argv)
         except OSError as error:
             return f"refresh could not run ({shlex.join(argv)}): {error}; merge refused"
         if result.returncode:
@@ -197,7 +218,10 @@ def refresh(config: Config, repo: str, number: int, pr: dict, branch: str) -> st
 
 
 def merge(args, config: Config) -> int:
-    repo = config.repository()
+    repo = config.code_repo()
+    if config.merger == "team":
+        return fail(f"the team merges PRs in {repo} ([merge] by = team{'' if config.merge.by else ', the default for a shared code repo'}); "
+                    "nothing done")
 
     def view() -> dict:
         result = call(config, "gh", "pr", "view", str(args.pr), "--repo", repo, "--json", "isDraft,state,headRefOid,mergeCommit,body,baseRefName")
