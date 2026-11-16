@@ -22,5 +22,8 @@ All roles post from one GitHub account, so comments are told apart by how they a
 - The designer, verifier, and orchestrator start the first line with their role name: `Designer:`, `## Verifier:`, `Orchestrator:`.
 - A PR review comment starts with the line `ding review` writes.
 - Everything else is the user's. The user's comments never start with a role name.
+<!-- module:split -->
+- In the code repo nothing is signed: what the kitchen writes there reads as the user's own ([contributing.md](contributing.md)). `ding watch` reports other people's comments there as code repo comments, never as the user's.
+<!-- /module:split -->
 
 Role names, the signature separator, status fields and words, and the log ticket's number live in the repo's `.dkitchen.toml`, which `ding` reads. When you change this wording, change the docs and that file together.

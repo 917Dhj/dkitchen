@@ -139,7 +139,7 @@ N. docs/agents/improve-kitchen.md and docs/agents/improve-kitchen-history.md, as
 
 ## Evidence sources
 
-Run from the repo root. `SINCE` is the window's start, as `YYYY-MM-DDT00:00:00Z`. The role names, signatures, status words, review lines, and the log ticket come from the repo's `.dkitchen.toml`, or `ding`'s defaults where it sets none.
+Run from the repo root. `SINCE` is the window's start, as `YYYY-MM-DDT00:00:00Z`. In a kitchen kept in its own repo (`ding kitchen` names both), read each source where it lives: tickets, rulings, and the log in the kitchen repo; PRs, CI runs, `Guard-change:` commits, and the executors' transcripts in the code repo and its worktrees; the standing roles' transcripts in the kitchen's checkout. The role names, signatures, status words, review lines, and the log ticket come from the repo's `.dkitchen.toml`, or `ding`'s defaults where it sets none.
 
 1. **Ticket and PR comments**: `gh api "repos/<owner>/<repo>/issues/comments?since=$SINCE&per_page=100" --paginate --slurp`. `since` filters on the update time, so older comments come back too; compare `created_at` with the window. Every role posts under one GitHub account, so tell authors apart by signature. Look for reviews that did not pass, `blocked` statuses, reruns, reverted decisions, and repeated requests.
 2. **The orchestrator log**, when `[log] issue` is set: the same comments, filtered to that ticket. Look for missed waits, wrong releases, and stalled cards.
