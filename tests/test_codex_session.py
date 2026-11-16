@@ -972,8 +972,6 @@ def test_issue_latest_owner_across_all_comment_pages(monkeypatch):
 
     def gh(arguments):
         calls.append(arguments)
-        if arguments[0] == "repo":
-            return {"nameWithOwner": "example/project"}
         if "--paginate" not in arguments:
             return {"body": f"Codex owner: {OTHER_ID}\nCodex owner: {THREAD_ID}\n"}
         return [[{"body": "Codex owner: invalid"}], [
@@ -981,6 +979,7 @@ def test_issue_latest_owner_across_all_comment_pages(monkeypatch):
             {"body": f"Codex session: {THREAD_ID}"},
         ]]
 
+    monkeypatch.setattr(ding, "github_repository", lambda: "example/project")
     monkeypatch.setattr(ding, "gh_json", gh)
     assert ding.issue_session(42) == OTHER_ID
     assert "--slurp" in calls[-1]
@@ -1319,11 +1318,15 @@ def test_board_issue_column_uses_owner_attribution(monkeypatch, capsys):
     assert [row.split("\t")[3] for row in captured.out.splitlines()[1:]] == ["#42", ""]
 
 
-def test_gh_allows_lookup_over_ten_seconds(monkeypatch):
-    def delayed_lookup(argv, *, capture_output, text, timeout):
+def test_gh_allows_lookup_over_ten_seconds(monkeypatch, tmp_path):
+    def delayed_lookup(argv, *, capture_output, text, timeout=None, cwd=None):
+        if argv[0] == "git":
+            return subprocess.CompletedProcess(argv, 1, "", "not a git repository")
         if timeout < 12:
             raise subprocess.TimeoutExpired(argv, timeout)
-        return subprocess.CompletedProcess(argv, 0, '{"nameWithOwner": "example/project"}')
+        return subprocess.CompletedProcess(argv, 0, "example/project\n")
+
+    monkeypatch.chdir(tmp_path)
 
     monkeypatch.setattr(ding.subprocess, "run", delayed_lookup)
     assert ding.github_repository() == "example/project"
@@ -1798,13 +1801,16 @@ def test_board_all_includes_unloaded_errors_and_outside(monkeypatch, tmp_path, c
 @pytest.mark.parametrize("returncode, stdout, stderr", [
     (1, "", "authentication failed"), (0, "invalid json", ""),
 ])
-def test_gh_failure_leaves_issue_map_empty_with_warning(monkeypatch, capsys, returncode, stdout, stderr):
-    def run(argv, *, capture_output, text, timeout):
+def test_gh_failure_leaves_issue_map_empty_with_warning(monkeypatch, capsys, tmp_path, returncode, stdout, stderr):
+    def run(argv, *, capture_output, text, timeout=None, cwd=None):
+        if argv[0] == "git":
+            return subprocess.CompletedProcess(argv, 1, "", "not a git repository")
         assert argv[:3] == ["gh", "repo", "view"]
         assert capture_output and text
         assert timeout == 60
         return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(ding.subprocess, "run", run)
     assert ding.issue_map() == {}
     assert capsys.readouterr().err.startswith("ding: issue lookup failed:")

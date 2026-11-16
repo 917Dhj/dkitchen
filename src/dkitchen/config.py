@@ -2,7 +2,10 @@
 
 Every key is optional. The defaults match the English templates in kitchen/:
 
-    repo = "owner/name"                  # default: the repository gh sees here
+    repo = "owner/name"                  # the kitchen repo, holding the tickets; default: the repository gh sees here
+    # code = "owner/code"               # the code repo, when the kitchen lives in a repo of its own; needs repo.
+    #                                   # Each machine links the two with `ding kitchen link CODE_CHECKOUT`.
+    # shared = false                    # true when other people work in the code repo; needs a separate code repo
 
     [roles]
     orchestrator = "Orchestrator"
@@ -105,10 +108,11 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 
-from dkitchen import ding
+from dkitchen import ding, kitchens
 
 FILE = ".dkitchen.toml"
 RENAME_WARNED: set[Path] = set()  # files already warned about [stations] in this process
+BOTH_WARNED: set[Path] = set()  # checkouts already warned that the registry overrides their own .dkitchen.toml
 
 
 @dataclass(frozen=True)
@@ -346,8 +350,11 @@ def session_template(value: object) -> str:
 
 @dataclass(frozen=True)
 class Config:
-    root: Path
-    repo: str | None = None
+    root: Path                           # the kitchen's checkout: where .dkitchen.toml and the house rules live
+    repo: str | None = None              # the kitchen repo, which holds the tickets
+    code: str | None = None              # the code repo, when it is not the kitchen repo
+    shared: bool = False                 # whether other people also work in and merge into the code repo
+    code_root: Path | None = None        # the code repo's main checkout on this machine, from the registry
     roles: Roles = Roles()
     status: Status = Status()
     labels: Labels = Labels()
@@ -367,8 +374,21 @@ class Config:
     def designer_signatures(self) -> tuple[str, ...]:
         return self.rule.signatures or (self.roles.signature(self.roles.designer),)
 
+    @property
+    def split(self) -> bool:
+        """Whether the kitchen lives in its own repo, apart from the code repo."""
+        return self.code is not None and self.code != self.repo
+
+    def code_repo(self) -> str:
+        """The repo the work lands in, as commits and PRs."""
+        return self.code or self.kitchen_repo()
+
     def repository(self) -> str:
-        """The configured repository, or the one gh sees from the repository root."""
+        """The kitchen repo; kept for callers that predate the split."""
+        return self.kitchen_repo()
+
+    def kitchen_repo(self) -> str:
+        """The repo holding the tickets: the configured one, or the one gh sees from the kitchen's checkout."""
         if self.repo:
             return self.repo
         result = subprocess.run(["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
@@ -502,10 +522,38 @@ def repository_root(cwd: Path | None = None) -> Path:
 
 
 def load(cwd: Path | None = None) -> Config:
+    """The kitchen the directory belongs to.
+
+    A code repo registered on this machine (`ding kitchen link`) uses its registered kitchen, so an executor's worktree
+    finds the kitchen kept in its own repo. Otherwise the kitchen is the .dkitchen.toml at the checkout's root, if any."""
     root = repository_root(cwd)
+    registered = kitchens.lookup(root)
+    if registered is not None:
+        code, entry = registered
+        if (root / FILE).exists() and root not in BOTH_WARNED:
+            BOTH_WARNED.add(root)
+            print(f"ding: {root / FILE} is ignored: {code} is linked to the kitchen at {entry.kitchen} "
+                  f"({kitchens.registry_path()})", file=sys.stderr)
+        if not (entry.kitchen / FILE).exists():
+            raise ValueError(f"{kitchens.registry_path()}: {code} is linked to {entry.kitchen}, which has no {FILE}; "
+                             "run `ding kitchen link` there again")
+        settings = read(entry.kitchen / FILE, entry.kitchen)
+        if settings.code != code:
+            raise ValueError(f"{kitchens.registry_path()}: {code} is linked to {entry.kitchen}, whose {FILE} "
+                             f"sets code = {settings.code!r}; run `ding kitchen link` there again")
+        return replace(settings, code_root=entry.code)
     path = root / FILE
     if not path.exists():
         return Config(root=root)
+    settings = read(path, root)
+    if settings.split:
+        entry = kitchens.entries().get(settings.code)
+        if entry is not None and entry.kitchen == root:
+            settings = replace(settings, code_root=entry.code)
+    return settings
+
+
+def read(path: Path, root: Path) -> Config:
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
@@ -520,14 +568,22 @@ def load(cwd: Path | None = None) -> Config:
             RENAME_WARNED.add(path)
             print(f"{FILE}: [stations] is now [roles]; rename the section", file=sys.stderr)
         data["roles"] = data.pop("stations")
-    unknown = sorted(set(data) - {"repo", "check", "build", *sections})
+    unknown = sorted(set(data) - {"repo", "code", "shared", "check", "build", *sections})
     if unknown:
         raise ValueError(f"{FILE}: unknown keys: {', '.join(unknown)}")
-    repo = data.get("repo")
-    if repo is not None and (not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo)):
-        raise ValueError(f"{FILE}: repo must look like owner/name")
+    repo, code, shared = data.get("repo"), data.get("code"), data.get("shared", False)
+    for key, value in (("repo", repo), ("code", code)):
+        if value is not None and (not isinstance(value, str) or not kitchens.REPO.fullmatch(value)):
+            raise ValueError(f"{FILE}: {key} must look like owner/name")
+    if not isinstance(shared, bool):
+        raise ValueError(f"{FILE}: shared must be true or false")
+    if code is not None and repo is None:
+        raise ValueError(f"{FILE}: code needs repo too: repo is the kitchen repo, which holds the tickets")
+    if shared and (code is None or code == repo):
+        raise ValueError(f"{FILE}: a shared code repo needs a kitchen repo of its own: "
+                         "set code to the code repo and repo to a separate kitchen repo")
     if "build" in data and not isinstance(data["build"], dict):
         raise ValueError(f"{FILE}: [build] must be a table")
     check = check_section(data["check"]) if "check" in data else None
-    return Config(root=root, repo=repo, check=check, **{name: section(cls, data[name], name)
-                                                        for name, cls in sections.items() if name in data})
+    return Config(root=root, repo=repo, code=code, shared=shared, check=check,
+                  **{name: section(cls, data[name], name) for name, cls in sections.items() if name in data})

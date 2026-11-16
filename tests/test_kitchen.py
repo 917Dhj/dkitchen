@@ -3491,3 +3491,120 @@ def test_role_to_prints_a_codex_holders_thread_id(tmp_path, monkeypatch, capsys)
 def test_role_to_without_a_holder_exits_nonzero(tmp_path, monkeypatch, capsys):
     assert role_main(tmp_path, monkeypatch, "Verifier", "--to") == 1
     assert "nobody has taken Verifier" in capsys.readouterr().err
+
+
+# A kitchen in its own repo, apart from the code repo
+
+def run_git(root, *args):
+    import subprocess
+    return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args], cwd=root,
+                          check=True, capture_output=True, text=True).stdout.strip()
+
+
+def checkout(path, remote):
+    path.mkdir(parents=True)
+    run_git(path, "init", "-q", "-b", "main")
+    run_git(path, "remote", "add", "origin", remote)
+    return path.resolve()
+
+
+def split_pair(tmp_path, kitchen_text='repo = "me/kitchen"\ncode = "org/code"\n'):
+    kitchen = checkout(tmp_path / "kitchen", "git@github.com:me/kitchen.git")
+    (kitchen / config.FILE).write_text(kitchen_text, encoding="utf-8")
+    code = checkout(tmp_path / "code", "https://github.com/org/code.git")
+    (code / "README.md").write_text("code\n", encoding="utf-8")
+    run_git(code, "add", "README.md")
+    run_git(code, "commit", "-q", "-m", "first")
+    return kitchen, code
+
+
+def test_split_kitchen_names_both_repos(tmp_path):
+    loaded = settings(tmp_path, 'repo = "me/kitchen"\ncode = "org/code"\nshared = true\n')
+    assert loaded.split and loaded.shared
+    assert (loaded.kitchen_repo(), loaded.code_repo(), loaded.repository()) == ("me/kitchen", "org/code", "me/kitchen")
+
+
+def test_single_repo_kitchen_uses_one_repo_for_both(tmp_path):
+    loaded = settings(tmp_path, 'repo = "o/r"\n')
+    assert not loaded.split and not loaded.shared
+    assert loaded.code_repo() == loaded.kitchen_repo() == "o/r"
+    assert not settings(tmp_path, 'repo = "o/r"\ncode = "o/r"\n').split
+
+
+@pytest.mark.parametrize(("text", "message"), [
+    ('code = "org/code"\n', "code needs repo too"),
+    ('repo = "me/kitchen"\nshared = true\n', "needs a kitchen repo of its own"),
+    ('repo = "o/r"\ncode = "o/r"\nshared = true\n', "needs a kitchen repo of its own"),
+    ('repo = "me/kitchen"\ncode = "org/code"\nshared = "yes"\n', "shared must be true or false"),
+    ('repo = "me/kitchen"\ncode = "not a repo"\n', "code must look like owner/name"),
+])
+def test_split_kitchen_settings_are_checked(tmp_path, text, message):
+    with pytest.raises(ValueError, match=message):
+        settings(tmp_path, text)
+
+
+@pytest.mark.parametrize("url", ["git@github.com:org/code.git", "https://github.com/org/code", "https://github.com/org/code.git/",
+                                 "ssh://git@github.com/org/code.git", "work-alias:org/code.git"])
+def test_remote_urls_name_their_repo(url):
+    from dkitchen import kitchens
+    assert kitchens.repo_of_remote(url) == "org/code"
+
+
+def test_link_lets_a_code_worktree_find_its_kitchen(tmp_path, monkeypatch, capsys):
+    kitchen, code = split_pair(tmp_path)
+    run_git(code, "worktree", "add", "-q", str(tmp_path / "wt"), "-b", "issue12")
+    monkeypatch.chdir(kitchen)
+    assert ding.main(["kitchen", "link", str(tmp_path / "wt")]) == 0
+    assert "linked org/code" in capsys.readouterr().out
+    for where in (code, tmp_path / "wt", code / "README.md"):
+        loaded = config.load(where if where.is_dir() else where.parent)
+        assert (loaded.root, loaded.code_root, loaded.code_repo()) == (kitchen, code, "org/code")
+    assert config.load(kitchen).code_root == code
+    monkeypatch.chdir(tmp_path / "wt")
+    assert ding.main(["kitchen"]) == 0
+    shown = capsys.readouterr().out
+    assert f"kitchen: {kitchen}" in shown and "code repo: org/code" in shown and "found: through" in shown
+
+
+def test_link_refuses_a_checkout_of_another_repo(tmp_path, monkeypatch, capsys):
+    kitchen, _ = split_pair(tmp_path)
+    other = checkout(tmp_path / "other", "git@github.com:org/other.git")
+    monkeypatch.chdir(kitchen)
+    assert ding.main(["kitchen", "link", str(other)]) == 1
+    assert "is a checkout of org/other, not org/code" in capsys.readouterr().err
+
+
+def test_link_needs_a_split_kitchen(tmp_path, monkeypatch, capsys):
+    kitchen, code = split_pair(tmp_path, 'repo = "me/kitchen"\n')
+    monkeypatch.chdir(kitchen)
+    assert ding.main(["kitchen", "link", str(code)]) == 1
+    assert "names no separate code repo" in capsys.readouterr().err
+    monkeypatch.chdir(code)
+    assert ding.main(["kitchen", "link", str(code)]) == 1
+    assert "run `ding kitchen link` in the kitchen repo's checkout" in capsys.readouterr().err
+
+
+def test_registry_overrides_a_code_repos_own_kitchen_file(tmp_path, monkeypatch, capsys):
+    from dkitchen import kitchens
+    kitchen, code = split_pair(tmp_path)
+    (code / config.FILE).write_text('repo = "org/code"\n', encoding="utf-8")
+    kitchens.write({"org/code": kitchens.Entry(kitchen=kitchen, code=code)})
+    assert config.load(code).root == kitchen
+    assert "is ignored: org/code is linked to the kitchen" in capsys.readouterr().err
+
+
+def test_registry_entry_must_match_the_kitchens_code_repo(tmp_path):
+    from dkitchen import kitchens
+    kitchen, code = split_pair(tmp_path, 'repo = "me/kitchen"\ncode = "org/elsewhere"\n')
+    kitchens.write({"org/code": kitchens.Entry(kitchen=kitchen, code=code)})
+    with pytest.raises(ValueError, match="sets code = 'org/elsewhere'"):
+        config.load(code)
+
+
+def test_ticket_lookups_use_the_kitchen_repo_without_asking_gh(tmp_path, monkeypatch):
+    from dkitchen import kitchens
+    kitchen, code = split_pair(tmp_path)
+    kitchens.write({"org/code": kitchens.Entry(kitchen=kitchen, code=code)})
+    monkeypatch.setattr(ding, "gh_json", lambda *_: pytest.fail("must not ask gh"))
+    monkeypatch.chdir(code)
+    assert ding.github_repository() == "me/kitchen"

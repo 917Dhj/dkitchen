@@ -333,9 +333,11 @@ def gh_records(resource: str) -> list[dict]:
 
 
 def github_repository() -> str:
-    result = gh_json(["repo", "view", "--json", "nameWithOwner"])
-    repo = result.get("nameWithOwner") if isinstance(result, dict) else None
-    if not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+    """The kitchen repo, which holds the tickets, for the directory `ding` runs in."""
+    from dkitchen import config
+
+    repo = config.load().kitchen_repo()
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
         raise ValueError("Malformed gh repository name.")
     return repo
 
@@ -2121,6 +2123,15 @@ def main(argv=None) -> int:
                      help="Orchestrator only: on the stale check, report each open draft PR and each in-progress "
                           "ticket naming no wait not updated for this long, once a day (default: 48; 0 disables)")
     sub.add_argument("--max-errors", type=int, default=10, help="Consecutive failed polls before exiting (default: 10)")
+    sub = commands.add_parser("kitchen", help="Show which kitchen this directory belongs to, or link one on this machine",
+                              description="ding kitchen: print the kitchen this directory belongs to, its kitchen "
+                                          "and code repos, and how it was found. ding kitchen link CODE_CHECKOUT: run "
+                                          "in a kitchen repo's checkout whose .dkitchen.toml sets code, to record on "
+                                          "this machine where the kitchen and the code repo's checkout are, so "
+                                          "`ding` run anywhere in the code repo or its worktrees finds the kitchen. "
+                                          "The registry is $XDG_CONFIG_HOME/dkitchen/kitchens.toml "
+                                          "(default ~/.config/dkitchen/kitchens.toml).")
+    sub.add_argument("words", nargs="*", metavar="[link CODE_CHECKOUT]")
     sub = commands.add_parser("role", help="Record or print which session holds each role, by session id",
                               description="ding role: list every role with a holder (role, kind, id, since). "
                                           "ding role NAME: print only NAME's holder id; exit 1 when nobody holds it. "
@@ -2267,6 +2278,13 @@ def main(argv=None) -> int:
         if args.action == "check-refs":
             from dkitchen import refs
             return refs.check_refs(args)
+        if args.action == "kitchen":
+            from dkitchen import config, kitchens
+            if args.words and (args.words[0] != "link" or len(args.words) != 2):
+                parser.error("kitchen takes no words, or link CODE_CHECKOUT")
+            here = config.repository_root()
+            settings = config.load()
+            return kitchens.link(settings, args.words[1], here) if args.words else kitchens.show(settings, here)
         if args.action == "role":
             from dkitchen import config, roles
             return roles.role(args, config.load())
