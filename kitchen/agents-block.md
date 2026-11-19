@@ -21,7 +21,7 @@ Every session loads these lines, so each one is a pointer to a doc under `docs/a
 ```markdown
 @AGENTS.md
 
-- **Watch**: at session start, start your role's watch as in [docs/agents/watch.md](docs/agents/watch.md).
+- **Watch**: start your role's watch at session start and again after handling each batch, as a background Bash task on its own: no `&`, no output redirection, nothing chained before it (not even `ding review`). Details in [docs/agents/watch.md](docs/agents/watch.md).
 - **While the user is away** (orchestrator): move work forward as in [docs/agents/unattended.md](docs/agents/unattended.md).
 <!-- module:split -->
 - **Code repo**: the work lands in the code repo; `CLAUDE.local.md` names its checkout on this machine. Read its own `AGENTS.md` before changing or judging its code.
