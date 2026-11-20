@@ -57,15 +57,82 @@ def test_config_file_sets_the_vocabulary(tmp_path):
     assert loaded.log.issue == 246
 
 
-@pytest.mark.parametrize("text, error", [
+BAD_CONFIGS = [
     ("colour = 1", "unknown keys: colour"),
     ("[status]\nfeilds = ['A']", r"unknown keys in \[status\]: feilds"),
+    ('[status]\npending_merge = "Pending merge"', r"unknown keys in \[status\]: pending_merge"),
     ("[status]\nfields = []", "nonempty list"),
     ("[log]\nissue = 0", "positive issue number"),
     ("[roles]\ndesigner = ''", "nonempty string"),
     ("repo = 'not a repo'", "owner/name"),
     ("[status", "dkitchen.toml"),
-])
+    *((f"[sessions]\nname = {json.dumps(template)}", error) for template, error in [
+        ("", "nonempty string"),
+        ("{issue} {title}", r"uses \{title\}; use only \{issue\}, \{name\}, \{repo\}"),
+        ("{} {name}", r"uses \{\}"),
+        ("{name.upper}", r"uses \{name.upper\}"),
+        ("{name!r}", "without a conversion"),
+        ("{name", "not a valid template"),
+        ("{name:d}", "not a valid template"),
+        ("{issue:{name}}", "nested field"),
+    ]),
+    *((f"[merge]\nrequired_checks = {value}", "required_checks must be a list of nonempty check names")
+      for value in ['"hca-check"', '[1]', '[""]', '["   "]', 'false']),
+    *((f"[merge]\nrefresh = {value}", "refresh must be one command line or an empty string")
+      for value in ['1', '"   "', '"a \'b"', '"a\\nb"', '["a"]']),
+    *((f"[merge]\nreview_check = {value}", "review_check") for value in ['true', '" "']),
+    *((f"[merge]\n{text}", "must be one line holding {sha} once")
+      for text in ['review_pass = "Reviewed: pass"', 'review_pass = "{sha}"', 'review_changes = "a {sha} {sha}"',
+                   'review_pass = "a\\n{sha}"', 'review_pass = 1']),
+    *((text, r"\[night\]") for text in ['[night]\nheading = ""', '[night]\nclosed = "line\\nline"', '[night]\nunknown = "x"']),
+    ("[rule]\ntypes = []", "types must be a nonempty list"),
+    ("[rule]\nnotify = 'no link'", "holding {url}"),
+    ("[rule]\nnotify = '{url} {oops}'", "not a valid template"),
+    ("[rule]\nnotify_types = 'actionable'", "notify_types must be a list"),
+    ("[rule]\nnotify_types = ['urgent']", "notify_types urgent must be among types"),
+    *((f"[rule]\nsignatures = {value}", r"\[rule\] signatures must be a nonempty list")
+      for value in ['[]', '[1]', '["Designer: ", false]', '[""]', '["   "]', '"Designer: "']),
+    ("[review]\nnotify = '{url}'", "holding {url} and {verdict}"),
+    ("[review]\nnotify = '{verdict} {url} {oops}'", "not a valid template"),
+    ("[review]\nverdict_pass = ''", "verdict_pass must be one nonempty line"),
+    ("[review]\nverdict_changes = 'Verdict: pass'", "must differ"),
+    *((f"[launch]\n{text}", error) for text, error in [
+        ('preflight = "python check.py"', "argv list"),
+        ('preflight = []', "argv list"),
+        ('preflight = [""]', "argv list"),
+        ('preflight = ["python", 1]', "argv list"),
+        ('preflight = ["python", "\\u0000"]', "argv list"),
+        ('preflight_timeout = 0', "positive finite"),
+        ('preflight_timeout = -1', "positive finite"),
+        ('preflight_timeout = true', "positive finite"),
+        ('preflight_timeout = "300"', "positive finite"),
+        ('preflight_timeout = inf', "positive finite"),
+        ('preflight_timeout = nan', "positive finite"),
+        ('keep_days = -1', "nonnegative finite"),
+        ('keep_days = true', "nonnegative finite"),
+        ('keep_days = "14"', "nonnegative finite"),
+        ('keep_days = inf', "nonnegative finite"),
+        ('prefligth = ["python"]', "unknown keys"),
+    ]),
+    *((f"[watch]\nidle_minutes = {value}", r"\[watch\] idle_minutes must be a nonnegative finite number")
+      for value in ['-1', '"45"', 'true', 'nan', 'inf']),
+    *((f"[watch]\n{key} = {value}", key) for key, value in [
+        ("design_answer_minutes", "-1"), ("design_answer_minutes", "true"), ("design_answer_minutes", "inf"),
+        ("unrouted_wait_minutes", "-1"), ("unrouted_wait_minutes", "nan"), ("unrouted_wait_minutes", "true"),
+        ("executor_listener_minutes", "-1"), ("executor_listener_minutes", "true"),
+    ]),
+    *((text, "aliases") for text in ['[roles]\naliases = "wrong"', '[roles.aliases]\nDesigner = []',
+                                     '[roles.aliases]\nDesigner = [1]', '[roles.aliases]\nDesigner = [""]',
+                                     '[roles.aliases]\n"" = ["D"]']),
+    ('code = "org/code"\n', "code needs repo too"),
+    ('repo = "me/kitchen"\nshared = true\n', "needs a kitchen repo of its own"),
+    ('repo = "o/r"\ncode = "o/r"\nshared = true\n', "needs a kitchen repo of its own"),
+    ('repo = "me/kitchen"\ncode = "org/code"\nshared = "yes"\n', "shared must be true or false"),
+    ('repo = "me/kitchen"\ncode = "not a repo"\n', "code must look like owner/name"),
+]
+
+
+@pytest.mark.parametrize("text, error", BAD_CONFIGS)
 def test_bad_config_is_refused_with_its_key(tmp_path, text, error):
     with pytest.raises(ValueError, match=error):
         settings(tmp_path, text)
@@ -76,21 +143,6 @@ def test_session_name_template_defaults_and_fills_names_verbatim(tmp_path):
         "【#57】Fix {x} 100%"
     loaded = settings(tmp_path, '[sessions]\nname = "{repo}#{issue:04d} {name}"')
     assert loaded.sessions.session_name(issue=7, name="Plot", repo="o/r") == "o/r#0007 Plot"
-
-
-@pytest.mark.parametrize("template, error", [
-    ("", "nonempty string"),
-    ("{issue} {title}", r"uses \{title\}; use only \{issue\}, \{name\}, \{repo\}"),
-    ("{} {name}", r"uses \{\}"),
-    ("{name.upper}", r"uses \{name.upper\}"),
-    ("{name!r}", "without a conversion"),
-    ("{name", "not a valid template"),
-    ("{name:d}", "not a valid template"),
-    ("{issue:{name}}", "nested field"),
-])
-def test_bad_session_name_template_is_refused_on_load(tmp_path, template, error):
-    with pytest.raises(ValueError, match=error):
-        settings(tmp_path, f"[sessions]\nname = {json.dumps(template)}")
 
 
 def test_board_status_falls_back_to_the_config_fields(tmp_path, monkeypatch, capsys):
@@ -207,12 +259,6 @@ SESSION = "Codex session: 00000000-0000-4000-8000-000000000001"
 
 
 
-
-
-@pytest.mark.parametrize("value", ['"hca-check"', '[1]', '[""]', '["   "]', 'false'])
-def test_merge_required_checks_rejects_bad_config(tmp_path, value):
-    with pytest.raises(ValueError, match="required_checks must be a list of nonempty check names"):
-        settings(tmp_path, f"[merge]\nrequired_checks = {value}")
 
 
 def test_merge_required_checks_defaults_and_exact_names(tmp_path):
@@ -454,24 +500,30 @@ def test_merge_refresh_does_not_run_when_readiness_already_blocks(tmp_path, monk
     assert not refresh_calls(calls) and len(calls) == 3
 
 
-@pytest.mark.parametrize("value", ['1', '"   "', '"a \'b"', '"a\\nb"', '["a"]'])
-def test_merge_refresh_rejects_bad_config(tmp_path, value):
-    with pytest.raises(ValueError, match="refresh must be one command line or an empty string"):
-        settings(tmp_path, f"[merge]\nrefresh = {value}")
-
-
 def test_merge_refresh_defaults_to_off(tmp_path):
     assert settings(tmp_path).merge.refresh == ""
     assert settings(tmp_path, '[merge]\nrefresh = ""').merge.refresh == ""
 
 
-def test_merge_help_describes_required_checks(capsys):
+@pytest.mark.parametrize("argv, phrases", [
+    ([], ("List sessions", "latest final reply", "status as JSON", "Send a message", "message a session when it exits",
+          "new tmux session", "review")),
+    (["merge"], ("required_checks", "review_check", "no bypass", "refresh")),
+    (["night"], ("open", "show", "close", "[log] issue", "calls no model")),
+    (["watch"], ("--for NAME", "executor comments waiting on", "review:<NAME>", "stale/idle", "[roles.aliases]",
+                 "[status] paused", "design_answer_minutes", "awaiting-user", "status labels older")),
+    (["waits"], ("--for", "--minutes", "--json", "Read-only", "design_answer_minutes")),
+    (["review"], ("--body-file", "review_check")),
+    (["rule"], ("--reply-to", "--notify", "--no-notify", "notify_types", "--edit-body", "--base", "--force",
+                "check-refs", "SendMessage")),
+])
+def test_help_names_what_agents_look_up(capsys, argv, phrases):
+    """Skills send agents to `ding ... --help`, so these phrases are what an agent reads there."""
     with pytest.raises(SystemExit) as exc:
-        ding.main(["merge", "--help"])
+        ding.main([*argv, "--help"])
     assert exc.value.code == 0
-    help_text = capsys.readouterr().out
-    assert "required_checks" in help_text and "review_check" in help_text and "no bypass" in help_text
-    assert "refresh" in help_text
+    text = " ".join(capsys.readouterr().out.split())
+    assert [phrase for phrase in phrases if phrase not in text] == []
 
 
 @pytest.mark.parametrize("argv, error", [
@@ -677,12 +729,6 @@ def test_malformed_order_time_does_not_allow_a_duplicate_open(night_log, capsys)
     assert len(night_log.comments) == 1
 
 
-@pytest.mark.parametrize("text", ['[night]\nheading = ""', '[night]\nclosed = "line\\nline"', '[night]\nunknown = "x"'])
-def test_night_config_is_checked(tmp_path, text):
-    with pytest.raises(ValueError, match=r"\[night\]"):
-        settings(tmp_path, text)
-
-
 def test_night_defaults_and_missing_log_issue(tmp_path, monkeypatch, capsys):
     monkeypatch.chdir(tmp_path)
     loaded = settings(tmp_path)
@@ -690,14 +736,6 @@ def test_night_defaults_and_missing_log_issue(tmp_path, monkeypatch, capsys):
     assert loaded.night.closed == "Orchestrator: night orders closed"
     assert ding.main(["night", "show"]) == 1
     assert "[log] issue" in capsys.readouterr().err
-
-
-def test_night_help_lists_all_commands(capsys):
-    with pytest.raises(SystemExit) as error:
-        ding.main(["night", "--help"])
-    assert error.value.code == 0
-    help_text = capsys.readouterr().out
-    assert all(word in help_text for word in ("open", "show", "close", "[log] issue", "calls no model"))
 
 
 def test_live_tmux_jobs_count_as_running_but_shells_and_dead_panes_do_not():
@@ -1148,15 +1186,6 @@ def test_rule_option_combinations(capsys, options, error):
     assert exc.value.code == 2 and error in capsys.readouterr().err
 
 
-def test_rule_help_explains_the_steps(capsys):
-    with pytest.raises(SystemExit):
-        ding.main(["rule", "--help"])
-    out = capsys.readouterr().out
-    for word in ("--reply-to", "--notify", "--no-notify", "notify_types", "--edit-body", "--base", "--force",
-                 "check-refs", "SendMessage"):
-        assert word in out
-
-
 def test_check_refs_reports_each_draft_and_fails_when_any_is_wrong(tree, capsys):
     good, bad = tree / "good.md", tree / "bad.md"
     good.write_text("`pkg/work.py:9` holds `Ledger`\n")
@@ -1179,20 +1208,9 @@ def test_check_refs_keeps_going_past_an_unreadable_draft(tree, capsys):
     assert "missing.md" in captured.err and json.loads(captured.out)["draft"] == str(good)
 
 
-@pytest.mark.parametrize("text, error", [
-    ("[rule]\ntypes = []", "types must be a nonempty list"),
-    ("[rule]\nnotify = 'no link'", "holding {url}"),
-    ("[rule]\nnotify = '{url} {oops}'", "not a valid template"),
-    ("[rule]\nnotify_types = 'actionable'", "notify_types must be a list"),
-    ("[rule]\nnotify_types = ['urgent']", "notify_types urgent must be among types"),
-    ("[rule]\nnotify_types = ['record']\ntypes = ['actionable', 'record']", None),
-])
-def test_rule_config_is_checked(tmp_path, text, error):
-    if error is None:
-        assert settings(tmp_path, text).rule.default_notify_types == ("record",)
-        return
-    with pytest.raises(ValueError, match=error):
-        settings(tmp_path, text)
+def test_rule_notify_types_may_name_any_listed_type(tmp_path):
+    loaded = settings(tmp_path, "[rule]\nnotify_types = ['record']\ntypes = ['actionable', 'record']")
+    assert loaded.rule.default_notify_types == ("record",)
 
 
 def test_rule_defaults_are_english(tmp_path):
@@ -1209,29 +1227,6 @@ def test_launch_config_preserves_argv_and_defaults(tmp_path):
     assert loaded.launch.preflight_timeout == 300
     assert loaded.launch.keep_days == 14
     assert settings(tmp_path, "[launch]\nkeep_days = 0").launch.keep_days == 0
-
-
-@pytest.mark.parametrize("text, error", [
-    ('preflight = "python check.py"', "argv list"),
-    ('preflight = []', "argv list"),
-    ('preflight = [""]', "argv list"),
-    ('preflight = ["python", 1]', "argv list"),
-    ('preflight = ["python", "\\u0000"]', "argv list"),
-    ('preflight_timeout = 0', "positive finite"),
-    ('preflight_timeout = -1', "positive finite"),
-    ('preflight_timeout = true', "positive finite"),
-    ('preflight_timeout = "300"', "positive finite"),
-    ('preflight_timeout = inf', "positive finite"),
-    ('preflight_timeout = nan', "positive finite"),
-    ('keep_days = -1', "nonnegative finite"),
-    ('keep_days = true', "nonnegative finite"),
-    ('keep_days = "14"', "nonnegative finite"),
-    ('keep_days = inf', "nonnegative finite"),
-    ('prefligth = ["python"]', "unknown keys"),
-])
-def test_bad_launch_config_is_refused(tmp_path, text, error):
-    with pytest.raises(ValueError, match=error):
-        settings(tmp_path, "[launch]\n" + text)
 
 
 @pytest.mark.parametrize("text", [None, CHINESE])
@@ -1257,12 +1252,6 @@ def test_rule_and_watch_share_configured_designer_signatures(tmp_path, prefix):
     problem = rule.format_problem("其他设计：结论\n类型：可执行\n", loaded)
     assert "'总设计：'" in problem and "'总设计（训练）：'" in problem
     assert watch.signer("其他设计：结论", loaded) == loaded.roles.user
-
-
-@pytest.mark.parametrize("value", ['[]', '[1]', '["Designer: ", false]', '[""]', '["   "]', '"Designer: "'])
-def test_invalid_rule_signatures_are_rejected_on_load(tmp_path, value):
-    with pytest.raises(ValueError, match=r"\[rule\] signatures must be a nonempty list"):
-        settings(tmp_path, f"[rule]\nsignatures = {value}")
 
 
 def test_explicit_signatures_replace_default_and_preserve_spaces(tmp_path):
@@ -1516,12 +1505,6 @@ def test_idle_disabled_does_not_query_github_board_or_tmux(tmp_path, monkeypatch
     for name in ("gh", "board_output", "tmux_panes"):
         monkeypatch.setattr(watch, name, unexpected)
     assert watch.idle(loaded, "o/r", tmp_path, {}, set(), set()) == ([], {})
-
-
-@pytest.mark.parametrize("value", ['-1', '"45"', 'true', 'nan', 'inf'])
-def test_bad_watch_idle_minutes_is_rejected(tmp_path, value):
-    with pytest.raises(ValueError, match=r"\[watch\] idle_minutes must be a nonnegative finite number"):
-        settings(tmp_path, f"[watch]\nidle_minutes = {value}")
 
 
 def test_watch_config_defaults_and_unknown_keys(tmp_path):
@@ -2048,15 +2031,6 @@ def test_role_watch_requires_a_nonempty_name(arguments):
     assert error.value.code == 2
 
 
-def test_role_watch_help_describes_its_scope(capsys):
-    with pytest.raises(SystemExit):
-        ding.main(["watch", "--help"])
-    text = capsys.readouterr().out
-    assert "--for NAME" in text
-    assert "executor comments waiting on" in text
-    assert "review:<NAME>" in text and "stale/idle" in text
-
-
 def test_role_watch_retries_post_settle_timeout_without_duplicate_output(role_settings, monkeypatch, tmp_path, capsys):
     import subprocess
     monkeypatch.setattr(config, "load", lambda: role_settings)
@@ -2124,21 +2098,6 @@ def test_alias_matching_is_shared_with_orchestrator_and_normalizes_width(routed_
     paused = body.replace("进行中", "暂停")
     assert watch.executor_wakes(paused, False, routed_settings)  # Same waiting-name test as in progress.
     assert not watch.executor_wakes(executor("状态: 暂停\n在等: 无"), False, routed_settings)
-
-
-@pytest.mark.parametrize("text", [
-    '[roles]\naliases = "wrong"',
-    '[roles.aliases]\nDesigner = []',
-    '[roles.aliases]\nDesigner = [1]',
-    '[roles.aliases]\nDesigner = [""]',
-    '[roles.aliases]\n"" = ["D"]',
-    '[watch]\ndesign_answer_minutes = -1',
-    '[watch]\ndesign_answer_minutes = true',
-    '[watch]\ndesign_answer_minutes = inf',
-])
-def test_issue32_config_validation(tmp_path, text):
-    with pytest.raises(ValueError, match="aliases|design_answer_minutes"):
-        settings(tmp_path, text)
 
 
 @pytest.mark.parametrize("kind", ["idle", "stale"])
@@ -2304,14 +2263,6 @@ def test_waits_rejects_invalid_options(capsys, options):
     with pytest.raises(SystemExit) as error:
         ding.main(["waits", *options])
     assert error.value.code == 2
-
-
-def test_waits_help_documents_filters_and_read_only(capsys):
-    with pytest.raises(SystemExit) as error:
-        ding.main(["waits", "--help"])
-    assert error.value.code == 0
-    output = " ".join(capsys.readouterr().out.split())
-    assert all(word in output for word in ("--for", "--minutes", "--json", "Read-only", "design_answer_minutes"))
 
 
 @pytest.mark.parametrize("sink, exists", [("null", False), ("null", True), ("pipe", False), ("file", False)])
@@ -2561,16 +2512,6 @@ def test_optional_config_defaults_are_backward_compatible(tmp_path):
     assert settings(tmp_path, '[watch]\ndesign_answer_minutes = 0').watch.design_answer_minutes == 0
 
 
-def test_issue32_watch_help_covers_new_rules(capsys):
-    with pytest.raises(SystemExit):
-        ding.main(["watch", "--help"])
-    help_text = " ".join(capsys.readouterr().out.split())
-    assert "[roles.aliases]" in help_text
-    assert "[status] paused" in help_text
-    assert "design_answer_minutes" in help_text
-    assert "awaiting-user" in help_text and "status labels older" in help_text
-
-
 def test_backstop_reports_new_requests_after_a_previous_designer_reply(unanswered_ticket):
     ticket = unanswered_ticket
     older_reply = {"id": 2600, "body": "总设计：之前已答复", "created_at": "2026-10-28T11:00:00Z"}
@@ -2796,15 +2737,6 @@ def test_unrouted_watch_persists_once_per_comment(idle_ticket, monkeypatch, caps
     assert json.loads(path.read_text())['unrouted_reported'] == [2601, 2602]
 
 
-@pytest.mark.parametrize('key, value', [('review_check', 'true'), ('review_check', '" "'),
-    ('unrouted_wait_minutes', '-1'), ('unrouted_wait_minutes', 'nan'), ('unrouted_wait_minutes', 'true'),
-    ('executor_listener_minutes', '-1'), ('executor_listener_minutes', 'true')])
-def test_new_config_validation(tmp_path, key, value):
-    section = 'merge' if key == 'review_check' else 'watch'
-    with pytest.raises(ValueError, match=key):
-        settings(tmp_path, f'[{section}]\n{key}={value}')
-
-
 def test_pr_backstop_timer_is_saved_without_advancing_comment_cursor(review_pr, monkeypatch):
     ticket = review_pr
     monkeypatch.setattr(watch, 'stale', lambda *args: [])
@@ -2870,16 +2802,6 @@ def test_review_requires_config_before_any_call(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(orchestrate, 'call', lambda *args: pytest.fail('no gh call without review_check'))
     assert orchestrate.review(SimpleNamespace(), settings(tmp_path)) == 1
     assert 'requires [merge] review_check' in capsys.readouterr().err
-
-
-def test_review_help_lists_command_and_keys(capsys):
-    with pytest.raises(SystemExit):
-        ding.main(['--help'])
-    assert 'review' in capsys.readouterr().out
-    with pytest.raises(SystemExit):
-        ding.main(['review', '--help'])
-    text = capsys.readouterr().out
-    assert '--body-file' in text and 'review_check' in text
 
 
 @pytest.mark.parametrize('target', ['Orchestrator', 'Boss'])
@@ -2958,13 +2880,6 @@ def test_review_lines_follow_the_configured_wording(tmp_path, monkeypatch):
     assert calls[1][-1] == 'body=审过 abcdef01：有出入，见下\n\ndetails'
 
 
-@pytest.mark.parametrize('text', ['review_pass = "Reviewed: pass"', 'review_pass = "{sha}"',
-                                  'review_changes = "a {sha} {sha}"', 'review_pass = "a\\n{sha}"', 'review_pass = 1'])
-def test_bad_review_lines_are_refused(tmp_path, text):
-    with pytest.raises(ValueError, match="must be one line holding {sha} once"):
-        settings(tmp_path, '[merge]\n' + text)
-
-
 def test_handoff_words_default_to_english_and_are_configurable(tmp_path):
     english = settings(tmp_path, 'repo="o/r"')
     assert watch.role_wakes("Orchestrator: done\nhand to Designer", "Designer", english)
@@ -2973,11 +2888,6 @@ def test_handoff_words_default_to_english_and_are_configurable(tmp_path):
     assert watch.role_wakes("Orchestrator: done\n交Designer", "Designer", chinese)
     with pytest.raises(ValueError, match="handoff must be a nonempty list"):
         settings(tmp_path, '[watch]\nhandoff = []')
-
-
-def test_pending_merge_key_is_refused(tmp_path):
-    with pytest.raises(ValueError, match="unknown keys in \\[status\\]: pending_merge"):
-        settings(tmp_path, '[status]\npending_merge = "Pending merge"')
 
 
 def pr_states(monkeypatch, prs):
@@ -3245,17 +3155,6 @@ def test_review_arguments_must_fit_one_shape(argv, tmp_path, capsys):
     with pytest.raises(SystemExit):
         ding.main([*argv, "--body-file", str(tmp_path / "b.md")])
     assert "review" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("text, error", [
-    ("[review]\nnotify = '{url}'", "holding {url} and {verdict}"),
-    ("[review]\nnotify = '{verdict} {url} {oops}'", "not a valid template"),
-    ("[review]\nverdict_pass = ''", "verdict_pass must be one nonempty line"),
-    ("[review]\nverdict_changes = 'Verdict: pass'", "must differ"),
-])
-def test_review_config_is_checked(tmp_path, text, error):
-    with pytest.raises(ValueError, match=error):
-        settings(tmp_path, text)
 
 
 @pytest.mark.parametrize("word", ["pass", "changes"])
@@ -3528,18 +3427,6 @@ def test_single_repo_kitchen_uses_one_repo_for_both(tmp_path):
     assert not loaded.split and not loaded.shared
     assert loaded.code_repo() == loaded.kitchen_repo() == "o/r"
     assert not settings(tmp_path, 'repo = "o/r"\ncode = "o/r"\n').split
-
-
-@pytest.mark.parametrize(("text", "message"), [
-    ('code = "org/code"\n', "code needs repo too"),
-    ('repo = "me/kitchen"\nshared = true\n', "needs a kitchen repo of its own"),
-    ('repo = "o/r"\ncode = "o/r"\nshared = true\n', "needs a kitchen repo of its own"),
-    ('repo = "me/kitchen"\ncode = "org/code"\nshared = "yes"\n', "shared must be true or false"),
-    ('repo = "me/kitchen"\ncode = "not a repo"\n', "code must look like owner/name"),
-])
-def test_split_kitchen_settings_are_checked(tmp_path, text, message):
-    with pytest.raises(ValueError, match=message):
-        settings(tmp_path, text)
 
 
 @pytest.mark.parametrize("url", ["git@github.com:org/code.git", "https://github.com/org/code", "https://github.com/org/code.git/",
