@@ -554,6 +554,55 @@ def test_log_needs_a_ticket(tmp_path, capsys):
     assert "[log] issue" in capsys.readouterr().err
 
 
+LOG_TICKET = 'repo = "o/r"\n[log]\nissue = 4'
+
+
+def run_log(monkeypatch, loaded, **fields):
+    calls = []
+    monkeypatch.setattr(orchestrate, "call", fake_call([(0, "https://x/comment")], calls))
+    args = SimpleNamespace(**{"item": ["Merged PR #1"], "pending": [], "issue": None, "force": False, **fields})
+    return orchestrate.log(args, loaded), calls
+
+
+def test_log_refuses_another_ticket_and_posts_nothing(tmp_path, monkeypatch, capsys):
+    code, calls = run_log(monkeypatch, settings(tmp_path, LOG_TICKET), issue=23)
+    err = capsys.readouterr().err
+    assert code == 1 and calls == []
+    assert "#4" in err and "gh issue comment" in err and "ding relay --comment" in err
+
+
+def test_log_force_posts_to_another_ticket(tmp_path, monkeypatch):
+    code, calls = run_log(monkeypatch, settings(tmp_path, LOG_TICKET), issue=23, force=True)
+    assert code == 0 and calls[0][:4] == ("gh", "issue", "comment", "23")
+
+
+@pytest.mark.parametrize("issue", [None, 4])
+def test_log_posts_to_the_log_ticket(tmp_path, monkeypatch, issue):
+    code, calls = run_log(monkeypatch, settings(tmp_path, LOG_TICKET), issue=issue)
+    assert code == 0 and calls[0][:4] == ("gh", "issue", "comment", "4")
+
+
+def test_log_without_a_log_ticket_setting_takes_any_issue(tmp_path, monkeypatch):
+    code, calls = run_log(monkeypatch, settings(tmp_path, 'repo = "o/r"'), issue=23)
+    assert code == 0 and calls[0][:4] == ("gh", "issue", "comment", "23")
+
+
+@pytest.mark.parametrize("text, items, pending", [
+    (LOG_TICKET, [""], []),
+    (LOG_TICKET, [" "], ["none"]),
+    (CHINESE, [""], ["无"]),
+])
+def test_log_entry_with_only_an_empty_pending_line_is_not_posted(tmp_path, monkeypatch, capsys, text, items, pending):
+    code, calls = run_log(monkeypatch, settings(tmp_path, text), item=items, pending=pending)
+    assert code == 0 and calls == []
+    assert "nothing posted" in capsys.readouterr().err
+
+
+def test_log_entry_with_pending_matters_is_posted(tmp_path, monkeypatch):
+    code, calls = run_log(monkeypatch, settings(tmp_path, LOG_TICKET), item=[""], pending=["#5 review"])
+    assert code == 0 and len(calls) == 1
+
+
 @pytest.fixture
 def night_log(tmp_path, monkeypatch):
     class Clock(datetime):
@@ -3693,6 +3742,8 @@ def test_pr_verdict_ticket_flag_follows_whether_the_repo_is_shared(tmp_path, cap
 
 @pytest.mark.parametrize(("text", "found"), [
     ("Fix the loader\n\nDesigner: please look", "opens with the Designer signature"),
+    ("Fix the loader\n\n## Verifier: PR 14 holds", "opens with the Verifier signature"),
+    ("Fix the loader\n\n> Designer: please look", "opens with the Designer signature"),
     ("Fix\n\nCodex session: 019a", "kitchen marker 'Codex session:'"),
     ("Fix\nStatus: done\nWaiting on: none\n", "are a status block"),
     ("Fix, see https://github.com/me/kitchen/issues/3", "names the kitchen repo me/kitchen"),
@@ -3702,6 +3753,39 @@ def test_outbound_text_with_kitchen_internals_is_refused(tmp_path, text, found):
     from dkitchen import outbound
     problems = outbound.leaks(settings(tmp_path, SHARED), text, {5})
     assert any(found in problem for problem in problems), problems
+
+
+SPLIT_CHINESE = CHINESE.replace('repo = "o/r"', 'repo = "me/kitchen"\ncode = "org/code"') + """
+[roles.aliases]
+"总设计" = ["训练设计"]
+"""
+
+
+@pytest.mark.parametrize(("text", "role"), [
+    ("结论：通过。合并由总编排做。", "总编排"),
+    ("总设计的代码审阅见那张票。", "总设计"),
+    ("结果和执行者的逐字节相同。", "执行者"),
+    ("这个 PR 现在已不是草稿，在等核查。", "核查"),
+    ("## 说明：请训练设计再看一遍", "训练设计"),
+])
+def test_outbound_text_naming_a_role_mid_line_is_refused(tmp_path, text, role):
+    from dkitchen import outbound
+    problems = outbound.leaks(settings(tmp_path, SPLIT_CHINESE), text, set())
+    assert problems == [f"line 1 names the {role} role; say what was done or what is needed, not which role does it"]
+
+
+def test_outbound_signature_and_role_names_are_each_reported_once(tmp_path):
+    from dkitchen import outbound
+    problems = outbound.leaks(settings(tmp_path, SPLIT_CHINESE), "## 核查：总设计和总设计都看过", set())
+    assert problems == ["line 1 opens with the 核查 signature",
+                        "line 1 names the 总设计 role; say what was done or what is needed, not which role does it"]
+
+
+def test_outbound_ascii_role_names_count_only_as_signatures(tmp_path):
+    from dkitchen import outbound
+    text = "Runs on a ThreadPoolExecutor; the designer of this API asked for a verifier step.\nOrchestrator config moves.\n"
+    assert outbound.leaks(settings(tmp_path, SHARED), text, set()) == []
+    assert outbound.leaks(settings(tmp_path, SPLIT_CHINESE), "用户 2026-11-18 定的规则保留。", set()) == []
 
 
 def test_outbound_text_without_kitchen_internals_passes(tmp_path):
@@ -3775,6 +3859,65 @@ def test_pr_with_kitchen_internals_posts_nothing(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert code == 1 and "carries kitchen internals" in err and "bare #42" in err
     assert not any(call[:3] in {("gh", "pr", "create"), ("gh", "issue", "comment")} for call in calls)
+
+
+SPLIT_REVIEW = 'repo = "me/kitchen"\ncode = "org/code"\n[merge]\nreview_check = "review"\n'
+REVIEW_HEAD = "abcdef0123456789"
+
+
+def split_review(tmp_path, monkeypatch, body, *, ticket=None, pr=7):
+    loaded = settings(tmp_path, SPLIT_REVIEW)
+    (tmp_path / "review.md").write_text(body, encoding="utf-8")
+    calls = []
+    gh_router(monkeypatch, [
+        (("pr", "view"), json.dumps({"headRefOid": REVIEW_HEAD})),
+        (("--paginate", "me/kitchen/issues/42/comments"), TICKET_WITH_PR),
+        (("repos/me/kitchen/issues/42",), json.dumps({"body": "Goal"})),
+        (("issues/7/comments",), json.dumps({"html_url": "https://github.com/org/code/pull/7#issuecomment-1"})),
+        (("statuses",), "{}"),
+    ], calls)
+    args = SimpleNamespace(pr=pr, sha=REVIEW_HEAD[:8], verdict="pass", ticket=ticket, body_file=tmp_path / "review.md")
+    return orchestrate.review(args, loaded), calls
+
+
+def test_review_with_kitchen_internals_posts_nothing_and_sets_no_status(tmp_path, monkeypatch, capsys):
+    code, calls = split_review(tmp_path, monkeypatch, "Verifier: the change holds\nSee #42\n")
+    err = capsys.readouterr().err
+    assert code == 1 and "carries kitchen internals" in err and "bare #42" in err and "opens with the Verifier signature" in err
+    assert not any("issues/7/comments" in " ".join(call) or "statuses" in " ".join(call) for call in calls)
+
+
+def test_review_without_kitchen_internals_posts_as_before(tmp_path, monkeypatch, capsys):
+    code, calls = split_review(tmp_path, monkeypatch, "The loader keeps its rows.\n")
+    assert code == 0
+    comment = next(call for call in calls if "issues/7/comments" in " ".join(call))
+    assert comment[-1].startswith(f"body=Reviewed {REVIEW_HEAD[:8]}: pass\n\nThe loader keeps its rows.")
+    assert any(f"statuses/{REVIEW_HEAD}" in " ".join(call) for call in calls)
+
+
+def test_review_may_name_a_code_issue_the_ticket_records(tmp_path, monkeypatch, capsys):
+    code, calls = split_review(tmp_path, monkeypatch, "Fixes the loader bug in #5.\n", ticket=42)
+    assert code == 0, capsys.readouterr().err
+    assert any("issues/7/comments" in " ".join(call) for call in calls)
+    code, calls = split_review(tmp_path, monkeypatch, "Fixes the loader bug in #6.\n", ticket=42)
+    assert code == 1 and "bare #6" in capsys.readouterr().err
+    assert not any("issues/7/comments" in " ".join(call) for call in calls)
+
+
+def test_review_ticket_must_name_the_pr(tmp_path, monkeypatch, capsys):
+    code, calls = split_review(tmp_path, monkeypatch, "Fixes the loader bug in #5.\n", ticket=42, pr=8)
+    assert code == 1 and "no PR line for org/code#8" in capsys.readouterr().err
+    assert not any("comments" in call[-1] and "body=" in call[-1] or "statuses" in " ".join(call) for call in calls)
+
+
+def test_review_in_a_single_repo_kitchen_is_not_checked(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nreview_check = "review"\n')
+    (tmp_path / "review.md").write_text("Verifier: see #42\n", encoding="utf-8")
+    calls = []
+    gh_router(monkeypatch, [(("pr", "view"), json.dumps({"headRefOid": REVIEW_HEAD})),
+                            (("issues/7/comments",), json.dumps({"html_url": "https://x"})), (("statuses",), "{}")], calls)
+    args = SimpleNamespace(pr=7, sha=REVIEW_HEAD[:8], verdict="pass", ticket=None, body_file=tmp_path / "review.md")
+    assert orchestrate.review(args, loaded) == 0
 
 
 def test_pr_ready_marks_only_the_tickets_own_pr(tmp_path, monkeypatch, capsys):

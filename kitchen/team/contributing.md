@@ -29,10 +29,11 @@ A code issue is an issue in the code repo. It is never a ticket: the ticket that
 The code repo's readers see none of the kitchen. A PR, a code issue, or a reply carries:
 
 - no role or session signature, no status block, and no `Codex owner:` or other kitchen line;
+- no role named anywhere in the text: say what was done or what is needed, not which role does it ("the merge waits on CI", not "the orchestrator merges");
 - no ticket number and no link into the kitchen repo; say in the text what the change is for instead;
 - no bare `#N`, which the code repo reads as one of its own issues, except for a code issue the ticket records.
 
-`ding pr` and `ding code-issue` refuse text that breaks these, and post nothing. Fix the text; never work around the check.
+`ding pr`, `ding code-issue` and `ding review` refuse text that breaks these, and post nothing. Pass `ding review` the ticket whose `PR:` line names the PR with `--ticket N`, so a bare `#N` may name a code issue it records. Fix the text; never work around the check.
 <!-- /module:split -->
 <!-- module:shared -->
 
