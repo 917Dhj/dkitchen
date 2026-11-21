@@ -153,7 +153,7 @@ Run from the repo root. `SINCE` is the window's start, as `YYYY-MM-DDT00:00:00Z`
    - Claude Code: the transcripts of source 3: assistant `tool_use` items, and user `tool_result` items with `is_error`. Leave out errors the host app produced rather than the repo, such as hook timeouts.
    - Count per session: reads of the same file, non-zero exits other than searches, diffs, and test runs, truncated outputs, missing paths, and output size by command.
    - Pattern matches on output also hit text that was merely printed, so split a count by module or path before trusting it.
-9. **Blocked waits by category**: from source 1, take the executor status blocks marked `blocked` in the window. For each *Waiting on* category (review, merge, the user, design, a job or run), report the count, the median, and the longest time from the `blocked` comment to the executor's next status change. Long review-or-merge waits point at work stalled on PRs. A high count of short waits does not: some are gates the rules set on purpose, such as heavy runs waiting for the verifier to sample first.
+9. **Blocked waits by category**: from source 1, take the executor status blocks marked `blocked` in the window. For each *Waiting on* category (review, merge, the user, design, a job or run), report the count, the median, and the longest time from the `blocked` comment to the executor's next status change, or to now for a wait still open. Long review-or-merge waits point at work stalled on PRs. A high count of short waits does not: some are gates the rules set on purpose, such as heavy runs waiting for the verifier to sample first.
 
 ## This repo's file
 
