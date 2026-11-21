@@ -2095,8 +2095,8 @@ def main(argv=None) -> int:
     sub.add_argument("sha", help="The HEAD that was reviewed (full or prefix)")
     sub = commands.add_parser("log", help="Post an entry to the orchestrator log ticket",
                               description="Post a signed, UTC-stamped entry to the orchestrator log ticket. With [log] issue "
-                                          "set, --issue N for any other ticket is refused (use `ding comment` or `ding relay` "
-                                          "for a work ticket) unless --force is given. An entry with no items and nothing "
+                                          "set, --issue N for any other ticket is refused (use `gh issue comment` for a note on "
+                                          "a work ticket, or `ding relay --comment` when its executor should hear it too) unless --force is given. An entry with no items and nothing "
                                           "pending is not posted; ding says so on stderr and exits 0.")
     sub.add_argument("--item", action="append", required=True, help="One automatic action; repeat for more")
     sub.add_argument("--pending", action="append", default=[], help="One matter waiting for the user; repeat for more")

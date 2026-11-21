@@ -566,7 +566,7 @@ def test_log_refuses_another_ticket_and_posts_nothing(tmp_path, monkeypatch, cap
     code, calls = run_log(monkeypatch, settings(tmp_path, LOG_TICKET), issue=23)
     err = capsys.readouterr().err
     assert code == 1 and calls == []
-    assert "#4" in err and "ding comment" in err and "ding relay" in err
+    assert "#4" in err and "gh issue comment" in err and "ding relay --comment" in err
 
 
 def test_log_force_posts_to_another_ticket(tmp_path, monkeypatch):

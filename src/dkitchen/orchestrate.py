@@ -300,8 +300,9 @@ def log(args, config: Config) -> int:
     if issue is None:
         return fail("no orchestrator log ticket; set [log] issue in .dkitchen.toml or pass --issue")
     if config.log.issue is not None and issue != config.log.issue and not getattr(args, "force", False):
-        return fail(f"#{issue} is not the orchestrator log ticket (#{config.log.issue}). Use `ding comment` or "
-                    f"`ding relay` for a note on a work ticket, or pass --force to log here anyway")
+        return fail(f"#{issue} is not the orchestrator log ticket (#{config.log.issue}). Use `gh issue comment` for a "
+                    f"note on a work ticket, or `ding relay --comment` when its executor should hear it too; or pass --force "
+                    "to log here anyway")
     if log_is_empty(args.item, args.pending, config):
         print("ding: log entry is empty (no items, nothing pending); nothing posted", file=sys.stderr)
         return 0
