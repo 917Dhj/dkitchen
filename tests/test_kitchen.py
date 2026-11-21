@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import contextlib
 import fcntl
 import hashlib
 import json
@@ -744,16 +745,29 @@ def test_live_tmux_jobs_count_as_running_but_shells_and_dead_panes_do_not():
              "issue209-stage1-concurrency8-r2|0|bash\n"
              "ding-issue272-a-v2-xhigh-full|0|python\n"
              "download_model|0|python\n")
-    assert watch.tmux_issues(panes) == {235, 272}
+    assert watch.tmux_issues(panes, config.Config(root=Path("/r"))) == {235, 272}
 
 
 LAUNCHER = "claude:local_11111111-2222-4333-8444-555555555555"
 LAUNCH_PANES = "ding-t1-sweep|0|python|{pid}\n"
 
 
+def init_checkout(path):
+    path.mkdir(parents=True)
+    run_git(path, "init", "-q", "-b", "main")
+    run_git(path, "commit", "-q", "--allow-empty", "-m", "first")
+    return path
+
+
 @pytest.fixture
-def launched_job(tmp_path, monkeypatch):
-    """A running `ding run` registered by LAUNCHER, as `ding launch` execs it inside its tmux pane."""
+def kitchen(tmp_path):
+    return init_checkout(tmp_path / "kitchen")
+
+
+@pytest.fixture
+def launched_job(tmp_path, monkeypatch, kitchen):
+    """Starts a running `ding run` registered by LAUNCHER in a directory, as `ding launch` execs it in its tmux pane,
+    and returns the tmux panes listing that shows it."""
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     comment = {"issue_url": "https://api.github.com/repos/o/r/issues/26", "created_at": "2026-10-28T10:00:00Z",
                "body": f"In progress\n\nClaude owner: {LAUNCHER.removeprefix('claude:')}\n"}
@@ -762,33 +776,82 @@ def launched_job(tmp_path, monkeypatch):
     issues = [{"number": 26, "body": "", "created_at": "2026-10-28T09:00:00Z"},
               {"number": 9, "body": "", "created_at": "2026-10-20T09:00:00Z"}]
     monkeypatch.setattr(ding, "gh_records", lambda resource: issues if "/issues?" in resource else [old, comment])
-    with ding.registered_run(LAUNCHER, tmp_path / "exit.jsonl"):
-        yield LAUNCH_PANES.format(pid=os.getpid())
+    lookups = []
+    real = ding.issue_map
+    monkeypatch.setattr(ding, "issue_map", lambda repo=None: lookups.append(repo) or real(repo))
+    stack = contextlib.ExitStack()
+
+    def start(cwd=kitchen):
+        monkeypatch.chdir(cwd)
+        stack.enter_context(ding.registered_run(LAUNCHER, tmp_path / "exit.jsonl"))
+        return LAUNCH_PANES.format(pid=os.getpid())
+
+    start.lookups = lookups
+    with stack:
+        yield start
 
 
-def test_launch_job_without_issue_in_its_name_belongs_to_the_ticket_its_session_owns(launched_job):
-    assert watch.tmux_issues(launched_job, "o/r") == {26}
+def test_launch_job_without_issue_in_its_name_belongs_to_the_ticket_its_session_owns(launched_job, kitchen):
+    assert watch.tmux_issues(launched_job(), config.Config(root=kitchen), "o/r") == {26}
 
 
-def test_launch_job_name_with_issue_wins_and_needs_no_lookup(launched_job, monkeypatch):
-    monkeypatch.setattr(ding, "issue_map", lambda repo=None: pytest.fail("looked up the owner"))
-    assert watch.tmux_issues(launched_job.replace("t1-sweep", "t1-issue9-sweep"), "o/r") == {9}
+def test_launch_job_from_a_worktree_of_the_kitchen_checkout_belongs_to_the_kitchen(launched_job, kitchen, tmp_path):
+    run_git(kitchen, "worktree", "add", "-q", str(tmp_path / "wt"))
+    assert watch.tmux_issues(launched_job(tmp_path / "wt"), config.Config(root=kitchen), "o/r") == {26}
 
 
-def test_pane_matching_no_live_run_is_not_attributed(launched_job):
-    assert watch.tmux_issues(LAUNCH_PANES.format(pid=os.getpid() + 1), "o/r") == set()
+def test_launch_job_from_the_code_checkout_of_a_split_kitchen_belongs_to_the_kitchen(launched_job, kitchen, tmp_path):
+    code = init_checkout(tmp_path / "code")
+    run_git(code, "worktree", "add", "-q", str(tmp_path / "code-wt"))
+    loaded = config.Config(root=kitchen, code_root=code)
+    assert watch.tmux_issues(launched_job(tmp_path / "code-wt"), loaded, "o/r") == {26}
 
 
-def test_registered_run_that_has_ended_is_not_attributed(tmp_path, monkeypatch, launched_job):
-    pane = launched_job
+def test_another_projects_live_job_adds_no_ticket_and_costs_no_lookup(launched_job, kitchen, tmp_path):
+    other = init_checkout(tmp_path / "other")
+    assert watch.tmux_issues(launched_job(other), config.Config(root=kitchen), "o/r") == set()
+    assert launched_job.lookups == []
+
+
+def test_job_started_outside_any_checkout_is_not_the_kitchens(launched_job, kitchen, tmp_path):
+    (tmp_path / "plain").mkdir()
+    assert watch.tmux_issues(launched_job(tmp_path / "plain"), config.Config(root=kitchen), "o/r") == set()
+    assert launched_job.lookups == []
+
+
+def test_launch_job_name_with_issue_wins_and_needs_no_lookup(launched_job, kitchen):
+    pane = launched_job().replace("t1-sweep", "t1-issue9-sweep")
+    assert watch.tmux_issues(pane, config.Config(root=kitchen), "o/r") == {9}
+    assert launched_job.lookups == []
+
+
+def test_named_pane_whose_run_is_another_kitchens_is_not_counted(launched_job, kitchen, tmp_path):
+    other = init_checkout(tmp_path / "other")
+    pane = launched_job(other).replace("t1-sweep", "train-issue43-x")
+    assert watch.tmux_issues(pane, config.Config(root=kitchen), "o/r") == set()
+
+
+def test_named_pane_without_a_run_still_counts(launched_job, kitchen):
+    pane = LAUNCH_PANES.format(pid=os.getpid() + 1).replace("t1-sweep", "train-issue43-x")
+    assert watch.tmux_issues(pane, config.Config(root=kitchen), "o/r") == {43}
+
+
+def test_pane_matching_no_live_run_is_not_attributed(launched_job, kitchen):
+    launched_job()
+    assert watch.tmux_issues(LAUNCH_PANES.format(pid=os.getpid() + 1), config.Config(root=kitchen), "o/r") == set()
+
+
+def test_registered_run_that_has_ended_is_not_attributed(monkeypatch, launched_job, kitchen):
+    pane = launched_job()
     monkeypatch.setattr(ding, "run_state", lambda run: "lost")
-    assert watch.tmux_issues(pane, "o/r") == set()
+    assert watch.tmux_issues(pane, config.Config(root=kitchen), "o/r") == set()
 
 
-def test_stale_sees_a_launched_job_by_its_session_not_its_name(idle_ticket, launched_job):
+def test_stale_sees_a_launched_job_by_its_session_not_its_name(idle_ticket, launched_job, kitchen):
     ticket = idle_ticket
     ticket.clock.moment += timedelta(hours=6)
-    ticket.panes = launched_job
+    ticket.config = config.Config(root=kitchen, repo="o/r")
+    ticket.panes = launched_job()
     assert watch.stale(ticket.config, "o/r", ticket.config.root, 6, set(), set()) == []
 
 
