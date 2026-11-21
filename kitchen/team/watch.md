@@ -29,6 +29,7 @@ The watch exits about 5 minutes after the first of these appears, so related cha
 <!-- /module:split -->
 - a verifier's `changes` verdict on a run stage (`ding review --ticket`); a `pass` is only listed;
 - an executor gone quiet: `in progress` for over 6 hours without a comment, with no running `ding run` and no live tmux job whose session name contains `issue<ticket number>`;
+- a `ding launch` job gone quiet or late: one with `--progress` whose progress file has not changed for 30 minutes (`[watch] stale_minutes`), once for each stall, or one with `--expect-hours H` that has run past 1.5 × H (`[watch] overrun_factor`), once. The line names the job, the ticket, and the last progress line. Look at the job; ask its executor to stop, restart, or raise the estimate;
 - a stalled line, at most once a day for each: a draft PR not updated for 48 hours, or a ticket whose executor is `in progress`, waits on no one, and has not been updated for 48 hours. The orchestrator decides whether to resume it, hand it over, or close it;
 - a request to a designer or the verifier left unanswered for 30 minutes (`[watch] design_answer_minutes`). The orchestrator then sends that role one line, "#N is waiting on you, see <link>", without restating the request or answering it.
 

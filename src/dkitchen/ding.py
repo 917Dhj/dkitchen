@@ -526,7 +526,7 @@ def issue_session(number: int, path: str | None = None, repo: str | None = None)
         "Candidates:\n" + "\n".join(rows) + "\nSpecify a session UUID or exact session name instead.")
 
 
-def issue_map(repo: str | None = None) -> dict[str, set[int]]:
+def issue_map(repo: str | None = None, *, raise_errors: bool = False) -> dict[str, set[int]]:
     try:
         repo = repo or github_repository()
         issues = gh_records(f"repos/{repo}/issues?state=all&per_page=100")
@@ -550,6 +550,8 @@ def issue_map(repo: str | None = None) -> dict[str, set[int]]:
                 mapping.setdefault(thread_id, set()).add(number)
         return mapping
     except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.TimeoutExpired) as exc:
+        if raise_errors:
+            raise
         print(f"ding: issue lookup failed: {' '.join(str(exc).split())}", file=sys.stderr)
         return {}
 
@@ -621,7 +623,8 @@ def run_registry() -> Path:
 
 
 @contextmanager
-def registered_run(thread_id: str, record: Path, progress: Path | None = None) -> Iterator[str]:
+def registered_run(thread_id: str, record: Path, progress: Path | None = None,
+                   expect_hours: float | None = None) -> Iterator[str]:
     registry = run_registry()
     registry.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     registry.parent.chmod(0o700)
@@ -643,6 +646,7 @@ def registered_run(thread_id: str, record: Path, progress: Path | None = None) -
                 "record": str(record.resolve()), "pid": os.getpid(),
                 "started_ns": time.time_ns(), "cwd": str(Path.cwd()),
                 **({"progress": str(progress.resolve())} if progress is not None else {}),
+                **({"expect_hours": expect_hours} if expect_hours is not None else {}),
             })
         yield run_id
 
@@ -669,7 +673,10 @@ def registered_runs() -> list[dict]:
                     or type(run.get("pid")) is not int or run["pid"] <= 0
                     or type(run.get("started_ns")) is not int or run["started_ns"] <= 0
                     or "progress" in run and (not isinstance(run["progress"], str)
-                                              or not Path(run["progress"]).is_absolute())):
+                                              or not Path(run["progress"]).is_absolute())
+                    or "expect_hours" in run and (isinstance(run["expect_hours"], bool)
+                                                  or not isinstance(run["expect_hours"], (int, float))
+                                                  or not math.isfinite(run["expect_hours"]) or run["expect_hours"] <= 0)):
                 raise ValueError("invalid run_start")
         except (ValueError, TypeError, AttributeError, UnicodeError) as exc:
             print(f"ding: invalid run registry row {number} ({registry}): {exc}", file=sys.stderr)
@@ -753,6 +760,16 @@ def short_time(value: object) -> str:
         return str(value)
 
 
+def progress_age(data: dict, now: float | None = None) -> float | None:
+    """Seconds since a progress-v1 file's `updated` time, or None when it has none."""
+    updated = data.get("updated", {}).get("utc") if isinstance(data.get("updated"), dict) else None
+    try:
+        return (time.time() if now is None else now) - datetime.fromisoformat(
+            str(updated).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
 def progress_summary(path: str, now: float | None = None) -> str:
     """One board cell from a progress-v1 file: stage done/total, rate, ETA, and a mark when it went quiet."""
     try:
@@ -783,12 +800,7 @@ def progress_summary(path: str, now: float | None = None) -> str:
     if state != "running":
         parts.append(str(state))
     else:
-        updated = data.get("updated", {}).get("utc") if isinstance(data.get("updated"), dict) else None
-        try:
-            age = (time.time() if now is None else now) - datetime.fromisoformat(
-                str(updated).replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            age = None
+        age = progress_age(data, now)
         if age is None:
             parts.append("STALE? no update time")
         elif age > STALE_PROGRESS:
@@ -1129,6 +1141,16 @@ def show_unwrapped(findings: list[dict]) -> None:
         cells = [str(process["pid"]), f"{process['cpu']:.1f}", f"{process['age']:.0f}",
                  process["session"], process["window"], shlex.join(process["argv"])]
         print("\t".join(display_cell(cell) for cell in cells))
+
+
+def positive_number(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a finite positive number") from exc
+    if not math.isfinite(number) or number <= 0:
+        raise argparse.ArgumentTypeError("must be a finite positive number")
+    return number
 
 
 def nonnegative_number(value: str) -> float:
@@ -1692,7 +1714,8 @@ def task_exit_code(command: list[str], *, env: dict | None = None) -> tuple[int,
 def run_task(args, command: list[str]) -> int:
     record = Path(args.record)
     progress = Path(args.progress) if getattr(args, "progress", None) else None
-    with writer(record), registered_run(args.thread_id, record, progress) as run_id:
+    expect = getattr(args, "expect_hours", None)
+    with writer(record), registered_run(args.thread_id, record, progress, expect) as run_id:
         child_env = os.environ.copy()
         child_env["DING_RUN_ID"] = run_id
         code, error = task_exit_code(command, env=child_env)
@@ -1835,6 +1858,8 @@ def launch_task(args, command: list[str]) -> int:
              "--record", str(record)]
     if getattr(args, "progress", None):
         inner += ["--progress", str(Path(args.progress).resolve())]
+    if getattr(args, "expect_hours", None) is not None:
+        inner += ["--expect-hours", str(args.expect_hours)]
     launch_records.mkdir(parents=True, exist_ok=True, mode=0o700)
     launch_records.chmod(0o700)
     prune_launch_logs(launch_records, settings.keep_days, tmux)
@@ -2036,6 +2061,9 @@ def main(argv=None) -> int:
         if action in {"run", "launch"}:
             sub.add_argument("--record", required=action == "run", help="Append-only local exit/notification JSONL")
             sub.add_argument("--progress", help="The task's progress.json (progress-v1), shown by `ding board`")
+            sub.add_argument("--expect-hours", type=positive_number, metavar="H",
+                             help="Hours the task should take; `ding watch` wakes the orchestrator once it runs "
+                                  "past [watch] overrun_factor x H")
             sub.epilog = ("Task command follows --, for example: launch NAME -- python task.py" if action == "launch" else
                           "Task command follows --, for example: run UUID --message TEXT --record exit.jsonl -- python task.py")
     sub = commands.add_parser("claim", help="Post this session's owner line on a ticket and print the next step",
@@ -2151,6 +2179,9 @@ def main(argv=None) -> int:
                                             "[watch] unrouted_wait_minutes (default 30; 0 disables) reminds of unknown-role waits. "
                                             "[watch] executor_listener_minutes (default 30; 0 disables) reports in-progress Claude Code "
                                             "executors that have run no `ding inbox --wait` that long. "
+                                            "[watch] stale_minutes (default 30; 0 disables) reports a `ding launch --progress` job "
+                                            "whose progress stopped moving, and [watch] overrun_factor (default 1.5; 0 disables) "
+                                            "one that runs past that multiple of its `--expect-hours`. "
                                             "Stdout /dev/null is refused with exit 3 before polling; pipes and files are allowed. "
                                             "Read-only; calls no model.")
     sub.add_argument("--for", dest="role", type=str.strip, metavar="NAME",

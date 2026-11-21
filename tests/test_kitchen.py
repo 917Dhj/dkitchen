@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -122,6 +123,8 @@ BAD_CONFIGS = [
         ("design_answer_minutes", "-1"), ("design_answer_minutes", "true"), ("design_answer_minutes", "inf"),
         ("unrouted_wait_minutes", "-1"), ("unrouted_wait_minutes", "nan"), ("unrouted_wait_minutes", "true"),
         ("executor_listener_minutes", "-1"), ("executor_listener_minutes", "true"),
+        ("stale_minutes", "-1"), ("stale_minutes", "true"), ("overrun_factor", "-1"), ("overrun_factor", "nan"),
+        ("overrun_factor", "0.5"),
     ]),
     *((text, "aliases") for text in ['[roles]\naliases = "wrong"', '[roles.aliases]\nDesigner = []',
                                      '[roles.aliases]\nDesigner = [1]', '[roles.aliases]\nDesigner = [""]',
@@ -4405,3 +4408,241 @@ def test_the_comment_and_event_listings_are_fetched_once_per_poll(waiting_board)
         watch.RECENT.reset(token)
     assert len([call for call in waiting_board.calls
                 if "/issues/comments?since" in call or "/issues/events?" in call]) == 2
+
+
+THREAD = "00000000-0000-4000-8000-000000000001"
+T0 = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc).timestamp()
+
+
+class Stop(Exception):
+    pass
+
+
+def stop_sleeping(seconds):
+    raise Stop
+
+
+@pytest.fixture
+def jobs(tmp_path, monkeypatch):
+    """A temp run registry with a fake clock; ticket #26 is owned by THREAD, and nothing reaches GitHub."""
+    from contextlib import ExitStack
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
+    asks = []
+    monkeypatch.setattr(ding, "issue_map", lambda repo=None, raise_errors=False: asks.append(repo) or {THREAD: {26}})
+    state = SimpleNamespace(config=config.Config(root=tmp_path, repo="o/r"), clock=T0, asks=asks, tmp=tmp_path,
+                            stack=ExitStack())
+
+    def move(path, updated, run="running"):
+        moment = datetime.fromtimestamp(state.clock + updated, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        path.write_text(json.dumps({"schema": "progress-v1", "state": run, "stage": "answer",
+                                    "current": {"name": "answer", "done": 137, "total": 500},
+                                    "updated": {"utc": moment}}))
+
+    def start(name="train", progress=True, expect_hours=None):
+        path = tmp_path / name / "progress.json"
+        if progress:
+            path.parent.mkdir(exist_ok=True)
+            move(path, 0)
+        run_id = state.stack.enter_context(ding.registered_run(
+            THREAD, tmp_path / f"{name}.jsonl", path if progress else None, expect_hours))
+        registry = ding.run_registry()
+        rows = [json.loads(line) for line in registry.read_text().splitlines()]
+        rows[-1]["started_ns"] = int(state.clock * 1e9)
+        registry.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        return run_id, path
+
+    def watching(**options):
+        return config.Config(root=tmp_path, repo="o/r", watch=config.Watch(**options))
+
+    state.start, state.move = start, move
+    state.stalls = lambda reported=(), **options: watch.stalled_jobs(
+        watching(**options) if options else state.config, "o/r", ding.registered_runs(), set(reported), state.clock)
+    state.overruns = lambda reported=(), **options: watch.overrun_jobs(
+        watching(**options) if options else state.config, "o/r", ding.registered_runs(), set(reported), state.clock)
+    yield state
+    state.stack.close()
+
+
+def test_another_projects_stalled_or_overrun_job_gives_no_event(jobs, monkeypatch):
+    other = jobs.tmp / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    monkeypatch.chdir(other)
+    jobs.start(expect_hours=1)
+    jobs.clock += 2 * 3600
+    assert jobs.stalls() == [] and jobs.overruns() == [] and jobs.asks == []
+
+
+def test_a_stalled_job_gives_one_event_naming_ticket_and_last_progress(jobs):
+    jobs.start()
+    jobs.clock += 31 * 60
+    [(_, line, key)] = jobs.stalls()
+    assert line.startswith("#26: job train/progress.json has made no progress for 31 minutes")
+    assert "answer 137/500" in line
+    assert jobs.stalls({key}) == []
+
+
+def test_a_job_stale_for_less_than_the_threshold_gives_no_stall(jobs):
+    jobs.start()
+    jobs.clock += 29 * 60
+    assert jobs.stalls() == []
+    assert jobs.asks == []
+
+
+def test_progress_resuming_then_stalling_again_is_a_new_stall(jobs):
+    _, path = jobs.start()
+    jobs.clock += 31 * 60
+    [(_, _, first)] = jobs.stalls()
+    jobs.move(path, 0)
+    assert jobs.stalls({first}) == []
+    jobs.clock += 31 * 60
+    [(_, _, second)] = jobs.stalls({first})
+    assert second != first
+
+
+def test_stale_minutes_zero_disables_the_stall_event(jobs):
+    jobs.start()
+    jobs.clock += 5 * 3600
+    assert jobs.stalls(stale_minutes=0) == []
+    assert len(jobs.stalls()) == 1
+
+
+def test_a_task_without_progress_gives_no_stall_event(jobs):
+    jobs.start(progress=False)
+    jobs.clock += 5 * 3600
+    assert jobs.stalls() == []
+
+
+def test_a_finished_progress_file_or_an_ended_run_gives_no_stall(jobs):
+    _, path = jobs.start()
+    jobs.start("other")
+    jobs.clock += 2 * 3600
+    jobs.move(path, -2 * 3600, run="done")
+    [(_, line, _)] = jobs.stalls()
+    assert "other/progress.json" in line
+    jobs.stack.close()
+    assert jobs.stalls() == []
+
+
+def test_a_failed_ticket_lookup_reports_nothing_and_the_next_poll_retries(jobs, monkeypatch, capsys):
+    jobs.start(expect_hours=1)
+    jobs.clock += 2 * 3600
+
+    def fail(repo=None, raise_errors=False):
+        raise OSError("gh down")
+
+    monkeypatch.setattr(ding, "issue_map", fail)
+    assert jobs.stalls() == [] and jobs.overruns() == []
+    assert "ticket lookup failed" in capsys.readouterr().err
+    monkeypatch.setattr(ding, "issue_map", lambda repo=None, raise_errors=False: {THREAD: {26}})
+    assert len(jobs.stalls()) == 1 and len(jobs.overruns()) == 1
+
+
+def test_issue_map_raises_on_a_gh_failure_only_when_asked(monkeypatch, capsys):
+    def fail(path):
+        raise OSError("gh down")
+
+    monkeypatch.setattr(ding, "gh_records", fail)
+    assert ding.issue_map("o/r") == {}
+    assert "issue lookup failed" in capsys.readouterr().err
+    with pytest.raises(OSError):
+        ding.issue_map("o/r", raise_errors=True)
+
+
+@pytest.mark.parametrize("updated", [None, "not a time", 5])
+def test_a_running_file_without_a_usable_update_time_ages_by_its_mtime(jobs, updated):
+    _, path = jobs.start()
+    data = json.loads(path.read_text())
+    if updated is None:
+        del data["updated"]
+    else:
+        data["updated"] = {"utc": updated}
+    path.write_text(json.dumps(data))
+    os.utime(path, (jobs.clock, jobs.clock))
+    assert jobs.stalls() == []
+    jobs.clock += 31 * 60
+    [(_, line, key)] = jobs.stalls()
+    assert "no progress for 31 minutes" in line
+    assert jobs.stalls({key}) == []
+
+
+def test_a_running_file_whose_process_is_gone_gives_no_stall_or_overrun(jobs):
+    jobs.start(expect_hours=1)
+    jobs.clock += 5 * 3600
+    jobs.stack.close()
+    assert jobs.stalls() == [] and jobs.overruns() == []
+
+
+def test_a_job_over_one_and_a_half_times_its_estimate_gives_one_overrun_event(jobs):
+    jobs.start(expect_hours=2)
+    jobs.clock += 2.9 * 3600
+    assert jobs.overruns() == []
+    jobs.clock += 0.2 * 3600
+    [(_, line, key)] = jobs.overruns()
+    assert line.startswith("#26: job train/progress.json has run 3.1 hours against its estimate of 2")
+    assert "answer 137/500" in line
+    assert jobs.overruns({key}) == []
+
+
+def test_overrun_factor_is_configurable_and_zero_disables(jobs):
+    jobs.start(expect_hours=2)
+    jobs.clock += 2.5 * 3600
+    assert len(jobs.overruns(overrun_factor=1.2)) == 1
+    assert jobs.overruns(overrun_factor=0) == []
+
+
+def test_a_run_without_an_estimate_or_already_ended_gives_no_overrun(jobs):
+    jobs.start("plain")
+    jobs.start("done", expect_hours=1)
+    jobs.clock += 10 * 3600
+    assert [line for _, line, _ in jobs.overruns() if "done" in line]
+    jobs.stack.close()
+    assert jobs.overruns() == []
+
+
+def test_the_watch_reports_each_job_once_and_not_again_after_a_restart(jobs, monkeypatch, capsys):
+    _, path = jobs.start(expect_hours=1)
+    jobs.clock += 2 * 3600
+    jobs.move(path, -2 * 3600)
+    monkeypatch.setattr(config, "load", lambda: jobs.config)
+    monkeypatch.setattr(watch.time, "time", lambda: jobs.clock)
+    monkeypatch.setattr(watch, "collect", lambda *args, **kwargs: [])
+    monkeypatch.setattr(watch, "pr_wakes", lambda *args: ([], {}))
+    monkeypatch.setattr(watch, "idle", lambda *args: ([], {}))
+    for name in ("stale", "unanswered_design", "unrouted_waits", "missing_waiters", "stalled", "finished_waits"):
+        monkeypatch.setattr(watch, name, lambda *args: [])
+    state = jobs.tmp / "watch.json"
+    arguments = ["watch", "--state", str(state), "--interval", "0", "--settle", "0"]
+
+    assert ding.main(arguments) == 0
+    out = capsys.readouterr().out
+    assert out.count("has made no progress") == 1 and out.count("against its estimate") == 1
+    saved = json.loads(state.read_text())
+    assert len(saved["job_stall_reported"]) == 1 and len(saved["job_overrun_reported"]) == 1
+
+    monkeypatch.setattr(watch.time, "sleep", stop_sleeping)
+    with pytest.raises(Stop):
+        ding.main(arguments)
+    assert "no progress" not in capsys.readouterr().out
+    assert len(jobs.asks) == 2
+
+
+def test_a_role_watch_never_checks_jobs(jobs, monkeypatch):
+    seen = []
+    monkeypatch.setattr(watch, "stalled_jobs", lambda *args: seen.append(1) or [])
+    monkeypatch.setattr(watch, "overrun_jobs", lambda *args: seen.append(1) or [])
+    monkeypatch.setattr(watch, "collect", lambda *args, **kwargs: [])
+    monkeypatch.setattr(watch, "pr_wakes", lambda *args: ([], {}))
+    monkeypatch.setattr(config, "load", lambda: jobs.config)
+    monkeypatch.setattr(watch.time, "sleep", stop_sleeping)
+    with pytest.raises(Stop):
+        ding.main(["watch", "--for", "Designer", "--state", str(jobs.tmp / "role.json"), "--interval", "0"])
+    assert seen == []
+
+
+def test_the_estimate_is_recorded_in_the_registry_and_must_be_positive(jobs):
+    jobs.start(expect_hours=1.5)
+    assert [run["expect_hours"] for run in ding.registered_runs()] == [1.5]
+    with pytest.raises(SystemExit):
+        ding.main(["launch", "x", "--expect-hours", "0", "--", "true"])
