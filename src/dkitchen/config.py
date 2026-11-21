@@ -61,6 +61,8 @@ Every key is optional. The defaults match the English templates in kitchen/:
     design_answer_minutes = 30           # 0 disables unanswered-role and PR backstops
     unrouted_wait_minutes = 30           # 0 disables unknown-role wait reminders
     executor_listener_minutes = 30       # 0 disables wakes for a Claude Code executor without `ding inbox --wait`
+    stale_minutes = 30                   # 0 disables wakes for a `ding launch --progress` job whose progress stopped moving
+    overrun_factor = 1.5                 # wake once a `ding launch --expect-hours H` job runs past factor x H; 0 disables
     handoff = ["hand to "]               # written right before a role name to hand it work, e.g. ["交"]
 
     [merge]
@@ -238,6 +240,8 @@ class Watch:
     design_answer_minutes: float = 30
     unrouted_wait_minutes: float = 30
     executor_listener_minutes: float = 30
+    stale_minutes: float = 30
+    overrun_factor: float = 1.5
     handoff: tuple[str, ...] = ("hand to ",)
 
 
@@ -476,10 +480,15 @@ def section(cls, values: object, name: str):
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or value < 0):
                 raise ValueError(f"{FILE}: [launch] keep_days must be a nonnegative finite number of days")
-        elif key in {"idle_minutes", "design_answer_minutes", "unrouted_wait_minutes", "executor_listener_minutes"}:
+        elif key in {"idle_minutes", "design_answer_minutes", "unrouted_wait_minutes", "executor_listener_minutes",
+                     "stale_minutes"}:
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or value < 0):
                 raise ValueError(f"{FILE}: [watch] {key} must be a nonnegative finite number of minutes")
+        elif key == "overrun_factor":
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0):
+                raise ValueError(f"{FILE}: [watch] overrun_factor must be a nonnegative finite number")
         elif key == "aliases":
             if (not isinstance(value, dict) or any(
                     not isinstance(role, str) or not role.strip()

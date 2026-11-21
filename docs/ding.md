@@ -320,7 +320,8 @@ Then end your turn. The wake-up will come.
 Options:
 
 - `--message TEXT`, `--message-file PATH`, or `--message -` set your own wake-up text. `--from NAME` works as in `send`.
-- `--progress PATH` names the task's `progress.json` (schema `progress-v1`: `current` stage with `done`/`total`, `rate_per_hour`, `eta`, `updated`). `ding board` then adds a PROGRESS column, such as `answer 120/500 34/h ETA 10-20 05:10`, and marks a running task whose file has not been updated for 10 minutes `STALE 14m`. `ding` only reads the file; the task writes it.
+- `--progress PATH` names the task's `progress.json` (schema `progress-v1`: `current` stage with `done`/`total`, `rate_per_hour`, `eta`, `updated`). `ding board` then adds a PROGRESS column, such as `answer 120/500 34/h ETA 10-20 05:10`, and marks a running task whose file has not been updated for 10 minutes `STALE 14m`. `ding` only reads the file; the task writes it. The orchestrator's `ding watch` also wakes on a task whose running file has not changed for `[watch] stale_minutes`.
+- `--expect-hours H` records how long you expect the task to take, in the run registry. The orchestrator's `ding watch` wakes once when the task has run longer than `[watch] overrun_factor` (default 1.5) times H, so a job far past its estimate is not left unnoticed. `run` takes the same option.
 - `--record PATH` writes the job's record somewhere you choose.
 - `--socket PATH` picks the App Server.
 
@@ -534,6 +535,8 @@ The orchestrator also reports an unknown-role wait once per executor comment aft
 
 It also reports a Claude Code executor that has kept no `ding inbox --wait` running for `[watch] executor_listener_minutes` (default 30; 0 disables it), on the same cadence, once per executor comment: without a waiter, messages wait unread and task-exit wakes reach no one. Only sessions that ran `ding claim` on this host are checked, through the ticket the claim recorded; the ticket must be open and not awaiting the user, its latest owner line must name the session, and its latest executor comment must be in progress. The silence counts from the waiter's stop or last heartbeat, or from the claim when no waiter has run. Reported IDs persist in `waiter_reported`.
 
+It reports two things about a running `ding launch` job, read from the run registry and the job's progress file with no GitHub calls until one is reported. A **stall**: a job launched with `--progress` whose file still says `running` but has not changed for `[watch] stale_minutes` (default 30; 0 disables it; never less than the board's 10-minute STALE mark). It is reported once for each stall: the key is the run and the file's last update time, so a job that moves and then stalls again is reported again. An **overrun**: a job launched with `--expect-hours H` that has run longer than `[watch] overrun_factor` × H (default 1.5; 0 disables it), once for each run. Both lines name the job by its progress file (or its run id without one), the ticket, and the job's last progress line. The ticket is the one whose latest owner line names the launching session, as for the idle check's launched jobs; with none, the line says `no ticket found`. An ended job is never reported. Reported keys persist in `job_stall_reported` and `job_overrun_reported`.
+
 `ding watch` refuses to start with stdout redirected to `/dev/null`: it prints an error on stderr and exits 3 before polling, creating locks/directories, or reading/writing the state file. Pipes and regular files are allowed, including the files used by background tasks. Keep the printed batch until every item is handled; `ding waits` can recover unanswered waits after a prior batch has already advanced the watch cursor.
 
 The default state file is `OWNER-REPO.for-NAME.json` under the watch state directory, with `NAME` percent-encoded for filenames. It is separate from `OWNER-REPO.json`, so role and orchestrator watches can run concurrently. An explicit `--state` overrides this choice; the same file still permits only one watch. Omitting `--for` selects the orchestrator watch and retains its default state path.
@@ -730,6 +733,8 @@ idle_minutes = 45                    # 0 disables idle-executor wakes
 design_answer_minutes = 30           # 0 disables unanswered-role and PR backstops
 unrouted_wait_minutes = 30           # 0 disables unknown-role wait reminders
 executor_listener_minutes = 30       # 0 disables wakes for a Claude Code executor without `ding inbox --wait`
+stale_minutes = 30                   # 0 disables wakes for a `ding launch --progress` job whose progress stopped moving
+overrun_factor = 1.5                 # wake once a `ding launch --expect-hours H` job runs past factor x H; 0 disables
 handoff = ["hand to "]               # written right before a role name to hand it work, e.g. ["交"]
 
 [check]                              # repo checks for `ding check` and `ding map`; see Repo checks. Absent by default.
@@ -741,7 +746,7 @@ Earlier versions named `[roles]` `[stations]`. A file with only `[stations]` sti
 
 `[sessions] name` may use `{issue}`, `{name}` (the `--name` text), and `{repo}` (`OWNER/REPO`), with an optional format spec such as `{issue:04d}`. Any other field is an error when the file is read. The `--name` text is filled in as is, so braces in it are kept. `ding new` without `--issue` and `ding rename` use `--name` unchanged.
 
-`[watch] idle_minutes`, `design_answer_minutes`, `unrouted_wait_minutes`, and `executor_listener_minutes` must be nonnegative finite numbers of minutes; unknown `[watch]` keys are errors.
+`[watch] idle_minutes`, `design_answer_minutes`, `unrouted_wait_minutes`, `executor_listener_minutes`, and `stale_minutes` must be nonnegative finite numbers of minutes, and `overrun_factor` a nonnegative finite number; unknown `[watch]` keys are errors.
 
 `[rule] signatures` lists the full first-line prefixes accepted as designer signatures by both `ding rule` and `ding watch`. It must be a nonempty list of nonempty strings. `ding rule` matches prefixes verbatim, including spaces; `ding watch` also recognizes width-normalized forms and configured aliases. When omitted, it defaults to `[roles] designer` plus `[roles] separator`.
 
