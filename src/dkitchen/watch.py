@@ -8,7 +8,8 @@ Wakes on:
 - unanswered designer/verifier requests older than [watch] design_answer_minutes, once per executor comment;
 - comments from the user (no role signature);
 - a ticket finishing (an executor `done` status, or closed) while another open ticket's latest executor status
-  names it as `#N` in its waiting field, once per waiting ticket and finished ticket;
+  names it as `#N` in its waiting field, once per waiting ticket and finished ticket (a waiter whose latest
+  status is done or paused is skipped; a ticket closed as not planned or a duplicate is reported as closed);
 - status labels being added, and newly opened PRs;
 - stalled lines, at most once a day each: open draft PRs, and in-progress tickets whose status names no wait,
   not updated for --stalled-hours;
@@ -42,7 +43,7 @@ import time
 import unicodedata
 from urllib.parse import quote
 
-from dkitchen import inbox, truncate
+from dkitchen import inbox, kitchens, truncate
 from dkitchen.config import Config, Sessions
 
 SHELLS = {"bash", "sh", "zsh", "dash", "fish"}
@@ -51,7 +52,7 @@ PR_NAMED = re.compile(r"(?<![A-Za-z])PR\s*#?\s*(\d+)|https://github\.com/([\w.-]
 VIEWER: list[str] = []  # the gh login, read once: in a split kitchen, the user's and the agents' code repo account
 STALLED_EVERY_HOURS = 24  # the orchestrator's watch reports each stalled item at most once a day
 WAITER_LOOKBACK_DAYS = 7  # older inbox records are not rechecked; a silent executor was reported long before
-TICKET_NAMED = re.compile(r"(?<![\w/#])#([1-9][0-9]*)\b")
+TICKET_NAMED = re.compile(r"(?<![A-Za-z0-9_/#])#([1-9]\d*)(?!\d)")
 RECENT: ContextVar[dict[tuple, list[dict]] | None] = ContextVar("RECENT", default=None)
 # newer() results shared by the checks of one poll; set only while a watch runs
 
@@ -366,28 +367,55 @@ def running_issues(checkout: Path, sessions: Sessions = Sessions(), repo: str = 
     return board_running(board_output(checkout), sessions, repo)
 
 
-def tmux_issues(panes: str, repo: str = "") -> set[int]:
-    """Tickets with a live tmux job: a pane still running something other than a shell. The ticket comes from
-    issue<N> in the session name; a pane without it is a `ding launch` job, tied through its pid to the run registry
-    and so to the launching session, whose tickets are those whose latest owner line names it."""
-    running, unnamed = set(), set()
+def own_run(run: dict, config: Config) -> bool:
+    """Whether a registered run started in this kitchen's checkout or its code checkout, or a worktree of either."""
+    try:
+        checkout = kitchens.main_checkout(Path(run["cwd"])).resolve()
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return False
+    for root in (config.root, config.code_root):
+        if root is None:
+            continue
+        try:
+            if checkout == kitchens.main_checkout(root).resolve():
+                return True
+        except (ValueError, OSError, subprocess.SubprocessError):
+            pass
+        if checkout == root.resolve():
+            return True
+    return False
+
+
+def tmux_issues(panes: str, config: Config, repo: str = "") -> set[int]:
+    """Tickets of this kitchen with a live tmux job: a pane still running something other than a shell. The ticket
+    comes from issue<N> in the session name, unless the pane's pid is a running `ding run` started outside this
+    kitchen. A pane without it is a `ding launch` job, tied through its pid to the run registry and so to the
+    launching session, whose tickets are those whose latest owner line names it; only runs of this kitchen count."""
+    named, unnamed = {}, set()
     for line in panes.splitlines():
         name, dead, command, pid = (line.split("|") + ["", "", ""])[:4]
         if dead != "0" or command in SHELLS:
             continue
         match = re.search(r"issue(\d+)", name)
         if match:
-            running.add(int(match.group(1)))
+            named.setdefault(int(match.group(1)), set()).add(int(pid) if pid.isdigit() else 0)
         elif pid.isdigit():
             unnamed.add(int(pid))
-    if unnamed:
+    running = set()
+    pids = unnamed | set().union(*named.values()) - {0}
+    live = {}
+    if pids:
         from dkitchen import ding
-        sessions = {run["pid"]: run for run in ding.registered_runs() if run["pid"] in unnamed}
-        threads = {run["thread_id"] for run in sessions.values() if ding.run_state(run) == "running"}
-        if threads:
-            owned = ding.issue_map(repo or None)
-            for thread in threads:
-                running |= owned.get(thread, set())
+        live = {run["pid"]: run for run in ding.registered_runs()
+                if run["pid"] in pids and ding.run_state(run) == "running"}
+    for number, owners in named.items():
+        if any(pid not in live or own_run(live[pid], config) for pid in owners):
+            running.add(number)
+    threads = {live[pid]["thread_id"] for pid in unnamed if pid in live and own_run(live[pid], config)}
+    if threads:
+        owned = ding.issue_map(repo or None)
+        for thread in threads:
+            running |= owned.get(thread, set())
     return running
 
 
@@ -682,7 +710,7 @@ def unrouted_waits(config: Config, repo: str, checkout: Path, reported: set[int]
                             comment.get("updated_at", comment["created_at"])) < cutoff):
                 candidates.append((issue, comment))
             break
-    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes(), repo) if candidates else set()
+    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes(), config, repo) if candidates else set()
     return [(comment["created_at"], f"#{issue['number']} unrouted wait for over "
              f"{config.watch.unrouted_wait_minutes:g} minutes, with no running ding run or tmux job: "
              f"{summary(comment['body'], config)} {comment['html_url']}", comment["id"])
@@ -719,7 +747,7 @@ def stalled(config: Config, repo: str, checkout: Path, hours: float, skip: set[i
                   if "pull_request" not in issue and issue["number"] not in skip and issue["comments"]
                   and issue["updated_at"] < cutoff
                   and not any(label["name"] == config.labels.awaiting_user for label in issue["labels"])]
-    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes(), repo) if candidates else set()
+    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes(), config, repo) if candidates else set()
     for issue in candidates:
         if issue["number"] in running:
             continue
@@ -789,7 +817,7 @@ def stale(config: Config, repo: str, checkout: Path, hours: float, reported: set
                   if "pull_request" not in issue and issue["number"] not in skip and issue["comments"]
                   and issue["updated_at"] < cutoff
                   and not any(label["name"] == config.labels.awaiting_user for label in issue["labels"])]
-    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes(), repo) if candidates else set()
+    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes(), config, repo) if candidates else set()
     found = []
     for issue in candidates:
         if issue["number"] in running:
@@ -823,7 +851,7 @@ def idle(config: Config, repo: str, checkout: Path, observed: dict, reported: se
         if len(cells) >= 6:
             for number in board_tickets(cells, config.sessions, repo):
                 sessions.setdefault(number, []).append(cells[2])
-    running = board_running(output, config.sessions, repo) | tmux_issues(tmux_panes(), repo)
+    running = board_running(output, config.sessions, repo) | tmux_issues(tmux_panes(), config, repo)
     moment = datetime.now(timezone.utc)
     found, pending = [], {}
     for issue in issues:
@@ -897,15 +925,21 @@ def missing_waiters(config: Config, repo: str, reported: set[int], skip: set[int
     return found
 
 
-def finished_tickets(config: Config, repo: str, since: str, skip: set[int]) -> dict[int, tuple[str, str, set[str]]]:
-    """Tickets that got an executor `done` status or were closed since `since`: number -> (time, link, trigger ids).
+CLOSED_AS = {"not_planned": "was closed as not planned", "duplicate": "was closed as a duplicate"}
+
+
+def finished_tickets(config: Config, repo: str, since: str,
+                     skip: set[int]) -> dict[int, tuple[str, str, set[str], str]]:
+    """Tickets that got an executor `done` status or were closed since `since`:
+    number -> (time, link, trigger ids, "just finished" or how it was closed).
 
     Reads the comment and event listings the poll's `collect` already fetched."""
-    found: dict[int, tuple[str, str, set[str]]] = {}
+    found: dict[int, tuple[str, str, set[str], str]] = {}
 
-    def add(number: int, moment: str, url: str, trigger: str):
-        old = found.get(number, (moment, url, set()))
-        found[number] = (min(old[0], moment), old[1], old[2] | {trigger})
+    def add(number: int, moment: str, url: str, trigger: str, how: str = "just finished"):
+        old = found.get(number, (moment, url, set(), how))
+        found[number] = (min(old[0], moment), old[1], old[2] | {trigger},
+                         "just finished" if "just finished" in (old[3], how) else how)
 
     for comment in recent_comments(repo, since):
         number, body = issue_number(comment["issue_url"]), comment["body"]
@@ -915,7 +949,9 @@ def finished_tickets(config: Config, repo: str, since: str, skip: set[int]) -> d
     for event in recent_events(repo, since):
         issue = event.get("issue") or {}
         if event["event"] == "closed" and "pull_request" not in issue and issue.get("number") not in skip:
-            add(issue["number"], event["created_at"], issue["html_url"], f"event {event['id']}")
+            reason = event.get("state_reason") or issue.get("state_reason")
+            add(issue["number"], event["created_at"], issue["html_url"], f"event {event['id']}",
+                CLOSED_AS.get(reason, "just finished"))
     return found
 
 
@@ -935,7 +971,7 @@ def waiters(config: Config, repo: str, targets: set[int], skip: set[int]) -> lis
         if last is None:
             continue
         state, waiting = state_and_waiting(last["body"], config)
-        if state == config.status.paused or waiting.startswith(config.status.none):
+        if state in {config.status.paused, config.status.done} or waiting.startswith(config.status.none):
             continue
         found += [(issue["number"], number) for number in sorted(waiting_tickets(waiting) & targets - {issue["number"]})]
     return found
@@ -951,11 +987,12 @@ def finished_waits(config: Config, repo: str, since: str, reported: set[str], ch
                 if not item[2] <= checked}
     if not finished:
         return []
-    found = [(finished[number][0], f"#{waiting} is waiting on #{number}, which just finished {finished[number][1]}",
+    found = [(finished[number][0],
+              f"#{waiting} is waiting on #{number}, which {finished[number][3]} {finished[number][1]}",
               f"{waiting}>{number}")
              for waiting, number in waiters(config, repo, set(finished), skip) if f"{waiting}>{number}" not in reported]
     named = {int(key.split(">")[1]) for _, _, key in found}
-    for number, (_, _, triggers) in finished.items():
+    for number, (_, _, triggers, _) in finished.items():
         if number not in named:
             checked |= triggers
     return found
