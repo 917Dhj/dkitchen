@@ -39,7 +39,7 @@ import time
 import unicodedata
 from urllib.parse import quote
 
-from dkitchen import inbox, truncate
+from dkitchen import inbox, kitchens, truncate
 from dkitchen.config import Config, Sessions
 
 SHELLS = {"bash", "sh", "zsh", "dash", "fish"}
@@ -346,21 +346,63 @@ def running_issues(checkout: Path, sessions: Sessions = Sessions(), repo: str = 
     return board_running(board_output(checkout), sessions, repo)
 
 
-def tmux_issues(panes: str) -> set[int]:
-    """Tickets with a live tmux job: a pane still running something other than a shell, in a session named issue<N>."""
-    running = set()
+def own_run(run: dict, config: Config) -> bool:
+    """Whether a registered run started in this kitchen's checkout or its code checkout, or a worktree of either."""
+    try:
+        checkout = kitchens.main_checkout(Path(run["cwd"])).resolve()
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return False
+    for root in (config.root, config.code_root):
+        if root is None:
+            continue
+        try:
+            if checkout == kitchens.main_checkout(root).resolve():
+                return True
+        except (ValueError, OSError, subprocess.SubprocessError):
+            pass
+        if checkout == root.resolve():
+            return True
+    return False
+
+
+def tmux_issues(panes: str, config: Config, repo: str = "") -> set[int]:
+    """Tickets of this kitchen with a live tmux job: a pane still running something other than a shell. The ticket
+    comes from issue<N> in the session name, unless the pane's pid is a running `ding run` started outside this
+    kitchen. A pane without it is a `ding launch` job, tied through its pid to the run registry and so to the
+    launching session, whose tickets are those whose latest owner line names it; only runs of this kitchen count."""
+    named, unnamed = {}, set()
     for line in panes.splitlines():
-        name, dead, command = (line.split("|") + ["", ""])[:3]
+        name, dead, command, pid = (line.split("|") + ["", "", ""])[:4]
+        if dead != "0" or command in SHELLS:
+            continue
         match = re.search(r"issue(\d+)", name)
-        if match and dead == "0" and command not in SHELLS:
-            running.add(int(match.group(1)))
+        if match:
+            named.setdefault(int(match.group(1)), set()).add(int(pid) if pid.isdigit() else 0)
+        elif pid.isdigit():
+            unnamed.add(int(pid))
+    running = set()
+    pids = unnamed | set().union(*named.values()) - {0}
+    live = {}
+    if pids:
+        from dkitchen import ding
+        live = {run["pid"]: run for run in ding.registered_runs()
+                if run["pid"] in pids and ding.run_state(run) == "running"}
+    for number, owners in named.items():
+        if any(pid not in live or own_run(live[pid], config) for pid in owners):
+            running.add(number)
+    threads = {live[pid]["thread_id"] for pid in unnamed if pid in live and own_run(live[pid], config)}
+    if threads:
+        owned = ding.issue_map(repo or None)
+        for thread in threads:
+            running |= owned.get(thread, set())
     return running
 
 
 def tmux_panes() -> str:
     """`tmux list-panes` for all sessions; empty when no tmux server is running."""
     try:
-        result = subprocess.run(["tmux", "list-panes", "-a", "-F", "#{session_name}|#{pane_dead}|#{pane_current_command}"],
+        result = subprocess.run(["tmux", "list-panes", "-a", "-F",
+                                 "#{session_name}|#{pane_dead}|#{pane_current_command}|#{pane_pid}"],
                                 capture_output=True, text=True, timeout=30)
     except FileNotFoundError:
         return ""
@@ -647,7 +689,7 @@ def unrouted_waits(config: Config, repo: str, checkout: Path, reported: set[int]
                             comment.get("updated_at", comment["created_at"])) < cutoff):
                 candidates.append((issue, comment))
             break
-    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes()) if candidates else set()
+    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes(), config, repo) if candidates else set()
     return [(comment["created_at"], f"#{issue['number']} unrouted wait for over "
              f"{config.watch.unrouted_wait_minutes:g} minutes, with no running ding run or tmux job: "
              f"{summary(comment['body'], config)} {comment['html_url']}", comment["id"])
@@ -684,7 +726,7 @@ def stalled(config: Config, repo: str, checkout: Path, hours: float, skip: set[i
                   if "pull_request" not in issue and issue["number"] not in skip and issue["comments"]
                   and issue["updated_at"] < cutoff
                   and not any(label["name"] == config.labels.awaiting_user for label in issue["labels"])]
-    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes()) if candidates else set()
+    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes(), config, repo) if candidates else set()
     for issue in candidates:
         if issue["number"] in running:
             continue
@@ -754,7 +796,7 @@ def stale(config: Config, repo: str, checkout: Path, hours: float, reported: set
                   if "pull_request" not in issue and issue["number"] not in skip and issue["comments"]
                   and issue["updated_at"] < cutoff
                   and not any(label["name"] == config.labels.awaiting_user for label in issue["labels"])]
-    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes()) if candidates else set()
+    running = running_issues(checkout, config.sessions, repo) | tmux_issues(tmux_panes(), config, repo) if candidates else set()
     found = []
     for issue in candidates:
         if issue["number"] in running:
@@ -788,7 +830,7 @@ def idle(config: Config, repo: str, checkout: Path, observed: dict, reported: se
         if len(cells) >= 6:
             for number in board_tickets(cells, config.sessions, repo):
                 sessions.setdefault(number, []).append(cells[2])
-    running = board_running(output, config.sessions, repo) | tmux_issues(tmux_panes())
+    running = board_running(output, config.sessions, repo) | tmux_issues(tmux_panes(), config, repo)
     moment = datetime.now(timezone.utc)
     found, pending = [], {}
     for issue in issues:
