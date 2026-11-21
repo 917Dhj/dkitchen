@@ -300,8 +300,21 @@ def relay(args, config: Config) -> int:
     return comment(config, repo, args.ticket, signed(args.comment or message, config))
 
 
+def log_is_empty(items: list[str], pending: list[str], config: Config) -> bool:
+    """True when the entry says nothing: no item with text and no pending matter besides the "none" word."""
+    return not any(item.strip() for item in items) and all(
+        not matter.strip() or matter.strip() == config.status.none for matter in pending)
+
+
 def log(args, config: Config) -> int:
     issue = args.issue or config.log.issue
     if issue is None:
         return fail("no orchestrator log ticket; set [log] issue in .dkitchen.toml or pass --issue")
+    if config.log.issue is not None and issue != config.log.issue and not getattr(args, "force", False):
+        return fail(f"#{issue} is not the orchestrator log ticket (#{config.log.issue}). Use `gh issue comment` for a "
+                    f"note on a work ticket, or `ding relay --comment` when its executor should hear it too; or pass --force "
+                    "to log here anyway")
+    if log_is_empty(args.item, args.pending, config):
+        print("ding: log entry is empty (no items, nothing pending); nothing posted", file=sys.stderr)
+        return 0
     return comment(config, config.repository(), issue, log_body(args.item, args.pending, datetime.now(timezone.utc), config))

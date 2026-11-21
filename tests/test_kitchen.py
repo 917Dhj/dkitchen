@@ -552,6 +552,55 @@ def test_log_needs_a_ticket(tmp_path, capsys):
     assert "[log] issue" in capsys.readouterr().err
 
 
+LOG_TICKET = 'repo = "o/r"\n[log]\nissue = 4'
+
+
+def run_log(monkeypatch, loaded, **fields):
+    calls = []
+    monkeypatch.setattr(orchestrate, "call", fake_call([(0, "https://x/comment")], calls))
+    args = SimpleNamespace(**{"item": ["Merged PR #1"], "pending": [], "issue": None, "force": False, **fields})
+    return orchestrate.log(args, loaded), calls
+
+
+def test_log_refuses_another_ticket_and_posts_nothing(tmp_path, monkeypatch, capsys):
+    code, calls = run_log(monkeypatch, settings(tmp_path, LOG_TICKET), issue=23)
+    err = capsys.readouterr().err
+    assert code == 1 and calls == []
+    assert "#4" in err and "gh issue comment" in err and "ding relay --comment" in err
+
+
+def test_log_force_posts_to_another_ticket(tmp_path, monkeypatch):
+    code, calls = run_log(monkeypatch, settings(tmp_path, LOG_TICKET), issue=23, force=True)
+    assert code == 0 and calls[0][:4] == ("gh", "issue", "comment", "23")
+
+
+@pytest.mark.parametrize("issue", [None, 4])
+def test_log_posts_to_the_log_ticket(tmp_path, monkeypatch, issue):
+    code, calls = run_log(monkeypatch, settings(tmp_path, LOG_TICKET), issue=issue)
+    assert code == 0 and calls[0][:4] == ("gh", "issue", "comment", "4")
+
+
+def test_log_without_a_log_ticket_setting_takes_any_issue(tmp_path, monkeypatch):
+    code, calls = run_log(monkeypatch, settings(tmp_path, 'repo = "o/r"'), issue=23)
+    assert code == 0 and calls[0][:4] == ("gh", "issue", "comment", "23")
+
+
+@pytest.mark.parametrize("text, items, pending", [
+    (LOG_TICKET, [""], []),
+    (LOG_TICKET, [" "], ["none"]),
+    (CHINESE, [""], ["无"]),
+])
+def test_log_entry_with_only_an_empty_pending_line_is_not_posted(tmp_path, monkeypatch, capsys, text, items, pending):
+    code, calls = run_log(monkeypatch, settings(tmp_path, text), item=items, pending=pending)
+    assert code == 0 and calls == []
+    assert "nothing posted" in capsys.readouterr().err
+
+
+def test_log_entry_with_pending_matters_is_posted(tmp_path, monkeypatch):
+    code, calls = run_log(monkeypatch, settings(tmp_path, LOG_TICKET), item=[""], pending=["#5 review"])
+    assert code == 0 and len(calls) == 1
+
+
 @pytest.fixture
 def night_log(tmp_path, monkeypatch):
     class Clock(datetime):
