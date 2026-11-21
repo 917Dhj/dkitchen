@@ -76,15 +76,25 @@ def leaks(config: Config, text: str, allowed: set[int]) -> list[str]:
     separator = watch.normalized(config.roles.separator).strip()
     names = {watch.normalized(name) for name in watch.role_names(config) if name != config.roles.user}
     names |= {watch.normalized(alias) for aliases in config.roles.aliases.values() for alias in aliases}
+    by_length = sorted(names, key=len, reverse=True)
+    # A name in a non-Latin script is the role wherever it stands; an ASCII one is also an everyday word, such as
+    # the Executor of ThreadPoolExecutor, so only its signature counts.
+    anywhere = [name for name in by_length if not name.isascii()]
     fields = [watch.normalized(name) for name in config.status.fields]
     kitchen = config.kitchen_repo().lower()
     problems, status_lines = [], []
     for number, raw in enumerate(text.splitlines(), 1):
         line = watch.normalized(raw).strip()
         opening = line.lstrip("#> \t")  # a markdown heading or quote still opens the line with the signature
-        signed = next((name for name in sorted(names, key=len, reverse=True) if opening.startswith(name + separator)), None)
+        signed = next((name for name in by_length if opening.startswith(name + separator)), None)
         if signed is not None:
             problems.append(f"line {number} opens with the {signed} signature")
+        rest = opening[len(signed + separator):] if signed is not None else opening
+        for name in anywhere:
+            if name in rest:
+                rest = rest.replace(name, "\0")
+                problems.append(f"line {number} names the {name} role; say what was done or what is needed, not which "
+                                "role does it")
         marker = next((marker for marker in SESSION_MARKERS if opening.startswith(marker)), None)
         if marker is not None:
             problems.append(f"line {number} carries the kitchen marker {marker!r}")
