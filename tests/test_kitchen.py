@@ -3669,7 +3669,7 @@ SPLIT_REVIEW = 'repo = "me/kitchen"\ncode = "org/code"\n[merge]\nreview_check = 
 REVIEW_HEAD = "abcdef0123456789"
 
 
-def split_review(tmp_path, monkeypatch, body, *, ticket=None):
+def split_review(tmp_path, monkeypatch, body, *, ticket=None, pr=7):
     loaded = settings(tmp_path, SPLIT_REVIEW)
     (tmp_path / "review.md").write_text(body, encoding="utf-8")
     calls = []
@@ -3680,7 +3680,7 @@ def split_review(tmp_path, monkeypatch, body, *, ticket=None):
         (("issues/7/comments",), json.dumps({"html_url": "https://github.com/org/code/pull/7#issuecomment-1"})),
         (("statuses",), "{}"),
     ], calls)
-    args = SimpleNamespace(pr=7, sha=REVIEW_HEAD[:8], verdict="pass", ticket=ticket, body_file=tmp_path / "review.md")
+    args = SimpleNamespace(pr=pr, sha=REVIEW_HEAD[:8], verdict="pass", ticket=ticket, body_file=tmp_path / "review.md")
     return orchestrate.review(args, loaded), calls
 
 
@@ -3706,6 +3706,12 @@ def test_review_may_name_a_code_issue_the_ticket_records(tmp_path, monkeypatch, 
     code, calls = split_review(tmp_path, monkeypatch, "Fixes the loader bug in #6.\n", ticket=42)
     assert code == 1 and "bare #6" in capsys.readouterr().err
     assert not any("issues/7/comments" in " ".join(call) for call in calls)
+
+
+def test_review_ticket_must_name_the_pr(tmp_path, monkeypatch, capsys):
+    code, calls = split_review(tmp_path, monkeypatch, "Fixes the loader bug in #5.\n", ticket=42, pr=8)
+    assert code == 1 and "no PR line for org/code#8" in capsys.readouterr().err
+    assert not any("comments" in call[-1] and "body=" in call[-1] or "statuses" in " ".join(call) for call in calls)
 
 
 def test_review_in_a_single_repo_kitchen_is_not_checked(tmp_path, monkeypatch):

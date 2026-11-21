@@ -156,6 +156,9 @@ def review(args, config: Config) -> int:
 
         try:
             found = outbound.links(config, args.ticket) if args.ticket is not None else None
+            if found is not None and (repo, args.pr) not in found.prs:
+                return fail(f"#{args.ticket} has no PR line for {repo}#{args.pr}; `ding pr` writes one when it opens "
+                            "the PR. No comment, no status")
             outbound.refuse_leaks(config, body, found)
         except (RuntimeError, ValueError, KeyError, TypeError) as error:
             return fail(f"{error}. No comment, no status")

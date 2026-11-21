@@ -2071,7 +2071,7 @@ def main(argv=None) -> int:
                     "PR line names the PR, and the verdict is posted there as below, with a line naming the HEAD.\n"
                     "When the kitchen lives in its own repo, the comment is refused, with no status written, if it\n"
                     "carries kitchen internals as `ding pr` would refuse them; --ticket N then names the ticket whose\n"
-                    "recorded code issues a bare #N may cite.\n"
+                    "PR line names the PR, and a bare #N may cite the code issues it records.\n"
                     "With --ticket N: post a verdict on a run stage of ticket N (a PR number is refused). The\n"
                     "file's line 1 must start with the verifier's signature; the comment adds [review] verdict_pass\n"
                     "or verdict_changes as line 2, and on changes a handoff to the ticket's design line (named in its\n"
