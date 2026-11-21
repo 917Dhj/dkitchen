@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 import fcntl
 import hashlib
 import json
+import re
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -1445,6 +1446,7 @@ def idle_ticket(tmp_path, monkeypatch):
         raise AssertionError(path)
 
     monkeypatch.setattr(watch, "gh", gh)
+    monkeypatch.setattr(watch, "finished_waits", lambda *args: [])
     state.board_reader = watch.board_output
     monkeypatch.setattr(watch, "board_output", lambda checkout: state.board)
     monkeypatch.setattr(watch, "tmux_panes", lambda: state.panes)
@@ -1607,6 +1609,7 @@ def test_watch_bounds_errors_in_every_poll_phase(tmp_path, monkeypatch, capsys, 
     monkeypatch.setattr(watch, "stale", lambda *args: [])
     monkeypatch.setattr(watch, "idle", lambda *args: ([], {}))
     monkeypatch.setattr(watch, "unanswered_design", lambda *args: [])
+    monkeypatch.setattr(watch, "finished_waits", lambda *args: [])
     monkeypatch.setattr(watch, "unrouted_waits", lambda *args: [])
     monkeypatch.setattr(watch, "stalled", lambda *args: [])
     attempts = []
@@ -2038,6 +2041,7 @@ def test_role_and_orchestrator_watches_run_concurrently_with_separate_default_st
     monkeypatch.setattr(watch, "unanswered_design", lambda *args: [])
     monkeypatch.setattr(watch, "unrouted_waits", lambda *args: [])
     monkeypatch.setattr(watch, "stalled", lambda *args: [])
+    monkeypatch.setattr(watch, "finished_waits", lambda *args: [])
     monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
     def run(role):
         args = SimpleNamespace(state=None, checkout=None, since=None, skip_issue=[], role=role,
@@ -2329,7 +2333,7 @@ def collect(*args, **kwargs):
     return [(watch.now(), "fixture wait", True)]
 watch.collect = collect
 watch.idle = lambda *args: ([], {})
-watch.stale = watch.unanswered_design = watch.unrouted_waits = watch.stalled = lambda *args: []
+watch.stale = watch.unanswered_design = watch.unrouted_waits = watch.stalled = watch.finished_waits = lambda *args: []
 sys.exit(ding.main(["watch", "--state", sys.argv[1], "--settle", "0"]))
 '''
     output_path = tmp_path / "output.txt"
@@ -2456,7 +2460,7 @@ def test_for_watch_never_runs_design_backstop(routed_settings, monkeypatch, tmp_
     monkeypatch.setattr(watch, "gh", lambda path: [comment(32, executor("状态: 进行中\n在等: 训练设计"))])
     def forbidden(*args):
         pytest.fail("--for must not consult periodic checks")
-    for name in ("unanswered_design", "idle", "stale", "board_output", "tmux_panes"):
+    for name in ("unanswered_design", "finished_waits", "idle", "stale", "board_output", "tmux_panes"):
         monkeypatch.setattr(watch, name, forbidden)
     monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
     assert ding.main(["watch", "--for", "总设计（训练）", "--state", str(tmp_path / "role.json"),
@@ -3976,3 +3980,167 @@ def test_shared_pr_runs_the_checks_first(tmp_path, monkeypatch, capsys):
     (tmp_path / "plain").mkdir()
     code, _ = open_pr(tmp_path / "plain", monkeypatch, SHARED, "--draft")
     assert code == 0 and ran == []
+
+
+@pytest.fixture
+def waiting_board(tmp_path, monkeypatch):
+    """A kitchen repo o/r with tickets #28 and #30 open; #30's executor waits on #28."""
+    loaded = config.Config(root=tmp_path, repo="o/r")
+    state = SimpleNamespace(config=loaded, comments={28: [], 30: []}, open=[28, 30], recent=[], events=[], calls=[])
+
+    def post(number, status, waiting="none"):
+        item = {"id": 1000 + sum(map(len, state.comments.values())),
+                "issue_url": f"https://api.github.com/repos/o/r/issues/{number}",
+                "body": executor(f"Status: {status}\nWaiting on: {waiting}\nKey numbers: 1\nNext: go"),
+                "created_at": "2026-10-14T09:00:00Z", "updated_at": "2026-10-14T09:00:00Z"}
+        item["html_url"] = f"https://github.com/o/r/issues/{number}#issuecomment-{item['id']}"
+        state.comments[number].append(item)
+        state.recent.append(item)
+
+    def close(number):
+        state.open.remove(number)
+        state.events.append({"id": 77, "event": "closed", "created_at": "2026-10-14T09:00:00Z",
+                             "issue": {"number": number, "html_url": f"https://github.com/o/r/issues/{number}"}})
+
+    def gh(path):
+        state.calls.append(path)
+        if "/issues/comments?since" in path:
+            return state.recent if "page=1" in path else []
+        if "/issues/events?" in path:
+            return state.events if "page=1" in path else []
+        if "/issues?state=open" in path:
+            return [{"number": n, "comments": len(state.comments[n]), "labels": [], "updated_at": "2026-10-14T09:00:00Z"}
+                    for n in state.open]
+        if match := re.search(r"/issues/(\d+)/comments\?", path):
+            return list(state.comments[int(match[1])])
+        return []
+
+    monkeypatch.setattr(watch, "gh", gh)
+    state.post, state.close = post, close
+    post(30, "in progress", "#28 for the schema")
+    state.recent.clear()
+    return state
+
+
+SINCE = "2026-10-14T08:00:00Z"
+
+
+def finished(waiting_board, reported=(), checked=None):
+    return watch.finished_waits(waiting_board.config, "o/r", SINCE, set(reported),
+                                set() if checked is None else checked, set())
+
+
+def run_watch(waiting_board, state, monkeypatch, capsys):
+    monkeypatch.setattr(config, "load", lambda: waiting_board.config)
+    monkeypatch.setattr(watch.time, "sleep", lambda seconds: None)
+    for name in ("stale", "unanswered_design", "unrouted_waits", "missing_waiters", "stalled"):
+        monkeypatch.setattr(watch, name, lambda *args: [])
+    monkeypatch.setattr(watch, "idle", lambda *args: ([], {}))
+    assert ding.main(["watch", "--state", str(state), "--since", SINCE, "--interval", "0", "--settle", "0"]) == 0
+    return capsys.readouterr().out
+
+
+def test_a_done_status_on_the_awaited_ticket_wakes_with_one_event(waiting_board):
+    waiting_board.post(28, "done")
+    [(_, line, key)] = finished(waiting_board)
+    assert line == ("#30 is waiting on #28, which just finished "
+                    f"https://github.com/o/r/issues/28#issuecomment-{waiting_board.comments[28][0]['id']}")
+    assert key == "30>28"
+
+
+def test_closing_the_awaited_ticket_wakes_with_one_event(waiting_board):
+    waiting_board.close(28)
+    [(_, line, key)] = finished(waiting_board)
+    assert line == "#30 is waiting on #28, which just finished https://github.com/o/r/issues/28" and key == "30>28"
+
+
+def test_done_and_closed_together_are_one_event(waiting_board):
+    waiting_board.post(28, "done")
+    waiting_board.close(28)
+    assert len(finished(waiting_board)) == 1
+
+
+def test_a_reported_pair_does_not_fire_again(waiting_board):
+    waiting_board.post(28, "done")
+    assert finished(waiting_board, reported={"30>28"}) == []
+
+
+def test_a_restarted_watch_does_not_repeat_a_saved_pair(waiting_board, tmp_path, monkeypatch, capsys):
+    waiting_board.post(28, "done")
+    state = tmp_path / "watch.json"
+    out = run_watch(waiting_board, state, monkeypatch, capsys)
+    assert out.count("#30 is waiting on #28, which just finished") == 1
+    saved = json.loads(state.read_text())
+    assert saved["wait_reported"] == ["30>28"]
+    state.write_text(json.dumps({**saved, "since": SINCE, "seen": []}))
+    assert "is waiting on" not in run_watch(waiting_board, state, monkeypatch, capsys)
+
+
+def test_a_ticket_nobody_awaits_is_scanned_once(waiting_board):
+    waiting_board.post(30, "done")
+    checked = set()
+    assert finished(waiting_board, checked=checked) == []
+    waiting_board.calls.clear()
+    assert finished(waiting_board, checked=checked) == []
+    assert not any("/issues?state=open" in call for call in waiting_board.calls)
+
+
+def test_a_waiter_whose_latest_status_no_longer_waits_gets_nothing(waiting_board):
+    waiting_board.post(30, "in progress", "none")
+    waiting_board.post(28, "done")
+    assert finished(waiting_board) == []
+
+
+def test_only_the_latest_executor_status_counts(waiting_board):
+    waiting_board.post(30, "in progress", "none")
+    waiting_board.comments[30].append({**waiting_board.comments[30][0], "id": 5, "body": "Designer: the ruling is #28"})
+    waiting_board.post(28, "done")
+    assert finished(waiting_board) == []
+
+
+@pytest.mark.parametrize("waiting", ["the user", "PR #28", "o/code#28", "https://github.com/o/r/pull/28",
+                                     "ticket 28", "none"])
+def test_a_wait_that_names_no_ticket_gets_nothing(waiting_board, waiting):
+    waiting_board.post(30, "in progress", waiting)
+    waiting_board.post(28, "done")
+    assert finished(waiting_board) == []
+
+
+def test_a_paused_executor_gets_nothing(waiting_board):
+    waiting_board.config = settings(waiting_board.config.root, 'repo = "o/r"\n[status]\npaused = "paused"')
+    waiting_board.post(30, "paused", "#28")
+    waiting_board.post(28, "done")
+    assert finished(waiting_board) == []
+
+
+def test_a_ticket_waiting_on_itself_gets_nothing(waiting_board):
+    waiting_board.post(30, "in progress", "#30")
+    waiting_board.close(30)
+    assert finished(waiting_board) == []
+
+
+def test_two_waiters_each_get_one_event(waiting_board):
+    waiting_board.comments[31], waiting_board.open = [], [*waiting_board.open, 31]
+    waiting_board.post(31, "blocked", "#28 and #30")
+    waiting_board.post(28, "done")
+    assert sorted(key for _, _, key in finished(waiting_board)) == ["30>28", "31>28"]
+
+
+def test_a_split_kitchen_reads_ticket_numbers_from_the_kitchen_repo(waiting_board):
+    waiting_board.config = config.Config(root=waiting_board.config.root, repo="o/r", code="o/code")
+    waiting_board.post(30, "in progress", "#28, then PR o/code#5")
+    waiting_board.post(28, "done")
+    assert [key for _, _, key in finished(waiting_board)] == ["30>28"]
+    assert all("o/code" not in call for call in waiting_board.calls)
+
+
+def test_the_comment_and_event_listings_are_fetched_once_per_poll(waiting_board):
+    waiting_board.post(28, "done")
+    token = watch.RECENT.set({})
+    try:
+        watch.collect(waiting_board.config, "o/r", SINCE, SINCE, set(), set())
+        assert len(finished(waiting_board)) == 1
+    finally:
+        watch.RECENT.reset(token)
+    assert len([call for call in waiting_board.calls
+                if "/issues/comments?since" in call or "/issues/events?" in call]) == 2
