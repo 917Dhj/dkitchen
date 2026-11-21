@@ -20,7 +20,7 @@ The watch exits about 5 minutes after the first of these appears, so related cha
 
 - an executor comment whose Status is not `in progress`, or whose *Waiting on* names a role or the user;
 - a comment from the user;
-- a ticket finishing, by an executor `done` status or by being closed, while another open ticket's latest executor status names it as `#N` in its *Waiting on*. The line is "#M is waiting on #N, which just finished" with a link, once for each pair. Relay the result to #M's executor yourself. In a kitchen of its own, `#N` is a kitchen ticket; a PR or `owner/code#N` is not one;
+- a ticket finishing, by an executor `done` status or by being closed, while another open ticket's latest executor status names it as `#N` in its *Waiting on*. The line is "#M is waiting on #N, which just finished" with a link, once for each pair (a reopened #N that finishes again wakes no one, and a wait posted after #N already finished is not reported); a ticket closed as not planned or a duplicate reads "which was closed as not planned" instead, and a waiter whose latest status is done is skipped. Relay the result to #M's executor yourself. In a kitchen of its own, `#N` is a kitchen ticket; a PR or `owner/code#N` is not one;
 - a `status:*` label being added;
 - a new PR, a PR ready to merge, or a PR whose review failed;<!-- module:shared --> in this shared code repo, only new PRs, since verdicts go on tickets and the team merges;<!-- /module:shared -->
 <!-- module:split -->

@@ -8,7 +8,8 @@ Wakes on:
 - unanswered designer/verifier requests older than [watch] design_answer_minutes, once per executor comment;
 - comments from the user (no role signature);
 - a ticket finishing (an executor `done` status, or closed) while another open ticket's latest executor status
-  names it as `#N` in its waiting field, once per waiting ticket and finished ticket;
+  names it as `#N` in its waiting field, once per waiting ticket and finished ticket (a waiter whose latest
+  status is done or paused is skipped; a ticket closed as not planned or a duplicate is reported as closed);
 - status labels being added, and newly opened PRs;
 - stalled lines, at most once a day each: open draft PRs, and in-progress tickets whose status names no wait,
   not updated for --stalled-hours;
@@ -51,7 +52,7 @@ PR_NAMED = re.compile(r"(?<![A-Za-z])PR\s*#?\s*(\d+)|https://github\.com/([\w.-]
 VIEWER: list[str] = []  # the gh login, read once: in a split kitchen, the user's and the agents' code repo account
 STALLED_EVERY_HOURS = 24  # the orchestrator's watch reports each stalled item at most once a day
 WAITER_LOOKBACK_DAYS = 7  # older inbox records are not rechecked; a silent executor was reported long before
-TICKET_NAMED = re.compile(r"(?<![\w/#])#([1-9][0-9]*)\b")
+TICKET_NAMED = re.compile(r"(?<![A-Za-z0-9_/#])#([1-9]\d*)(?!\d)")
 RECENT: ContextVar[dict[tuple, list[dict]] | None] = ContextVar("RECENT", default=None)
 # newer() results shared by the checks of one poll; set only while a watch runs
 
@@ -897,15 +898,21 @@ def missing_waiters(config: Config, repo: str, reported: set[int], skip: set[int
     return found
 
 
-def finished_tickets(config: Config, repo: str, since: str, skip: set[int]) -> dict[int, tuple[str, str, set[str]]]:
-    """Tickets that got an executor `done` status or were closed since `since`: number -> (time, link, trigger ids).
+CLOSED_AS = {"not_planned": "was closed as not planned", "duplicate": "was closed as a duplicate"}
+
+
+def finished_tickets(config: Config, repo: str, since: str,
+                     skip: set[int]) -> dict[int, tuple[str, str, set[str], str]]:
+    """Tickets that got an executor `done` status or were closed since `since`:
+    number -> (time, link, trigger ids, "just finished" or how it was closed).
 
     Reads the comment and event listings the poll's `collect` already fetched."""
-    found: dict[int, tuple[str, str, set[str]]] = {}
+    found: dict[int, tuple[str, str, set[str], str]] = {}
 
-    def add(number: int, moment: str, url: str, trigger: str):
-        old = found.get(number, (moment, url, set()))
-        found[number] = (min(old[0], moment), old[1], old[2] | {trigger})
+    def add(number: int, moment: str, url: str, trigger: str, how: str = "just finished"):
+        old = found.get(number, (moment, url, set(), how))
+        found[number] = (min(old[0], moment), old[1], old[2] | {trigger},
+                         "just finished" if "just finished" in (old[3], how) else how)
 
     for comment in recent_comments(repo, since):
         number, body = issue_number(comment["issue_url"]), comment["body"]
@@ -915,7 +922,9 @@ def finished_tickets(config: Config, repo: str, since: str, skip: set[int]) -> d
     for event in recent_events(repo, since):
         issue = event.get("issue") or {}
         if event["event"] == "closed" and "pull_request" not in issue and issue.get("number") not in skip:
-            add(issue["number"], event["created_at"], issue["html_url"], f"event {event['id']}")
+            reason = event.get("state_reason") or issue.get("state_reason")
+            add(issue["number"], event["created_at"], issue["html_url"], f"event {event['id']}",
+                CLOSED_AS.get(reason, "just finished"))
     return found
 
 
@@ -935,7 +944,7 @@ def waiters(config: Config, repo: str, targets: set[int], skip: set[int]) -> lis
         if last is None:
             continue
         state, waiting = state_and_waiting(last["body"], config)
-        if state == config.status.paused or waiting.startswith(config.status.none):
+        if state in {config.status.paused, config.status.done} or waiting.startswith(config.status.none):
             continue
         found += [(issue["number"], number) for number in sorted(waiting_tickets(waiting) & targets - {issue["number"]})]
     return found
@@ -951,11 +960,12 @@ def finished_waits(config: Config, repo: str, since: str, reported: set[str], ch
                 if not item[2] <= checked}
     if not finished:
         return []
-    found = [(finished[number][0], f"#{waiting} is waiting on #{number}, which just finished {finished[number][1]}",
+    found = [(finished[number][0],
+              f"#{waiting} is waiting on #{number}, which {finished[number][3]} {finished[number][1]}",
               f"{waiting}>{number}")
              for waiting, number in waiters(config, repo, set(finished), skip) if f"{waiting}>{number}" not in reported]
     named = {int(key.split(">")[1]) for _, _, key in found}
-    for number, (_, _, triggers) in finished.items():
+    for number, (_, _, triggers, _) in finished.items():
         if number not in named:
             checked |= triggers
     return found

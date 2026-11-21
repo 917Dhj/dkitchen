@@ -3997,9 +3997,9 @@ def waiting_board(tmp_path, monkeypatch):
         state.comments[number].append(item)
         state.recent.append(item)
 
-    def close(number):
+    def close(number, reason="completed"):
         state.open.remove(number)
-        state.events.append({"id": 77, "event": "closed", "created_at": "2026-10-14T09:00:00Z",
+        state.events.append({"id": 77, "event": "closed", "state_reason": reason, "created_at": "2026-10-14T09:00:00Z",
                              "issue": {"number": number, "html_url": f"https://github.com/o/r/issues/{number}"}})
 
     def gh(path):
@@ -4104,6 +4104,61 @@ def test_a_wait_that_names_no_ticket_gets_nothing(waiting_board, waiting):
     waiting_board.post(30, "in progress", waiting)
     waiting_board.post(28, "done")
     assert finished(waiting_board) == []
+
+
+@pytest.mark.parametrize("waiting", ["等#28的结果", "#28的结果", "#28 的结果、GPU", "在等 #28", "等待（#28）完成"])
+def test_a_ticket_next_to_cjk_text_is_found(waiting_board, waiting):
+    waiting_board.post(30, "in progress", waiting)
+    waiting_board.post(28, "done")
+    assert [key for _, _, key in finished(waiting_board)] == ["30>28"]
+
+
+@pytest.mark.parametrize("waiting", ["#280", "a#28", "等o/r#28的结果"])
+def test_a_different_number_or_prefixed_ref_is_not_the_ticket(waiting_board, waiting):
+    waiting_board.post(30, "in progress", waiting)
+    waiting_board.post(28, "done")
+    assert finished(waiting_board) == []
+
+
+def test_a_localized_status_block_is_read_by_its_configured_names(waiting_board):
+    waiting_board.config = settings(waiting_board.config.root, 'repo = "o/r"\n[status]\n'
+                                    'fields = ["状态", "等待", "关键数字", "下一步"]\ndone = "完成"\nnone = "无"')
+
+    def localized(number, state, waiting):
+        waiting_board.post(number, "x")
+        waiting_board.comments[number][-1]["body"] = executor(f"状态：{state}\n等待：{waiting}\n关键数字：1\n下一步：继续")
+
+    localized(30, "进行中", "等#28的结果")
+    localized(28, "完成", "无")
+    assert [key for _, _, key in finished(waiting_board)] == ["30>28"]
+
+
+def test_a_waiter_that_is_done_gets_nothing(waiting_board):
+    waiting_board.post(30, "done", "#28")
+    waiting_board.post(28, "done")
+    assert finished(waiting_board) == []
+
+
+def test_a_blocked_waiter_still_gets_the_event(waiting_board):
+    waiting_board.post(30, "blocked", "#28")
+    waiting_board.post(28, "done")
+    assert [key for _, _, key in finished(waiting_board)] == ["30>28"]
+
+
+@pytest.mark.parametrize("reason, wording", [("not_planned", "was closed as not planned"),
+                                             ("duplicate", "was closed as a duplicate"),
+                                             ("completed", "just finished")])
+def test_the_close_reason_words_the_event(waiting_board, reason, wording):
+    waiting_board.close(28, reason)
+    [(_, line, _)] = finished(waiting_board)
+    assert line == f"#30 is waiting on #28, which {wording} https://github.com/o/r/issues/28"
+
+
+def test_a_done_status_wins_over_a_not_planned_close(waiting_board):
+    waiting_board.post(28, "done")
+    waiting_board.close(28, "not_planned")
+    [(_, line, _)] = finished(waiting_board)
+    assert "which just finished" in line
 
 
 def test_a_paused_executor_gets_nothing(waiting_board):
