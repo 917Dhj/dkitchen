@@ -29,6 +29,7 @@ A code issue is an issue in the code repo. It is never a ticket: the ticket that
 The code repo's readers see none of the kitchen. A PR, a code issue, or a reply carries:
 
 - no role or session signature, no status block, and no `Codex owner:` or other kitchen line;
+- no role named anywhere in the text: say what was done or what is needed, not which role does it ("the merge waits on CI", not "the orchestrator merges");
 - no ticket number and no link into the kitchen repo; say in the text what the change is for instead;
 - no bare `#N`, which the code repo reads as one of its own issues, except for a code issue the ticket records.
 

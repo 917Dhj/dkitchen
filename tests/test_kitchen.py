@@ -3643,6 +3643,39 @@ def test_outbound_text_with_kitchen_internals_is_refused(tmp_path, text, found):
     assert any(found in problem for problem in problems), problems
 
 
+SPLIT_CHINESE = CHINESE.replace('repo = "o/r"', 'repo = "me/kitchen"\ncode = "org/code"') + """
+[roles.aliases]
+"总设计" = ["训练设计"]
+"""
+
+
+@pytest.mark.parametrize(("text", "role"), [
+    ("结论：通过。合并由总编排做。", "总编排"),
+    ("总设计的代码审阅见那张票。", "总设计"),
+    ("结果和执行者的逐字节相同。", "执行者"),
+    ("这个 PR 现在已不是草稿，在等核查。", "核查"),
+    ("## 说明：请训练设计再看一遍", "训练设计"),
+])
+def test_outbound_text_naming_a_role_mid_line_is_refused(tmp_path, text, role):
+    from dkitchen import outbound
+    problems = outbound.leaks(settings(tmp_path, SPLIT_CHINESE), text, set())
+    assert problems == [f"line 1 names the {role} role; say what was done or what is needed, not which role does it"]
+
+
+def test_outbound_signature_and_role_names_are_each_reported_once(tmp_path):
+    from dkitchen import outbound
+    problems = outbound.leaks(settings(tmp_path, SPLIT_CHINESE), "## 核查：总设计和总设计都看过", set())
+    assert problems == ["line 1 opens with the 核查 signature",
+                        "line 1 names the 总设计 role; say what was done or what is needed, not which role does it"]
+
+
+def test_outbound_ascii_role_names_count_only_as_signatures(tmp_path):
+    from dkitchen import outbound
+    text = "Runs on a ThreadPoolExecutor; the designer of this API asked for a verifier step.\nOrchestrator config moves.\n"
+    assert outbound.leaks(settings(tmp_path, SHARED), text, set()) == []
+    assert outbound.leaks(settings(tmp_path, SPLIT_CHINESE), "用户 2026-11-18 定的规则保留。", set()) == []
+
+
 def test_outbound_text_without_kitchen_internals_passes(tmp_path):
     from dkitchen import outbound
     text = "Fix the loader\n\nStatus: green in CI\nFixes #5, see org/code#12 and https://github.com/org/code/pull/3\n"
