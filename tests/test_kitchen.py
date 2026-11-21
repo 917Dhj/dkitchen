@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -4283,6 +4284,8 @@ def jobs(tmp_path, monkeypatch):
     """A temp run registry with a fake clock; ticket #26 is owned by THREAD, and nothing reaches GitHub."""
     from contextlib import ExitStack
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    monkeypatch.chdir(tmp_path)
     asks = []
     monkeypatch.setattr(ding, "issue_map", lambda repo=None, raise_errors=False: asks.append(repo) or {THREAD: {26}})
     state = SimpleNamespace(config=config.Config(root=tmp_path, repo="o/r"), clock=T0, asks=asks, tmp=tmp_path,
@@ -4317,6 +4320,15 @@ def jobs(tmp_path, monkeypatch):
         watching(**options) if options else state.config, "o/r", ding.registered_runs(), set(reported), state.clock)
     yield state
     state.stack.close()
+
+
+def test_another_projects_stalled_or_overrun_job_gives_no_event(jobs, monkeypatch):
+    other = jobs.tmp / "other"
+    subprocess.run(["git", "init", "-q", str(other)], check=True)
+    monkeypatch.chdir(other)
+    jobs.start(expect_hours=1)
+    jobs.clock += 2 * 3600
+    assert jobs.stalls() == [] and jobs.overruns() == [] and jobs.asks == []
 
 
 def test_a_stalled_job_gives_one_event_naming_ticket_and_last_progress(jobs):

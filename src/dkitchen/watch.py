@@ -1028,10 +1028,13 @@ def progress_finished(run: dict) -> bool:
     return isinstance(data, dict) and data.get("state") not in (None, "running")
 
 
-def live_runs(runs: list[dict]) -> list[dict]:
+def live_runs(runs: list[dict], config: Config) -> list[dict]:
+    """The runs still running that this kitchen started; another project's job on the same host is not its own."""
     from dkitchen import ding
     alive = []
     for run in runs:
+        if not own_run(run, config):
+            continue
         try:
             os.kill(run["pid"], 0)
         except ProcessLookupError:
@@ -1075,7 +1078,7 @@ def stalled_jobs(config: Config, repo: str, runs: list[dict], reported: set[str]
         if age <= limit or key in reported:
             continue
         found.append((run, key, age, ding.progress_summary(run["progress"], moment)))
-    live = {run["run_id"] for run in live_runs([item[0] for item in found])}
+    live = {run["run_id"] for run in live_runs([item[0] for item in found], config)}
     found = [item for item in found if item[0]["run_id"] in live]
     tickets = job_tickets([item[0] for item in found], repo) if found else {}
     found = [item for item in found if item[0]["run_id"] in tickets]
@@ -1098,7 +1101,7 @@ def overrun_jobs(config: Config, repo: str, runs: list[dict], reported: set[str]
         hours = moment / 3600 - run["started_ns"] / 3.6e12
         if hours > config.watch.overrun_factor * run["expect_hours"]:
             found.append((run, hours))
-    live = {run["run_id"] for run in live_runs([item[0] for item in found])}
+    live = {run["run_id"] for run in live_runs([item[0] for item in found], config)}
     found = [item for item in found if item[0]["run_id"] in live]
     tickets = job_tickets([item[0] for item in found], repo) if found else {}
     found = [item for item in found if item[0]["run_id"] in tickets]
