@@ -76,15 +76,26 @@ def leaks(config: Config, text: str, allowed: set[int]) -> list[str]:
     separator = watch.normalized(config.roles.separator).strip()
     names = {watch.normalized(name) for name in watch.role_names(config) if name != config.roles.user}
     names |= {watch.normalized(alias) for aliases in config.roles.aliases.values() for alias in aliases}
+    by_length = sorted(names, key=len, reverse=True)
+    # A name in a non-Latin script is the role wherever it stands; an ASCII one is also an everyday word, such as
+    # the Executor of ThreadPoolExecutor, so only its signature counts.
+    anywhere = [name for name in by_length if not name.isascii()]
     fields = [watch.normalized(name) for name in config.status.fields]
     kitchen = config.kitchen_repo().lower()
     problems, status_lines = [], []
     for number, raw in enumerate(text.splitlines(), 1):
         line = watch.normalized(raw).strip()
-        signed = next((name for name in sorted(names, key=len, reverse=True) if line.startswith(name + separator)), None)
+        opening = line.lstrip("#> \t")  # a markdown heading or quote still opens the line with the signature
+        signed = next((name for name in by_length if opening.startswith(name + separator)), None)
         if signed is not None:
             problems.append(f"line {number} opens with the {signed} signature")
-        marker = next((marker for marker in SESSION_MARKERS if line.startswith(marker)), None)
+        rest = opening[len(signed + separator):] if signed is not None else opening
+        for name in anywhere:
+            if name in rest:
+                rest = rest.replace(name, "\0")
+                problems.append(f"line {number} names the {name} role; say what was done or what is needed, not which "
+                                "role does it")
+        marker = next((marker for marker in SESSION_MARKERS if opening.startswith(marker)), None)
         if marker is not None:
             problems.append(f"line {number} carries the kitchen marker {marker!r}")
         if any(line.startswith(field + separator) for field in fields):
@@ -218,14 +229,19 @@ def read_text(args) -> tuple[str, str]:
     return title, body
 
 
+def refuse_leaks(config: Config, text: str, found: Links | None, where: str = "") -> None:
+    """Raise when text carries kitchen internals into the code repo; the ticket's recorded code issues are allowed."""
+    allowed = {number for repo, number in found.issues if repo == config.code_repo()} if found else set()
+    problems = leaks(config, text, allowed)
+    if problems:
+        raise ValueError(f"the text carries kitchen internals into the code repo; nothing posted{where}:\n"
+                         + "\n".join(f"- {problem}" for problem in problems))
+
+
 def checked(config: Config, ticket: int, title: str, body: str) -> Links:
     """The ticket's links, after refusing text that carries kitchen internals."""
     found = links(config, ticket)
-    allowed = {number for repo, number in found.issues if repo == config.code_repo()}
-    problems = leaks(config, f"{title}\n{body}", allowed)
-    if problems:
-        raise ValueError("the text carries kitchen internals into the code repo; nothing posted (line 1 is the title):\n"
-                         + "\n".join(f"- {problem}" for problem in problems))
+    refuse_leaks(config, f"{title}\n{body}", found, " (line 1 is the title)")
     return found
 
 

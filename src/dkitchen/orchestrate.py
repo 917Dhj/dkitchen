@@ -122,7 +122,7 @@ def review(args, config: Config) -> int:
     if config.shared and getattr(args, "ticket", None) is None:
         return fail(f"{config.code_repo()} is shared, so a PR verdict goes on its ticket, not the PR: "
                     "add --ticket N, the ticket whose PR line names it")
-    if not config.shared and getattr(args, "ticket", None) is not None:
+    if not config.shared and not config.split and getattr(args, "ticket", None) is not None:
         return fail(f"{config.code_repo()} is not shared, so a PR verdict goes on the PR; drop --ticket")
     if not config.shared and not config.merge.review_check:
         return fail("ding review requires [merge] review_check")
@@ -151,6 +151,17 @@ def review(args, config: Config) -> int:
                         "the PR. Nothing posted")
         return verdict.review_ticket(args, config, f"{line.replace('{sha}', sha[:8])} ({repo}#{args.pr})")
     body = f"{line.replace('{sha}', sha[:8])}\n\n{Path(args.body_file).read_text(encoding='utf-8')}"
+    if config.split:
+        from dkitchen import outbound
+
+        try:
+            found = outbound.links(config, args.ticket) if args.ticket is not None else None
+            if found is not None and (repo, args.pr) not in found.prs:
+                return fail(f"#{args.ticket} has no PR line for {repo}#{args.pr}; `ding pr` writes one when it opens "
+                            "the PR. No comment, no status")
+            outbound.refuse_leaks(config, body, found)
+        except (RuntimeError, ValueError, KeyError, TypeError) as error:
+            return fail(f"{error}. No comment, no status")
     result = call(config, "gh", "api", f"repos/{repo}/issues/{args.pr}/comments", "-f", f"body={body}")
     if result.returncode:
         return fail(f"review comment failed: {result.stderr.strip()}; no status written")
@@ -289,8 +300,21 @@ def relay(args, config: Config) -> int:
     return comment(config, repo, args.ticket, signed(args.comment or message, config))
 
 
+def log_is_empty(items: list[str], pending: list[str], config: Config) -> bool:
+    """True when the entry says nothing: no item with text and no pending matter besides the "none" word."""
+    return not any(item.strip() for item in items) and all(
+        not matter.strip() or matter.strip() == config.status.none for matter in pending)
+
+
 def log(args, config: Config) -> int:
     issue = args.issue or config.log.issue
     if issue is None:
         return fail("no orchestrator log ticket; set [log] issue in .dkitchen.toml or pass --issue")
+    if config.log.issue is not None and issue != config.log.issue and not getattr(args, "force", False):
+        return fail(f"#{issue} is not the orchestrator log ticket (#{config.log.issue}). Use `gh issue comment` for a "
+                    f"note on a work ticket, or `ding relay --comment` when its executor should hear it too; or pass --force "
+                    "to log here anyway")
+    if log_is_empty(args.item, args.pending, config):
+        print("ding: log entry is empty (no items, nothing pending); nothing posted", file=sys.stderr)
+        return 0
     return comment(config, config.repository(), issue, log_body(args.item, args.pending, datetime.now(timezone.utc), config))

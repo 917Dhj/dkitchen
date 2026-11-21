@@ -2102,6 +2102,9 @@ def main(argv=None) -> int:
         description="With PR SHA: post a review comment and success/failure commit status using [merge] review_check.\n"
                     "In a shared code repo (shared = true), the PR is left alone: add --ticket N, the ticket whose\n"
                     "PR line names the PR, and the verdict is posted there as below, with a line naming the HEAD.\n"
+                    "When the kitchen lives in its own repo, the comment is refused, with no status written, if it\n"
+                    "carries kitchen internals as `ding pr` would refuse them; --ticket N then names the ticket whose\n"
+                    "PR line names the PR, and a bare #N may cite the code issues it records.\n"
                     "With --ticket N: post a verdict on a run stage of ticket N (a PR number is refused). The\n"
                     "file's line 1 must start with the verifier's signature; the comment adds [review] verdict_pass\n"
                     "or verdict_changes as line 2, and on changes a handoff to the ticket's design line (named in its\n"
@@ -2114,7 +2117,7 @@ def main(argv=None) -> int:
                "  ding review --ticket 42 changes --body-file verdict.md   # verdict.md opens with 'Verifier: '")
     sub.add_argument("words", nargs="+", metavar="PR SHA VERDICT",
                      help="PR number, reviewed HEAD (full SHA or prefix), and pass or changes; with --ticket, only the verdict")
-    sub.add_argument("--ticket", type=int, help="Ticket whose run stage was verified, instead of a PR")
+    sub.add_argument("--ticket", type=int, help="Ticket whose run stage was verified, instead of a PR; with PR SHA, the ticket whose code issues the text may cite")
     sub.add_argument("--body-file", required=True, type=Path, help="UTF-8 review text")
     sub = commands.add_parser("merge", help="Merge a reviewed PR at the reviewed HEAD",
                               description="Merge only at the reviewed HEAD into the default branch. With [merge] review_check set, "
@@ -2126,10 +2129,16 @@ def main(argv=None) -> int:
                                           "default branch moves.")
     sub.add_argument("pr", type=int, help="PR number")
     sub.add_argument("sha", help="The HEAD that was reviewed (full or prefix)")
-    sub = commands.add_parser("log", help="Post an entry to the orchestrator log ticket")
+    sub = commands.add_parser("log", help="Post an entry to the orchestrator log ticket",
+                              description="Post a signed, UTC-stamped entry to the orchestrator log ticket. With [log] issue "
+                                          "set, --issue N for any other ticket is refused (use `gh issue comment` for a note on "
+                                          "a work ticket, or `ding relay --comment` when its executor should hear it too) unless --force is given. An entry with no items and nothing "
+                                          "pending is not posted; ding says so on stderr and exits 0.")
     sub.add_argument("--item", action="append", required=True, help="One automatic action; repeat for more")
     sub.add_argument("--pending", action="append", default=[], help="One matter waiting for the user; repeat for more")
-    sub.add_argument("--issue", type=int, help="Orchestrator log ticket (default: [log] issue in .dkitchen.toml)")
+    sub.add_argument("--issue", type=int, help="Orchestrator log ticket (default: [log] issue in .dkitchen.toml); "
+                                               "refused when it differs from [log] issue, unless --force")
+    sub.add_argument("--force", action="store_true", help="Log to a ticket other than [log] issue")
     sub = commands.add_parser("night", help="Open, show, or close night orders on the orchestrator log ticket",
                               description="Open, show, or close night orders on [log] issue. Reads only that ticket's "
                                           "comments, starting with the most recent; writes only comments; calls no model. "
@@ -2403,7 +2412,7 @@ def main(argv=None) -> int:
         if args.action == "review":
             shape = ["verdict"] if len(args.words) == 1 and args.ticket is not None else ["pr", "sha", "verdict"]
             if len(args.words) != len(shape) or args.words[-1] not in {"pass", "changes"}:
-                parser.error("review takes PR SHA pass|changes (with --ticket N in a shared code repo), "
+                parser.error("review takes PR SHA pass|changes (with --ticket N in a shared code repo, or in a kitchen kept in its own repo), "
                              "or --ticket N pass|changes")
             values = dict(zip(shape, args.words))
             if "pr" in values and not values["pr"].isdigit():
