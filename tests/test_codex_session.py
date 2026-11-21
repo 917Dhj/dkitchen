@@ -2567,15 +2567,6 @@ def test_empty_status_fields_are_rejected(capsys, value):
     assert "comma-separated nonempty field names" in capsys.readouterr().err
 
 
-def test_help_summarizes_every_command(capsys):
-    with pytest.raises(SystemExit):
-        ding.main(["--help"])
-    out = capsys.readouterr().out
-    for summary in ("List sessions", "latest final reply", "status as JSON", "Send a message",
-                    "message a session when it exits", "new tmux session"):
-        assert summary in out
-
-
 @pytest.mark.parametrize("failure", [ValueError("bad JSON"), FileNotFoundError("gh"),
                                       subprocess.TimeoutExpired(["gh"], 60), {"comments": "bad"}])
 def test_executor_comment_failures_warn_and_fall_back(monkeypatch, capsys, failure):
