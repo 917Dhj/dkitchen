@@ -967,11 +967,28 @@ def job_label(run: dict) -> str:
 
 def job_tickets(runs: list[dict], repo: str) -> dict[str, str]:
     """Ticket text for each run's thread, from the registry's launching session and the tickets it owns, as
-    `tmux_issues` ties them. One GitHub read, made only when a job is being reported."""
+    `tmux_issues` ties them. One GitHub read, made only when a job is being reported. A failed read returns {}, so
+    the caller reports nothing this poll and retries on the next."""
     from dkitchen import ding
-    owned = ding.issue_map(repo or None)
+    try:
+        owned = ding.issue_map(repo or None, raise_errors=True)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.TimeoutExpired) as exc:
+        print(f"ding: job ticket lookup failed; reporting jobs on the next poll: {' '.join(str(exc).split())}",
+              file=sys.stderr)
+        return {}
     return {run["run_id"]: ", ".join(f"#{number}" for number in sorted(owned.get(run["thread_id"], set())))
             or "no ticket found" for run in runs}
+
+
+def progress_finished(run: dict) -> bool:
+    """True when the run's progress file is readable and no longer says `running`, a cheap skip before `os.kill`."""
+    if "progress" not in run:
+        return False
+    try:
+        data = json.loads(Path(run["progress"]).read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeError):
+        return False
+    return isinstance(data, dict) and data.get("state") not in (None, "running")
 
 
 def live_runs(runs: list[dict]) -> list[dict]:
@@ -989,7 +1006,7 @@ def live_runs(runs: list[dict]) -> list[dict]:
     return alive
 
 
-def stalled_jobs(config: Config, repo: str, reported: set[str], moment: float) -> list[tuple[str, str, str]]:
+def stalled_jobs(config: Config, repo: str, runs: list[dict], reported: set[str], moment: float) -> list[tuple[str, str, str]]:
     """(time, line, "run_id@updated") for each running `ding launch --progress` job whose progress file, still
     `running`, has not changed for [watch] stale_minutes (and for the board's STALE time). The key holds the file's
     update time, so a job that moves and stalls again is a new stall. Reads local files only; GitHub is read only
@@ -999,7 +1016,7 @@ def stalled_jobs(config: Config, repo: str, reported: set[str], moment: float) -
         return []
     limit = max(config.watch.stale_minutes * 60, ding.STALE_PROGRESS)
     found = []
-    for run in ding.registered_runs():
+    for run in runs:
         if "progress" not in run:
             continue
         try:
@@ -1009,28 +1026,37 @@ def stalled_jobs(config: Config, repo: str, reported: set[str], moment: float) -
         if not isinstance(data, dict) or data.get("state") != "running":
             continue
         age = ding.progress_age(data, moment)
-        key = f"{run['run_id']}@{data['updated']['utc']}" if age is not None else ""
-        if age is None or age <= limit or key in reported:
+        if age is None:
+            try:
+                mtime = Path(run["progress"]).stat().st_mtime
+            except OSError:
+                continue
+            age, stamped = moment - mtime, f"mtime:{int(mtime)}"
+        else:
+            stamped = data["updated"]["utc"]
+        key = f"{run['run_id']}@{stamped}"
+        if age <= limit or key in reported:
             continue
         found.append((run, key, age, ding.progress_summary(run["progress"], moment)))
     live = {run["run_id"] for run in live_runs([item[0] for item in found])}
     found = [item for item in found if item[0]["run_id"] in live]
     tickets = job_tickets([item[0] for item in found], repo) if found else {}
+    found = [item for item in found if item[0]["run_id"] in tickets]
     return [(stamp(datetime.fromtimestamp(moment, timezone.utc)),
              f"{tickets[run['run_id']]}: job {job_label(run)} has made no progress for {int(age // 60)} minutes "
              f"(threshold {config.watch.stale_minutes:g}): {summary}", key)
             for run, key, age, summary in found]
 
 
-def overrun_jobs(config: Config, repo: str, reported: set[str], moment: float) -> list[tuple[str, str, str]]:
+def overrun_jobs(config: Config, repo: str, runs: list[dict], reported: set[str], moment: float) -> list[tuple[str, str, str]]:
     """(time, line, run_id) for each running `ding launch --expect-hours H` job that has run past
     [watch] overrun_factor x H, once. Reads local files only; GitHub is read only to name the ticket."""
     from dkitchen import ding
     if config.watch.overrun_factor == 0:
         return []
     found = []
-    for run in ding.registered_runs():
-        if "expect_hours" not in run or run["run_id"] in reported:
+    for run in runs:
+        if "expect_hours" not in run or run["run_id"] in reported or progress_finished(run):
             continue
         hours = moment / 3600 - run["started_ns"] / 3.6e12
         if hours > config.watch.overrun_factor * run["expect_hours"]:
@@ -1038,6 +1064,7 @@ def overrun_jobs(config: Config, repo: str, reported: set[str], moment: float) -
     live = {run["run_id"] for run in live_runs([item[0] for item in found])}
     found = [item for item in found if item[0]["run_id"] in live]
     tickets = job_tickets([item[0] for item in found], repo) if found else {}
+    found = [item for item in found if item[0]["run_id"] in tickets]
     return [(stamp(datetime.fromtimestamp(moment, timezone.utc)),
              f"{tickets[run['run_id']]}: job {job_label(run)} has run {hours:.1f} hours against its estimate of "
              f"{run['expect_hours']:g} (threshold {config.watch.overrun_factor:g}x); last progress: "
@@ -1167,8 +1194,12 @@ def watch_until_wake(args, config: Config) -> int:
             quiet, idle_found, design_found, pending, stale_ids = [], [], [], observed, set()
             wait_found = finished_waits(config, repo, since, wait_reported, wait_checked, skip) if role is None else []
             moment = time.time()
-            job_stall_found = stalled_jobs(config, repo, job_stall_reported, moment) if role is None else []
-            job_overrun_found = overrun_jobs(config, repo, job_overrun_reported, moment) if role is None else []
+            job_stall_found, job_overrun_found = [], []
+            if role is None:
+                from dkitchen import ding
+                job_runs = ding.registered_runs()
+                job_stall_found = stalled_jobs(config, repo, job_runs, job_stall_reported, moment)
+                job_overrun_found = overrun_jobs(config, repo, job_runs, job_overrun_reported, moment)
             unrouted_found, waiter_found, stalled_found, stalled_current = [], [], [], None
             checked_at = time.monotonic()
             checked_stale, checked_idle = checked_at >= next_stale, checked_at >= next_idle

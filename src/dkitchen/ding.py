@@ -526,7 +526,7 @@ def issue_session(number: int, path: str | None = None, repo: str | None = None)
         "Candidates:\n" + "\n".join(rows) + "\nSpecify a session UUID or exact session name instead.")
 
 
-def issue_map(repo: str | None = None) -> dict[str, set[int]]:
+def issue_map(repo: str | None = None, *, raise_errors: bool = False) -> dict[str, set[int]]:
     try:
         repo = repo or github_repository()
         issues = gh_records(f"repos/{repo}/issues?state=all&per_page=100")
@@ -550,6 +550,8 @@ def issue_map(repo: str | None = None) -> dict[str, set[int]]:
                 mapping.setdefault(thread_id, set()).add(number)
         return mapping
     except (OSError, ValueError, KeyError, TypeError, AttributeError, subprocess.TimeoutExpired) as exc:
+        if raise_errors:
+            raise
         print(f"ding: issue lookup failed: {' '.join(str(exc).split())}", file=sys.stderr)
         return {}
 

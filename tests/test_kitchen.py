@@ -122,6 +122,7 @@ BAD_CONFIGS = [
         ("unrouted_wait_minutes", "-1"), ("unrouted_wait_minutes", "nan"), ("unrouted_wait_minutes", "true"),
         ("executor_listener_minutes", "-1"), ("executor_listener_minutes", "true"),
         ("stale_minutes", "-1"), ("stale_minutes", "true"), ("overrun_factor", "-1"), ("overrun_factor", "nan"),
+        ("overrun_factor", "0.5"),
     ]),
     *((text, "aliases") for text in ['[roles]\naliases = "wrong"', '[roles.aliases]\nDesigner = []',
                                      '[roles.aliases]\nDesigner = [1]', '[roles.aliases]\nDesigner = [""]',
@@ -4165,7 +4166,7 @@ def jobs(tmp_path, monkeypatch):
     from contextlib import ExitStack
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     asks = []
-    monkeypatch.setattr(ding, "issue_map", lambda repo=None: asks.append(repo) or {THREAD: {26}})
+    monkeypatch.setattr(ding, "issue_map", lambda repo=None, raise_errors=False: asks.append(repo) or {THREAD: {26}})
     state = SimpleNamespace(config=config.Config(root=tmp_path, repo="o/r"), clock=T0, asks=asks, tmp=tmp_path,
                             stack=ExitStack())
 
@@ -4193,9 +4194,9 @@ def jobs(tmp_path, monkeypatch):
 
     state.start, state.move = start, move
     state.stalls = lambda reported=(), **options: watch.stalled_jobs(
-        watching(**options) if options else state.config, "o/r", set(reported), state.clock)
+        watching(**options) if options else state.config, "o/r", ding.registered_runs(), set(reported), state.clock)
     state.overruns = lambda reported=(), **options: watch.overrun_jobs(
-        watching(**options) if options else state.config, "o/r", set(reported), state.clock)
+        watching(**options) if options else state.config, "o/r", ding.registered_runs(), set(reported), state.clock)
     yield state
     state.stack.close()
 
@@ -4249,6 +4250,55 @@ def test_a_finished_progress_file_or_an_ended_run_gives_no_stall(jobs):
     assert "other/progress.json" in line
     jobs.stack.close()
     assert jobs.stalls() == []
+
+
+def test_a_failed_ticket_lookup_reports_nothing_and_the_next_poll_retries(jobs, monkeypatch, capsys):
+    jobs.start(expect_hours=1)
+    jobs.clock += 2 * 3600
+
+    def fail(repo=None, raise_errors=False):
+        raise OSError("gh down")
+
+    monkeypatch.setattr(ding, "issue_map", fail)
+    assert jobs.stalls() == [] and jobs.overruns() == []
+    assert "ticket lookup failed" in capsys.readouterr().err
+    monkeypatch.setattr(ding, "issue_map", lambda repo=None, raise_errors=False: {THREAD: {26}})
+    assert len(jobs.stalls()) == 1 and len(jobs.overruns()) == 1
+
+
+def test_issue_map_raises_on_a_gh_failure_only_when_asked(monkeypatch, capsys):
+    def fail(path):
+        raise OSError("gh down")
+
+    monkeypatch.setattr(ding, "gh_records", fail)
+    assert ding.issue_map("o/r") == {}
+    assert "issue lookup failed" in capsys.readouterr().err
+    with pytest.raises(OSError):
+        ding.issue_map("o/r", raise_errors=True)
+
+
+@pytest.mark.parametrize("updated", [None, "not a time", 5])
+def test_a_running_file_without_a_usable_update_time_ages_by_its_mtime(jobs, updated):
+    _, path = jobs.start()
+    data = json.loads(path.read_text())
+    if updated is None:
+        del data["updated"]
+    else:
+        data["updated"] = {"utc": updated}
+    path.write_text(json.dumps(data))
+    os.utime(path, (jobs.clock, jobs.clock))
+    assert jobs.stalls() == []
+    jobs.clock += 31 * 60
+    [(_, line, key)] = jobs.stalls()
+    assert "no progress for 31 minutes" in line
+    assert jobs.stalls({key}) == []
+
+
+def test_a_running_file_whose_process_is_gone_gives_no_stall_or_overrun(jobs):
+    jobs.start(expect_hours=1)
+    jobs.clock += 5 * 3600
+    jobs.stack.close()
+    assert jobs.stalls() == [] and jobs.overruns() == []
 
 
 def test_a_job_over_one_and_a_half_times_its_estimate_gives_one_overrun_event(jobs):

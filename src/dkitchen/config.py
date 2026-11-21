@@ -487,8 +487,8 @@ def section(cls, values: object, name: str):
                 raise ValueError(f"{FILE}: [watch] {key} must be a nonnegative finite number of minutes")
         elif key == "overrun_factor":
             if (isinstance(value, bool) or not isinstance(value, (int, float))
-                    or not math.isfinite(value) or value < 0):
-                raise ValueError(f"{FILE}: [watch] overrun_factor must be a nonnegative finite number")
+                    or not math.isfinite(value) or value < 0 or 0 < value < 1):
+                raise ValueError(f"{FILE}: [watch] overrun_factor must be 0 (off) or a finite number of at least 1")
         elif key == "aliases":
             if (not isinstance(value, dict) or any(
                     not isinstance(role, str) or not role.strip()
