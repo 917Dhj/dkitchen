@@ -218,14 +218,19 @@ def read_text(args) -> tuple[str, str]:
     return title, body
 
 
+def refuse_leaks(config: Config, text: str, found: Links | None, where: str = "") -> None:
+    """Raise when text carries kitchen internals into the code repo; the ticket's recorded code issues are allowed."""
+    allowed = {number for repo, number in found.issues if repo == config.code_repo()} if found else set()
+    problems = leaks(config, text, allowed)
+    if problems:
+        raise ValueError(f"the text carries kitchen internals into the code repo; nothing posted{where}:\n"
+                         + "\n".join(f"- {problem}" for problem in problems))
+
+
 def checked(config: Config, ticket: int, title: str, body: str) -> Links:
     """The ticket's links, after refusing text that carries kitchen internals."""
     found = links(config, ticket)
-    allowed = {number for repo, number in found.issues if repo == config.code_repo()}
-    problems = leaks(config, f"{title}\n{body}", allowed)
-    if problems:
-        raise ValueError("the text carries kitchen internals into the code repo; nothing posted (line 1 is the title):\n"
-                         + "\n".join(f"- {problem}" for problem in problems))
+    refuse_leaks(config, f"{title}\n{body}", found, " (line 1 is the title)")
     return found
 
 
