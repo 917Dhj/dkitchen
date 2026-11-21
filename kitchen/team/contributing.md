@@ -32,7 +32,7 @@ The code repo's readers see none of the kitchen. A PR, a code issue, or a reply 
 - no ticket number and no link into the kitchen repo; say in the text what the change is for instead;
 - no bare `#N`, which the code repo reads as one of its own issues, except for a code issue the ticket records.
 
-`ding pr` and `ding code-issue` refuse text that breaks these, and post nothing. Fix the text; never work around the check.
+`ding pr`, `ding code-issue` and `ding review` refuse text that breaks these, and post nothing. Pass `ding review` the ticket whose `PR:` line names the PR with `--ticket N`, so a bare `#N` may name a code issue it records. Fix the text; never work around the check.
 <!-- /module:split -->
 <!-- module:shared -->
 

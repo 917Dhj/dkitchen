@@ -81,10 +81,11 @@ def leaks(config: Config, text: str, allowed: set[int]) -> list[str]:
     problems, status_lines = [], []
     for number, raw in enumerate(text.splitlines(), 1):
         line = watch.normalized(raw).strip()
-        signed = next((name for name in sorted(names, key=len, reverse=True) if line.startswith(name + separator)), None)
+        opening = line.lstrip("#> \t")  # a markdown heading or quote still opens the line with the signature
+        signed = next((name for name in sorted(names, key=len, reverse=True) if opening.startswith(name + separator)), None)
         if signed is not None:
             problems.append(f"line {number} opens with the {signed} signature")
-        marker = next((marker for marker in SESSION_MARKERS if line.startswith(marker)), None)
+        marker = next((marker for marker in SESSION_MARKERS if opening.startswith(marker)), None)
         if marker is not None:
             problems.append(f"line {number} carries the kitchen marker {marker!r}")
         if any(line.startswith(field + separator) for field in fields):
@@ -218,14 +219,19 @@ def read_text(args) -> tuple[str, str]:
     return title, body
 
 
+def refuse_leaks(config: Config, text: str, found: Links | None, where: str = "") -> None:
+    """Raise when text carries kitchen internals into the code repo; the ticket's recorded code issues are allowed."""
+    allowed = {number for repo, number in found.issues if repo == config.code_repo()} if found else set()
+    problems = leaks(config, text, allowed)
+    if problems:
+        raise ValueError(f"the text carries kitchen internals into the code repo; nothing posted{where}:\n"
+                         + "\n".join(f"- {problem}" for problem in problems))
+
+
 def checked(config: Config, ticket: int, title: str, body: str) -> Links:
     """The ticket's links, after refusing text that carries kitchen internals."""
     found = links(config, ticket)
-    allowed = {number for repo, number in found.issues if repo == config.code_repo()}
-    problems = leaks(config, f"{title}\n{body}", allowed)
-    if problems:
-        raise ValueError("the text carries kitchen internals into the code repo; nothing posted (line 1 is the title):\n"
-                         + "\n".join(f"- {problem}" for problem in problems))
+    refuse_leaks(config, f"{title}\n{body}", found, " (line 1 is the title)")
     return found
 
 

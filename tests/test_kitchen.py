@@ -3630,6 +3630,8 @@ def test_pr_verdict_ticket_flag_follows_whether_the_repo_is_shared(tmp_path, cap
 
 @pytest.mark.parametrize(("text", "found"), [
     ("Fix the loader\n\nDesigner: please look", "opens with the Designer signature"),
+    ("Fix the loader\n\n## Verifier: PR 14 holds", "opens with the Verifier signature"),
+    ("Fix the loader\n\n> Designer: please look", "opens with the Designer signature"),
     ("Fix\n\nCodex session: 019a", "kitchen marker 'Codex session:'"),
     ("Fix\nStatus: done\nWaiting on: none\n", "are a status block"),
     ("Fix, see https://github.com/me/kitchen/issues/3", "names the kitchen repo me/kitchen"),
@@ -3712,6 +3714,65 @@ def test_pr_with_kitchen_internals_posts_nothing(tmp_path, monkeypatch, capsys):
     err = capsys.readouterr().err
     assert code == 1 and "carries kitchen internals" in err and "bare #42" in err
     assert not any(call[:3] in {("gh", "pr", "create"), ("gh", "issue", "comment")} for call in calls)
+
+
+SPLIT_REVIEW = 'repo = "me/kitchen"\ncode = "org/code"\n[merge]\nreview_check = "review"\n'
+REVIEW_HEAD = "abcdef0123456789"
+
+
+def split_review(tmp_path, monkeypatch, body, *, ticket=None, pr=7):
+    loaded = settings(tmp_path, SPLIT_REVIEW)
+    (tmp_path / "review.md").write_text(body, encoding="utf-8")
+    calls = []
+    gh_router(monkeypatch, [
+        (("pr", "view"), json.dumps({"headRefOid": REVIEW_HEAD})),
+        (("--paginate", "me/kitchen/issues/42/comments"), TICKET_WITH_PR),
+        (("repos/me/kitchen/issues/42",), json.dumps({"body": "Goal"})),
+        (("issues/7/comments",), json.dumps({"html_url": "https://github.com/org/code/pull/7#issuecomment-1"})),
+        (("statuses",), "{}"),
+    ], calls)
+    args = SimpleNamespace(pr=pr, sha=REVIEW_HEAD[:8], verdict="pass", ticket=ticket, body_file=tmp_path / "review.md")
+    return orchestrate.review(args, loaded), calls
+
+
+def test_review_with_kitchen_internals_posts_nothing_and_sets_no_status(tmp_path, monkeypatch, capsys):
+    code, calls = split_review(tmp_path, monkeypatch, "Verifier: the change holds\nSee #42\n")
+    err = capsys.readouterr().err
+    assert code == 1 and "carries kitchen internals" in err and "bare #42" in err and "opens with the Verifier signature" in err
+    assert not any("issues/7/comments" in " ".join(call) or "statuses" in " ".join(call) for call in calls)
+
+
+def test_review_without_kitchen_internals_posts_as_before(tmp_path, monkeypatch, capsys):
+    code, calls = split_review(tmp_path, monkeypatch, "The loader keeps its rows.\n")
+    assert code == 0
+    comment = next(call for call in calls if "issues/7/comments" in " ".join(call))
+    assert comment[-1].startswith(f"body=Reviewed {REVIEW_HEAD[:8]}: pass\n\nThe loader keeps its rows.")
+    assert any(f"statuses/{REVIEW_HEAD}" in " ".join(call) for call in calls)
+
+
+def test_review_may_name_a_code_issue_the_ticket_records(tmp_path, monkeypatch, capsys):
+    code, calls = split_review(tmp_path, monkeypatch, "Fixes the loader bug in #5.\n", ticket=42)
+    assert code == 0, capsys.readouterr().err
+    assert any("issues/7/comments" in " ".join(call) for call in calls)
+    code, calls = split_review(tmp_path, monkeypatch, "Fixes the loader bug in #6.\n", ticket=42)
+    assert code == 1 and "bare #6" in capsys.readouterr().err
+    assert not any("issues/7/comments" in " ".join(call) for call in calls)
+
+
+def test_review_ticket_must_name_the_pr(tmp_path, monkeypatch, capsys):
+    code, calls = split_review(tmp_path, monkeypatch, "Fixes the loader bug in #5.\n", ticket=42, pr=8)
+    assert code == 1 and "no PR line for org/code#8" in capsys.readouterr().err
+    assert not any("comments" in call[-1] and "body=" in call[-1] or "statuses" in " ".join(call) for call in calls)
+
+
+def test_review_in_a_single_repo_kitchen_is_not_checked(tmp_path, monkeypatch):
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nreview_check = "review"\n')
+    (tmp_path / "review.md").write_text("Verifier: see #42\n", encoding="utf-8")
+    calls = []
+    gh_router(monkeypatch, [(("pr", "view"), json.dumps({"headRefOid": REVIEW_HEAD})),
+                            (("issues/7/comments",), json.dumps({"html_url": "https://x"})), (("statuses",), "{}")], calls)
+    args = SimpleNamespace(pr=7, sha=REVIEW_HEAD[:8], verdict="pass", ticket=None, body_file=tmp_path / "review.md")
+    assert orchestrate.review(args, loaded) == 0
 
 
 def test_pr_ready_marks_only_the_tickets_own_pr(tmp_path, monkeypatch, capsys):

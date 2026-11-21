@@ -2069,6 +2069,9 @@ def main(argv=None) -> int:
         description="With PR SHA: post a review comment and success/failure commit status using [merge] review_check.\n"
                     "In a shared code repo (shared = true), the PR is left alone: add --ticket N, the ticket whose\n"
                     "PR line names the PR, and the verdict is posted there as below, with a line naming the HEAD.\n"
+                    "When the kitchen lives in its own repo, the comment is refused, with no status written, if it\n"
+                    "carries kitchen internals as `ding pr` would refuse them; --ticket N then names the ticket whose\n"
+                    "PR line names the PR, and a bare #N may cite the code issues it records.\n"
                     "With --ticket N: post a verdict on a run stage of ticket N (a PR number is refused). The\n"
                     "file's line 1 must start with the verifier's signature; the comment adds [review] verdict_pass\n"
                     "or verdict_changes as line 2, and on changes a handoff to the ticket's design line (named in its\n"
@@ -2081,7 +2084,7 @@ def main(argv=None) -> int:
                "  ding review --ticket 42 changes --body-file verdict.md   # verdict.md opens with 'Verifier: '")
     sub.add_argument("words", nargs="+", metavar="PR SHA VERDICT",
                      help="PR number, reviewed HEAD (full SHA or prefix), and pass or changes; with --ticket, only the verdict")
-    sub.add_argument("--ticket", type=int, help="Ticket whose run stage was verified, instead of a PR")
+    sub.add_argument("--ticket", type=int, help="Ticket whose run stage was verified, instead of a PR; with PR SHA, the ticket whose code issues the text may cite")
     sub.add_argument("--body-file", required=True, type=Path, help="UTF-8 review text")
     sub = commands.add_parser("merge", help="Merge a reviewed PR at the reviewed HEAD",
                               description="Merge only at the reviewed HEAD into the default branch. With [merge] review_check set, "
@@ -2373,7 +2376,7 @@ def main(argv=None) -> int:
         if args.action == "review":
             shape = ["verdict"] if len(args.words) == 1 and args.ticket is not None else ["pr", "sha", "verdict"]
             if len(args.words) != len(shape) or args.words[-1] not in {"pass", "changes"}:
-                parser.error("review takes PR SHA pass|changes (with --ticket N in a shared code repo), "
+                parser.error("review takes PR SHA pass|changes (with --ticket N in a shared code repo, or in a kitchen kept in its own repo), "
                              "or --ticket N pass|changes")
             values = dict(zip(shape, args.words))
             if "pr" in values and not values["pr"].isdigit():
