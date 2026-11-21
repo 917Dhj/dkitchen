@@ -7,6 +7,9 @@ Wakes on:
   [watch] executor_listener_minutes, once per executor comment;
 - unanswered designer/verifier requests older than [watch] design_answer_minutes, once per executor comment;
 - comments from the user (no role signature);
+- a ticket finishing (an executor `done` status, or closed) while another open ticket's latest executor status
+  names it as `#N` in its waiting field, once per waiting ticket and finished ticket (a waiter whose latest
+  status is done or paused is skipped; a ticket closed as not planned or a duplicate is reported as closed);
 - status labels being added, and newly opened PRs;
 - stalled lines, at most once a day each: open draft PRs, and in-progress tickets whose status names no wait,
   not updated for --stalled-hours;
@@ -27,6 +30,7 @@ session refuses to start, and a running one exits once another session takes the
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 import fcntl
 import json
@@ -48,6 +52,9 @@ PR_NAMED = re.compile(r"(?<![A-Za-z])PR\s*#?\s*(\d+)|https://github\.com/([\w.-]
 VIEWER: list[str] = []  # the gh login, read once: in a split kitchen, the user's and the agents' code repo account
 STALLED_EVERY_HOURS = 24  # the orchestrator's watch reports each stalled item at most once a day
 WAITER_LOOKBACK_DAYS = 7  # older inbox records are not rechecked; a silent executor was reported long before
+TICKET_NAMED = re.compile(r"(?<![A-Za-z0-9_/#])#([1-9]\d*)(?!\d)")
+RECENT: ContextVar[dict[tuple, list[dict]] | None] = ContextVar("RECENT", default=None)
+# newer() results shared by the checks of one poll; set only while a watch runs
 
 
 def gh(path: str) -> list[dict]:
@@ -59,13 +66,27 @@ def gh(path: str) -> list[dict]:
 
 def newer(path: str, field: str, since: str, pages: int = 3) -> list[dict]:
     """Pages of a newest-first listing until an item is older than `since`."""
+    key = (path, field, since, pages)
+    shared = RECENT.get()
+    if shared is not None and key in shared:
+        return shared[key]
     items = []
     for page in range(1, pages + 1):
         batch = gh(f"{path}&per_page=100&page={page}")
         items.extend(item for item in batch if item[field] >= since)
         if len(batch) < 100 or batch[-1][field] < since:
             break
+    if shared is not None:
+        shared[key] = items
     return items
+
+
+def recent_comments(repo: str, since: str) -> list[dict]:
+    return newer(f"repos/{repo}/issues/comments?since={since}&sort=updated&direction=desc", "updated_at", since)
+
+
+def recent_events(repo: str, since: str) -> list[dict]:
+    return newer(f"repos/{repo}/issues/events?", "created_at", since)
 
 
 def viewer() -> str:
@@ -279,7 +300,7 @@ def collect(config: Config, repo: str, since: str, labels_since: str, seen: set[
                if role is None else set())
     verifier, user, executor = config.roles.verifier, config.roles.user, config.roles.executor
     found = []
-    for comment in newer(f"repos/{repo}/issues/comments?since={since}&sort=updated&direction=desc", "updated_at", since):
+    for comment in recent_comments(repo, since):
         number, body = issue_number(comment["issue_url"]), comment["body"]
         who = signer(body, config)
         if number in skip:
@@ -302,7 +323,7 @@ def collect(config: Config, repo: str, since: str, labels_since: str, seen: set[
         found.append((comment["updated_at"], f"#{number} {kind}{note}: {summary(body, config)} {comment['html_url']}",
                       changes or not listed))
     if role is None:
-        for event in newer(f"repos/{repo}/issues/events?", "created_at", labels_since):
+        for event in recent_events(repo, labels_since):
             label = (event.get("label") or {}).get("name", "")
             if event["event"] == "labeled" and label.startswith(config.labels.prefix) and event["issue"]["number"] not in skip:
                 found.append((event["created_at"], f"#{event['issue']['number']} label +{label} {event['issue']['html_url']}", True))
@@ -904,6 +925,79 @@ def missing_waiters(config: Config, repo: str, reported: set[int], skip: set[int
     return found
 
 
+CLOSED_AS = {"not_planned": "was closed as not planned", "duplicate": "was closed as a duplicate"}
+
+
+def finished_tickets(config: Config, repo: str, since: str,
+                     skip: set[int]) -> dict[int, tuple[str, str, set[str], str]]:
+    """Tickets that got an executor `done` status or were closed since `since`:
+    number -> (time, link, trigger ids, "just finished" or how it was closed).
+
+    Reads the comment and event listings the poll's `collect` already fetched."""
+    found: dict[int, tuple[str, str, set[str], str]] = {}
+
+    def add(number: int, moment: str, url: str, trigger: str, how: str = "just finished"):
+        old = found.get(number, (moment, url, set(), how))
+        found[number] = (min(old[0], moment), old[1], old[2] | {trigger},
+                         "just finished" if "just finished" in (old[3], how) else how)
+
+    for comment in recent_comments(repo, since):
+        number, body = issue_number(comment["issue_url"]), comment["body"]
+        if (number not in skip and signer(body, config) == config.roles.executor
+                and state_and_waiting(body, config)[0] == config.status.done):
+            add(number, comment["updated_at"], comment["html_url"], f"comment {comment['id']}")
+    for event in recent_events(repo, since):
+        issue = event.get("issue") or {}
+        if event["event"] == "closed" and "pull_request" not in issue and issue.get("number") not in skip:
+            reason = event.get("state_reason") or issue.get("state_reason")
+            add(issue["number"], event["created_at"], issue["html_url"], f"event {event['id']}",
+                CLOSED_AS.get(reason, "just finished"))
+    return found
+
+
+def waiting_tickets(waiting: str) -> set[int]:
+    """The tickets a Waiting on field names as `#N`; a PR (`PR #N`, a pull URL) or another repo's `repo#N` is not one."""
+    return {int(number) for number in TICKET_NAMED.findall(PR_NAMED.sub(" ", waiting))}
+
+
+def waiters(config: Config, repo: str, targets: set[int], skip: set[int]) -> list[tuple[int, int]]:
+    """(waiting ticket, awaited ticket) for open tickets whose latest executor status waits on one of `targets`."""
+    found = []
+    for issue in open_issues(repo):
+        if "pull_request" in issue or issue["number"] in skip or not issue["comments"]:
+            continue
+        last = next((comment for comment in comments_backwards(repo, issue)
+                     if signer(comment["body"], config) == config.roles.executor), None)
+        if last is None:
+            continue
+        state, waiting = state_and_waiting(last["body"], config)
+        if state in {config.status.paused, config.status.done} or waiting.startswith(config.status.none):
+            continue
+        found += [(issue["number"], number) for number in sorted(waiting_tickets(waiting) & targets - {issue["number"]})]
+    return found
+
+
+def finished_waits(config: Config, repo: str, since: str, reported: set[str], checked: set[str],
+                   skip: set[int]) -> list[tuple[str, str, str]]:
+    """(time, line, "M>N") for each open ticket M whose latest executor status waits on #N, once #N is done or closed.
+
+    The open tickets are read only for a finished ticket not yet in `checked`; one that no one waited on is added
+    to `checked`, so the open tickets are not read again for it. A pair in `reported` is not found again."""
+    finished = {number: item for number, item in finished_tickets(config, repo, since, skip).items()
+                if not item[2] <= checked}
+    if not finished:
+        return []
+    found = [(finished[number][0],
+              f"#{waiting} is waiting on #{number}, which {finished[number][3]} {finished[number][1]}",
+              f"{waiting}>{number}")
+             for waiting, number in waiters(config, repo, set(finished), skip) if f"{waiting}>{number}" not in reported]
+    named = {int(key.split(">")[1]) for _, _, key in found}
+    for number, (_, _, triggers, _) in finished.items():
+        if number not in named:
+            checked |= triggers
+    return found
+
+
 def stalled_wakes(config: Config, repo: str, checkout: Path, hours: float, reported: dict[str, str],
                   skip: set[int]) -> tuple[list[tuple[str, str, str]], set[str]]:
     """Stalled items not reported in the last STALLED_EVERY_HOURS, and the keys of every item stalled now."""
@@ -955,6 +1049,14 @@ def holder_check(config: Config, repo: str, watched: str | None):
 
 
 def watch(args, config: Config) -> int:
+    token = RECENT.set({})
+    try:
+        return watch_until_wake(args, config)
+    finally:
+        RECENT.reset(token)
+
+
+def watch_until_wake(args, config: Config) -> int:
     try:
         discarded = os.path.samestat(os.fstat(sys.stdout.fileno()), os.stat(os.devnull))
     except (AttributeError, OSError, ValueError):
@@ -989,6 +1091,7 @@ def watch(args, config: Config) -> int:
     design_reported = set(state.get("design_reported", []))
     unrouted_reported = set(state.get("unrouted_reported", []))
     waiter_reported = set(state.get("waiter_reported", []))
+    wait_reported, wait_checked = set(state.get("wait_reported", [])), set()
     pr_reported, pr_observed = set(state.get("pr_reported", [])), state.get("pr_observed", {})
     stalled_reported = state.get("stalled_reported", {})
     skip = set(args.skip_issue) | ({config.log.issue} if config.log.issue else set())
@@ -1008,11 +1111,13 @@ def watch(args, config: Config) -> int:
             print(f"{message}; this watch exits without advancing its state")
             return 3
         polled = now()
+        RECENT.get().clear()
         try:
             found = collect(config, repo, since, labels_since, seen, skip, **collect_options)
             pr_found, pr_pending = pr_wakes(config, config.code_repo(), role, pr_reported, pr_observed,
                                             set() if config.split else skip)
             quiet, idle_found, design_found, pending, stale_ids = [], [], [], observed, set()
+            wait_found = finished_waits(config, repo, since, wait_reported, wait_checked, skip) if role is None else []
             unrouted_found, waiter_found, stalled_found, stalled_current = [], [], [], None
             checked_at = time.monotonic()
             checked_stale, checked_idle = checked_at >= next_stale, checked_at >= next_idle
@@ -1030,11 +1135,12 @@ def watch(args, config: Config) -> int:
                 quiet += unrouted_found
                 waiter_found = missing_waiters(config, repo, waiter_reported, skip)
                 quiet += waiter_found
-            quiet += pr_found
+            quiet += pr_found + wait_found
             if any(wakes for _, _, wakes in found) or quiet:
                 if found:
                     time.sleep(args.settle)
                     polled = now()
+                    RECENT.get().clear()
                     found = collect(config, repo, since, labels_since, seen, skip, **collect_options)
             errors = 0
         except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
@@ -1074,6 +1180,7 @@ def watch(args, config: Config) -> int:
                          design_reported=sorted(design_reported | {id_ for _, _, id_ in design_found}),
                          unrouted_reported=sorted(unrouted_reported | {id_ for _, _, id_ in unrouted_found}),
                          waiter_reported=sorted(waiter_reported | {id_ for _, _, id_ in waiter_found}),
+                         wait_reported=sorted(wait_reported | {key for _, _, key in wait_found}),
                          pr_reported=sorted(pr_reported | {key for _, _, key in pr_found}))
         if changed and not wakes:
             state["labels_since"] = labels_since
