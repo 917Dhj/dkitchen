@@ -2093,10 +2093,16 @@ def main(argv=None) -> int:
                                           "default branch moves.")
     sub.add_argument("pr", type=int, help="PR number")
     sub.add_argument("sha", help="The HEAD that was reviewed (full or prefix)")
-    sub = commands.add_parser("log", help="Post an entry to the orchestrator log ticket")
+    sub = commands.add_parser("log", help="Post an entry to the orchestrator log ticket",
+                              description="Post a signed, UTC-stamped entry to the orchestrator log ticket. With [log] issue "
+                                          "set, --issue N for any other ticket is refused (use `gh issue comment` for a note on "
+                                          "a work ticket, or `ding relay --comment` when its executor should hear it too) unless --force is given. An entry with no items and nothing "
+                                          "pending is not posted; ding says so on stderr and exits 0.")
     sub.add_argument("--item", action="append", required=True, help="One automatic action; repeat for more")
     sub.add_argument("--pending", action="append", default=[], help="One matter waiting for the user; repeat for more")
-    sub.add_argument("--issue", type=int, help="Orchestrator log ticket (default: [log] issue in .dkitchen.toml)")
+    sub.add_argument("--issue", type=int, help="Orchestrator log ticket (default: [log] issue in .dkitchen.toml); "
+                                               "refused when it differs from [log] issue, unless --force")
+    sub.add_argument("--force", action="store_true", help="Log to a ticket other than [log] issue")
     sub = commands.add_parser("night", help="Open, show, or close night orders on the orchestrator log ticket",
                               description="Open, show, or close night orders on [log] issue. Reads only that ticket's "
                                           "comments, starting with the most recent; writes only comments; calls no model. "
