@@ -747,6 +747,51 @@ def test_live_tmux_jobs_count_as_running_but_shells_and_dead_panes_do_not():
     assert watch.tmux_issues(panes) == {235, 272}
 
 
+LAUNCHER = "claude:local_11111111-2222-4333-8444-555555555555"
+LAUNCH_PANES = "ding-t1-sweep|0|python|{pid}\n"
+
+
+@pytest.fixture
+def launched_job(tmp_path, monkeypatch):
+    """A running `ding run` registered by LAUNCHER, as `ding launch` execs it inside its tmux pane."""
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    comment = {"issue_url": "https://api.github.com/repos/o/r/issues/26", "created_at": "2026-10-28T10:00:00Z",
+               "body": f"In progress\n\nClaude owner: {LAUNCHER.removeprefix('claude:')}\n"}
+    old = {**comment, "issue_url": "https://api.github.com/repos/o/r/issues/9",
+           "body": "Claude owner: local_99999999-2222-4333-8444-555555555555\n"}
+    issues = [{"number": 26, "body": "", "created_at": "2026-10-28T09:00:00Z"},
+              {"number": 9, "body": "", "created_at": "2026-10-20T09:00:00Z"}]
+    monkeypatch.setattr(ding, "gh_records", lambda resource: issues if "/issues?" in resource else [old, comment])
+    with ding.registered_run(LAUNCHER, tmp_path / "exit.jsonl"):
+        yield LAUNCH_PANES.format(pid=os.getpid())
+
+
+def test_launch_job_without_issue_in_its_name_belongs_to_the_ticket_its_session_owns(launched_job):
+    assert watch.tmux_issues(launched_job, "o/r") == {26}
+
+
+def test_launch_job_name_with_issue_wins_and_needs_no_lookup(launched_job, monkeypatch):
+    monkeypatch.setattr(ding, "issue_map", lambda repo=None: pytest.fail("looked up the owner"))
+    assert watch.tmux_issues(launched_job.replace("t1-sweep", "t1-issue9-sweep"), "o/r") == {9}
+
+
+def test_pane_matching_no_live_run_is_not_attributed(launched_job):
+    assert watch.tmux_issues(LAUNCH_PANES.format(pid=os.getpid() + 1), "o/r") == set()
+
+
+def test_registered_run_that_has_ended_is_not_attributed(tmp_path, monkeypatch, launched_job):
+    pane = launched_job
+    monkeypatch.setattr(ding, "run_state", lambda run: "lost")
+    assert watch.tmux_issues(pane, "o/r") == set()
+
+
+def test_stale_sees_a_launched_job_by_its_session_not_its_name(idle_ticket, launched_job):
+    ticket = idle_ticket
+    ticket.clock.moment += timedelta(hours=6)
+    ticket.panes = launched_job
+    assert watch.stale(ticket.config, "o/r", ticket.config.root, 6, set(), set()) == []
+
+
 def test_board_running_reads_only_the_session_table():
     output = ("NAME\tCWD\tSTATUS\tISSUE\tHEAD\tRUN\n"
               "a\t/r\tactive\t#3,#5\thead\trunning\n"

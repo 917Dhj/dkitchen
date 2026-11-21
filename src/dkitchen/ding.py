@@ -526,9 +526,9 @@ def issue_session(number: int, path: str | None = None, repo: str | None = None)
         "Candidates:\n" + "\n".join(rows) + "\nSpecify a session UUID or exact session name instead.")
 
 
-def issue_map() -> dict[str, set[int]]:
+def issue_map(repo: str | None = None) -> dict[str, set[int]]:
     try:
-        repo = github_repository()
+        repo = repo or github_repository()
         issues = gh_records(f"repos/{repo}/issues?state=all&per_page=100")
         comments = gh_records(f"repos/{repo}/issues/comments?per_page=100")
         records = {issue["number"]: (issue, []) for issue in issues if "pull_request" not in issue}
@@ -647,16 +647,17 @@ def registered_run(thread_id: str, record: Path, progress: Path | None = None) -
         yield run_id
 
 
-def latest_runs() -> dict[str, dict]:
+def registered_runs() -> list[dict]:
+    """Every valid run_start row of the registry, oldest first."""
     registry = run_registry()
     try:
         lines = registry.read_bytes().splitlines()
     except FileNotFoundError:
-        return {}
+        return []
     except OSError as exc:
         print(f"ding: run registry unavailable ({registry}): {exc}", file=sys.stderr)
-        return {}
-    runs = {}
+        return []
+    runs = []
     for number, line in enumerate(lines, 1):
         try:
             run = json.loads(line)
@@ -673,8 +674,12 @@ def latest_runs() -> dict[str, dict]:
         except (ValueError, TypeError, AttributeError, UnicodeError) as exc:
             print(f"ding: invalid run registry row {number} ({registry}): {exc}", file=sys.stderr)
             continue
-        runs[run["thread_id"]] = run
+        runs.append(run)
     return runs
+
+
+def latest_runs() -> dict[str, dict]:
+    return {run["thread_id"]: run for run in registered_runs()}
 
 
 def run_state(run: dict) -> str:
