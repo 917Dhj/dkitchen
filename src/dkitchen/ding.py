@@ -2370,7 +2370,7 @@ def main(argv=None) -> int:
         if args.action == "review":
             shape = ["verdict"] if len(args.words) == 1 and args.ticket is not None else ["pr", "sha", "verdict"]
             if len(args.words) != len(shape) or args.words[-1] not in {"pass", "changes"}:
-                parser.error("review takes PR SHA pass|changes (with --ticket N in a shared code repo), "
+                parser.error("review takes PR SHA pass|changes (with --ticket N in a shared code repo, or in a kitchen kept in its own repo), "
                              "or --ticket N pass|changes")
             values = dict(zip(shape, args.words))
             if "pr" in values and not values["pr"].isdigit():

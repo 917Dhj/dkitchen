@@ -3581,6 +3581,8 @@ def test_pr_verdict_ticket_flag_follows_whether_the_repo_is_shared(tmp_path, cap
 
 @pytest.mark.parametrize(("text", "found"), [
     ("Fix the loader\n\nDesigner: please look", "opens with the Designer signature"),
+    ("Fix the loader\n\n## Verifier: PR 14 holds", "opens with the Verifier signature"),
+    ("Fix the loader\n\n> Designer: please look", "opens with the Designer signature"),
     ("Fix\n\nCodex session: 019a", "kitchen marker 'Codex session:'"),
     ("Fix\nStatus: done\nWaiting on: none\n", "are a status block"),
     ("Fix, see https://github.com/me/kitchen/issues/3", "names the kitchen repo me/kitchen"),
