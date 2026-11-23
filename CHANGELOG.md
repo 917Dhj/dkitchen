@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased (develop, 0.6.4.dev1)
+
 ## 0.6.3
 
 - **The kitchen's rules need `ding` 0.6.3.** They use `[roles]`, `ding role take`, `ding claim`, `ding pr` and the other commands below, which earlier versions do not have, so the build skills now require `ding --version` 0.6.3 or later.
