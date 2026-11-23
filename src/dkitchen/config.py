@@ -96,6 +96,8 @@ Every key is optional. The defaults match the English templates in kitchen/:
     ruff = true                          # run `ruff check` and `ruff format --check` on the whole tree
     imports = true                       # run `lint-imports` with the contracts in pyproject.toml
     commands = []                        # the repo's own checks, e.g. [["python", "scripts/check_gpu_ids.py"]]
+    rules = ""                           # printed after "rules in" when a check fails; default docs/agents/code.md
+    # A code repo can carry these same keys in its own pyproject.toml [tool.dkitchen.check]; that table wins.
 
     [build]                              # notes the build skills keep for each other; `ding` skips this table
 """
@@ -297,49 +299,54 @@ class Check:
     ruff: bool = True
     imports: bool = True
     commands: tuple[tuple[str, ...], ...] = ()
+    rules: str = ""
 
     def areas(self) -> dict[str, str]:
         """Each area path and its kind."""
         return {path: kind for kind in AREAS for path in getattr(self, kind)}
 
 
-def check_section(values: object) -> Check:
+def check_section(values: object, file: str = FILE, table: str = "[check]") -> Check:
     if not isinstance(values, dict):
-        raise ValueError(f"{FILE}: [check] must be a table")
+        raise ValueError(f"{file}: {table} must be a table")
     known = {field.name for field in dataclass_fields(Check)}
     unknown = sorted(set(values) - known)
     if unknown:
-        raise ValueError(f"{FILE}: unknown keys in [check]: {', '.join(unknown)}")
+        raise ValueError(f"{file}: unknown keys in {table}: {', '.join(unknown)}")
     settings = {}
     seen: dict[str, str] = {}
     for key, value in values.items():
         if key in AREAS or key == "root_files":
             if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
-                raise ValueError(f"{FILE}: [check] {key} must be a list of repo paths")
+                raise ValueError(f"{file}: {table} {key} must be a list of repo paths")
             paths = tuple(item.strip().strip("/") for item in value)
             for path in paths:
                 parts = path.split("/")
                 if (path.startswith(".") and key in AREAS) or ".." in parts or "" in parts or path.startswith("~"):
-                    raise ValueError(f"{FILE}: [check] {key}: {path!r} must be a relative path inside the repo")
+                    raise ValueError(f"{file}: {table} {key}: {path!r} must be a relative path inside the repo")
                 if key == "root_files" and len(parts) > 1:
-                    raise ValueError(f"{FILE}: [check] root_files: {path!r} must be a top-level file name")
+                    raise ValueError(f"{file}: {table} root_files: {path!r} must be a top-level file name")
                 if key in AREAS:
                     if path in seen:
-                        raise ValueError(f"{FILE}: [check] {path!r} is in both {seen[path]} and {key}")
+                        raise ValueError(f"{file}: {table} {path!r} is in both {seen[path]} and {key}")
                     seen[path] = key
             settings[key] = paths
+        elif key == "rules":
+            if not isinstance(value, str):
+                raise ValueError(f"{file}: {table} rules must be a string: the path or URL of the rules")
+            settings[key] = value.strip()
         elif key in {"ruff", "imports"}:
             if not isinstance(value, bool):
-                raise ValueError(f"{FILE}: [check] {key} must be true or false")
+                raise ValueError(f"{file}: {table} {key} must be true or false")
             settings[key] = value
         else:
             if (not isinstance(value, list) or not all(
                     isinstance(argv, list) and argv and all(isinstance(item, str) and item for item in argv)
                     and argv[0].strip() for argv in value)):
-                raise ValueError(f"{FILE}: [check] commands must be a list of nonempty argv lists")
+                raise ValueError(f"{file}: {table} commands must be a list of nonempty argv lists")
             settings[key] = tuple(tuple(argv) for argv in value)
     if not seen:
-        raise ValueError(f"{FILE}: [check] names no area; give at least one of {', '.join(AREAS)}")
+        raise ValueError(f"{file}: {table} names no area; give at least one of {', '.join(AREAS)}")
     return Check(**settings)
 
 

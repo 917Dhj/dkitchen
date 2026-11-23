@@ -4191,6 +4191,19 @@ def test_shared_pr_runs_the_checks_first(tmp_path, monkeypatch, capsys):
     assert code == 0 and ran == []
 
 
+def test_shared_pr_runs_the_checks_when_only_the_code_repos_pyproject_has_the_table(tmp_path, monkeypatch, capsys):
+    from dkitchen import kitchens, outbound
+    code_root = tmp_path / "code"
+    code_root.mkdir()
+    (code_root / "pyproject.toml").write_text('[tool.dkitchen.check]\nlibrary = ["src"]\n', encoding="utf-8")
+    monkeypatch.setattr(kitchens, "code_checkout", lambda settings, where=None: code_root)
+    ran = []
+    monkeypatch.setattr(outbound, "checks_pass", lambda settings, base: ran.append(base) or False)
+    code, calls = open_pr(tmp_path, monkeypatch, SHARED, "--draft", "--base", "dev")
+    assert code == 1 and ran == ["dev"] and "`ding check` did not pass" in capsys.readouterr().err
+    assert not any(call[:3] == ("gh", "pr", "create") for call in calls)
+
+
 @pytest.fixture
 def waiting_board(tmp_path, monkeypatch):
     """A kitchen repo o/r with tickets #28 and #30 open; #30's executor waits on #28."""

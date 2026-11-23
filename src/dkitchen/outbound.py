@@ -180,6 +180,17 @@ def pushed_branch() -> str:
     return branch
 
 
+def check_settings(config: Config):
+    """The check settings `ding check` would use here: the code repo's pyproject.toml table, else the kitchen's."""
+    from dkitchen import check, kitchens
+
+    try:
+        root = kitchens.code_checkout(config)
+    except ValueError:
+        return config.check  # not in the code repo: `ding check` itself refuses, and the gate must still apply
+    return check.settings(config, root)[0]
+
+
 def checks_pass(config: Config, base: str | None) -> bool:
     """Whether `ding check` passes here against the PR's base; a shared code repo's checks run before its PRs open."""
     from types import SimpleNamespace
@@ -263,7 +274,7 @@ def pr(args, config: Config) -> int:
         checked(config, args.ticket, title, body)
         if config.shared and not args.draft and (problem := approval_problem(config, args.approval, args.ticket)):
             return fail(f"{problem}; or open it with --draft. Nothing posted")
-        if config.shared and config.check is not None and not checks_pass(config, args.base):
+        if config.shared and check_settings(config) is not None and not checks_pass(config, args.base):
             return fail("`ding check` did not pass in this worktree; fix what it lists, then open the PR. Nothing posted")
         branch = pushed_branch()
         command = ["gh", "pr", "create", "--repo", repo, "--head", branch, "--title", title,
