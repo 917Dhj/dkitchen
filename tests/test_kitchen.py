@@ -80,7 +80,7 @@ BAD_CONFIGS = [
         ("{issue:{name}}", "nested field"),
     ]),
     *((f"[merge]\nrequired_checks = {value}", "required_checks must be a list of nonempty check names")
-      for value in ['"hca-check"', '[1]', '[""]', '["   "]', 'false']),
+      for value in ['"ci"', '[1]', '[""]', '["   "]', 'false']),
     *((f"[merge]\nrefresh = {value}", "refresh must be one command line or an empty string")
       for value in ['1', '"   "', '"a \'b"', '"a\\nb"', '["a"]']),
     *((f"[merge]\nreview_check = {value}", "review_check") for value in ['true', '" "']),
@@ -272,12 +272,12 @@ def test_merge_required_checks_defaults_and_exact_names(tmp_path):
     assert settings(tmp_path, '[merge]\nrequired_checks = [" CI / test "]').merge.required_checks == (" CI / test ",)
 
 
-def check_run(state="success", sha="abc123", name="hca-check"):
+def check_run(state="success", sha="abc123", name="ci"):
     return {"name": name, "head_sha": sha, "status": "in_progress" if state == "pending" else "completed",
             "conclusion": None if state == "pending" else state, "html_url": "https://checks/1"}
 
 
-def commit_status(state="success", name="hca-check"):
+def commit_status(state="success", name="ci"):
     return {"context": name, "state": state, "target_url": "https://statuses/1"}
 
 
@@ -293,7 +293,7 @@ def check_responses(runs=(), statuses=(), sha="abc123"):
         ("status", ("success", "failure", "pending", "error"))) for state in states
 ])
 def test_merge_requires_success_on_reviewed_head(tmp_path, monkeypatch, capsys, source, state):
-    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check"]')
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["ci"]')
     calls = []
     responses = [view()] + check_responses(
         runs=[check_run(state)] if source == "run" else [],
@@ -309,7 +309,7 @@ def test_merge_requires_success_on_reviewed_head(tmp_path, monkeypatch, capsys, 
         assert calls[3][-2:] == ("--match-head-commit", "abc123")
     else:
         error = capsys.readouterr().err
-        assert "hca-check" in error and "abc123" in error
+        assert "ci" in error and "abc123" in error
         assert (state or "pending") in error
         if state == "pending" or state is None:
             assert "has not finished" in error
@@ -328,16 +328,16 @@ def test_merge_requires_success_on_reviewed_head(tmp_path, monkeypatch, capsys, 
     ([check_run(name="other")], [commit_status(name="other")], "abc123"),
 ])
 def test_merge_missing_or_other_commit_checks_do_not_count(tmp_path, monkeypatch, capsys, runs, statuses, sha):
-    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check"]')
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["ci"]')
     calls = []
     monkeypatch.setattr(orchestrate, "call", fake_call([view()] + check_responses(runs, statuses, sha), calls))
     assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
-    assert "check hca-check has not finished on abc123 (missing)" in capsys.readouterr().err
+    assert "check ci has not finished on abc123 (missing)" in capsys.readouterr().err
     assert len(calls) == 3
 
 
 def test_merge_checks_all_pages_and_both_sources(tmp_path, monkeypatch):
-    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check", "deploy"]')
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["ci", "deploy"]')
     responses = [view(), (0, json.dumps([{"check_runs": []}, {"check_runs": [check_run()]}])),
                  (0, json.dumps([{"sha": "abc123", "statuses": []},
                                  {"sha": "abc123", "statuses": [commit_status(name="deploy")]}])),
@@ -348,13 +348,13 @@ def test_merge_checks_all_pages_and_both_sources(tmp_path, monkeypatch):
 
 
 def test_merge_reports_every_failed_required_check_and_duplicate(tmp_path, monkeypatch, capsys):
-    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check", "deploy"]')
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["ci", "deploy"]')
     calls = []
     responses = [view()] + check_responses([check_run(), check_run("failure")], [commit_status("error", "deploy")])
     monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
     assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
     error = capsys.readouterr().err
-    assert "hca-check is failure" in error and "deploy is error" in error
+    assert "ci is failure" in error and "deploy is error" in error
     assert "https://checks/1" in error and "https://statuses/1" in error
     assert len(calls) == 3
 
@@ -365,7 +365,7 @@ def test_merge_reports_every_failed_required_check_and_duplicate(tmp_path, monke
     [(0, '[{"check_runs": []}]'), (1, "")],
 ])
 def test_merge_refuses_unreadable_check_data(tmp_path, monkeypatch, capsys, responses):
-    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check"]')
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["ci"]')
     calls = []
     monkeypatch.setattr(orchestrate, "call", fake_call([view()] + responses, calls))
     assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
@@ -375,7 +375,7 @@ def test_merge_refuses_unreadable_check_data(tmp_path, monkeypatch, capsys, resp
 
 @pytest.mark.parametrize("pr", [view(draft=True), view(head="fff999")])
 def test_merge_existing_gates_run_before_required_checks(tmp_path, monkeypatch, pr):
-    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check"]')
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrequired_checks = ["ci"]')
     calls = []
     monkeypatch.setattr(orchestrate, "call", fake_call([pr], calls))
     assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
@@ -390,7 +390,7 @@ def test_merge_empty_required_checks_keeps_existing_behavior(tmp_path, monkeypat
     assert len(calls) == 3 and calls[1][:3] == ("gh", "pr", "merge")
 
 
-REFRESH = 'repo = "o/r"\n[merge]\nrequired_checks = ["hca-check"]\nrefresh = "hca-refresh {pr} --head {sha} --base {tip} \'a b\'"'
+REFRESH = 'repo = "o/r"\n[merge]\nrequired_checks = ["ci"]\nrefresh = "refresh-checks {pr} --head {sha} --base {tip} \'a b\'"'
 
 
 def tip(sha):
@@ -398,7 +398,7 @@ def tip(sha):
 
 
 def refresh_calls(calls):
-    return [call for call in calls if call[0] == "hca-refresh"]
+    return [call for call in calls if call[0] == "refresh-checks"]
 
 
 def test_merge_refresh_failure_refuses_before_merging(tmp_path, monkeypatch, capsys):
@@ -425,23 +425,23 @@ def test_merge_refresh_success_substitutes_pr_and_sha_and_rereads_checks(tmp_pat
                  *check_responses([check_run()]), tip("t1"), (0, ""), view("MERGED")]
     monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
     assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 0
-    assert refresh_calls(calls) == [("hca-refresh", "7", "--head", "abc123", "--base", "t1", "a b")]
+    assert refresh_calls(calls) == [("refresh-checks", "7", "--head", "abc123", "--base", "t1", "a b")]
     assert calls[5][-1].endswith("commits/abc123/check-runs?filter=latest&per_page=100")
     assert calls[-2][:3] == ("gh", "pr", "merge") and calls[-2][-2:] == ("--match-head-commit", "abc123")
     captured = capsys.readouterr()
-    assert "ding: refresh against main t1: hca-refresh 7 --head abc123 --base t1 'a b'" in captured.err
+    assert "ding: refresh against main t1: refresh-checks 7 --head abc123 --base t1 'a b'" in captured.err
     assert "ding: refresh passed: fresh" in captured.err
     assert captured.out == "PR #7 merged as m1\n"
     assert not responses
 
 
 def test_merge_refresh_runs_without_required_checks(tmp_path, monkeypatch):
-    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrefresh = "hca-refresh {pr}"')
+    loaded = settings(tmp_path, 'repo = "o/r"\n[merge]\nrefresh = "refresh-checks {pr}"')
     calls = []
     responses = [view(), tip("t1"), (0, ""), tip("t1"), (0, ""), view("MERGED")]
     monkeypatch.setattr(orchestrate, "call", fake_call(responses, calls))
     assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 0
-    assert refresh_calls(calls) == [("hca-refresh", "7")]
+    assert refresh_calls(calls) == [("refresh-checks", "7")]
     assert not responses
 
 
@@ -489,12 +489,12 @@ def test_merge_refresh_that_cannot_start_refuses(tmp_path, monkeypatch, capsys):
     inner = fake_call([view(), *check_responses([check_run()]), tip("t1")], calls)
 
     def call(settings, *args):
-        if args[0] == "hca-refresh":
-            raise FileNotFoundError(2, "No such file or directory", "hca-refresh")
+        if args[0] == "refresh-checks":
+            raise FileNotFoundError(2, "No such file or directory", "refresh-checks")
         return inner(settings, *args)
     monkeypatch.setattr(orchestrate, "call", call)
     assert orchestrate.merge(SimpleNamespace(pr=7, sha="abc"), loaded) == 1
-    assert "refresh could not run (hca-refresh 7 --head abc123 --base t1 'a b')" in capsys.readouterr().err
+    assert "refresh could not run (refresh-checks 7 --head abc123 --base t1 'a b')" in capsys.readouterr().err
 
 
 def test_merge_refresh_does_not_run_when_readiness_already_blocks(tmp_path, monkeypatch):

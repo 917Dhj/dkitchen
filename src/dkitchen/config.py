@@ -66,11 +66,11 @@ Every key is optional. The defaults match the English templates in kitchen/:
     handoff = ["hand to "]               # written right before a role name to hand it work, e.g. ["交"]
 
     [merge]
-    required_checks = []                # e.g. ["hca-check"]; only success permits merging
+    required_checks = []                # e.g. ["ci"]; only success permits merging
     review_check = ""                   # e.g. "review": the commit status `ding review` writes and `ding merge` requires
     review_pass = "Reviewed {sha}: pass"                                 # first line of a passing review
     review_changes = "Reviewed {sha}: changes requested, see below"      # first line of a failing review
-    refresh = ""                        # e.g. "python -m hca review {pr} --refresh --base {tip}": run before merging; nonzero refuses
+    refresh = ""                        # e.g. "scripts/refresh_checks.sh {pr} {tip}": run before merging; nonzero refuses
     # by = "orchestrator"               # who merges PRs: "orchestrator" (`ding merge`) or "team" (`ding merge` refuses);
     #                                   # default: "team" in a shared code repo, else "orchestrator"
 

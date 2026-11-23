@@ -26,15 +26,17 @@ Done when you can name, with evidence, each prerequisite's state, which build sk
 
 Summarize what is present and what is missing in a short list. Missing prerequisites come first, each with the command that fixes it. When Claude Code or Codex is unavailable, say plainly that this version of dkitchen needs both, and ask whether to stop or to install the rules anyway.
 
+Then lay out the road ahead, so the user knows what each later question is for: the steps below in one line each, and for each build skill in step 3's table, one line on what it installs and what the user gets from it. Mark the ones exploration found already installed.
+
 ## 3. Settle the language and the needs
 
-One question at a time. Lead each with your recommendation so the user can accept it in a word, and skip any that exploration already settled.
+Ask these as rounds, as [Installing](../../kitchen/README.md#installing) says, and skip any that exploration already settled. The language, where the kitchen lives, and each need do not hang on one another, so they make the first round. The second holds what those answers open: the vocabulary for a language other than English, and the name and checkout path of a kitchen of its own.
 
 **Language.** Recommend the language the user writes to you in, and settle the vocabulary as [Installing](../../kitchen/README.md#installing) says. The build skills reuse this answer and do not ask again.
 
 **Where the kitchen lives.** In this repo, or in a private kitchen repo of its own, with only PRs and code issues reaching this one. Recommend its own repo when the repo is shared, and say that a shared repo always gets one: otherwise the team inherits the kitchen's rules and tickets, and anyone who comments counts as the user. Recommend this repo when the user alone works in it, since one repo is simpler; an own repo is still fine when the user wants the repo free of kitchen files. For its own repo, also settle its name (default `<owner>/<repo>-kitchen`, private), where its checkout goes on this machine (default beside this checkout), and whether this repo is shared.
 
-**Needs.** Ask each as a yes or no:
+**Needs.** One question per need, each a yes or no, saying what the build skill would install and what the kitchen lacks without it:
 
 | Need | Recommend | Build skill |
 | --- | --- | --- |
@@ -60,7 +62,7 @@ Done when `ding kitchen`, run in the kitchen's checkout, shows the kitchen repo,
 
 ## 5. Build each part
 
-Take the chosen build skills in the table's order: open each one's `SKILL.md` and follow it from its first step to its write step, carrying the settled language into it. A build skill already installed is updated in place. Finish one before starting the next, since each later skill builds on the earlier ones' files.
+Take the chosen build skills in the table's order: open each one's `SKILL.md` and follow it from its first step to its write step, carrying the settled language and the question numbering into it. Start each with one line on where the setup stands: which part this is, what it installs, and which parts come after. A build skill already installed is updated in place. Finish one before starting the next, since each later skill builds on the earlier ones' files.
 
 Done when every chosen build skill has written its approved draft.
 

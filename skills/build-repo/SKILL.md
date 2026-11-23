@@ -38,7 +38,7 @@ Summarize the layout, the proposed areas, and the existing violations by kind, w
 
 ## 3. Settle each section
 
-One section, one answer, then the next. Lead each with your recommendation.
+Ask the sections as rounds, as [Installing](../../kitchen/README.md#installing) says. C waits for A and B, since the areas and the import contract decide what counts as a violation.
 
 **A. Areas.** Show each top-level folder with its proposed area, as a table: library, tools, experiments, tests, docs, outputs, assets, or vendor. Every folder gets one; there is no "other". A folder whose contents are mixed goes to the area most of it belongs to, and the rest becomes part of the cleanup. List the top-level files the usual names do not cover ([the usual names](../../docs/ding.md#repo-checks)); each one is either listed in `root_files` or moved.
 

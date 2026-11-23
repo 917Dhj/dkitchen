@@ -32,7 +32,7 @@ Summarize the scripts that fit and those that do not, how each handles resuming 
 
 ## 3. Settle each section
 
-One section, one answer, then the next. Lead each with your recommendation.
+Ask the sections as rounds, as [Installing](../../kitchen/README.md#installing) says. C and E wait for B, since the spec's fields decide which services and identity fields exist.
 
 **A. Scope.** The runner carries new item-by-item runs. Recommend leaving existing scripts as they are: they move to the runner when a ticket changes them.
 
