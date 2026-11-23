@@ -2,18 +2,21 @@
 
 Every key is optional. The defaults match the English templates in kitchen/:
 
-    repo = "owner/name"                  # default: the repository gh sees here
+    repo = "owner/name"                  # the kitchen repo, holding the tickets; default: the repository gh sees here
+    # code = "owner/code"               # the code repo, when the kitchen lives in a repo of its own; needs repo.
+    #                                   # Each machine links the two with `ding kitchen link CODE_CHECKOUT`.
+    # shared = false                    # true when other people work in the code repo; needs a separate code repo
 
-    [stations]
+    [roles]
     orchestrator = "Orchestrator"
     designer = "Designer"
     verifier = "Verifier"
     executor = "Executor"
     user = "User"
-    separator = ": "                     # written after a station name to sign a comment, e.g. "：" in Chinese
+    separator = ": "                     # written after a role name to sign a comment, e.g. "：" in Chinese
 
-    # [stations.aliases]
-    # "Training designer" = ["Training"]  # optional equivalent station names
+    # [roles.aliases]
+    # "Training designer" = ["Training"]  # optional equivalent role names
 
     [status]
     fields = ["Status", "Waiting on", "Key numbers", "Next"]   # first: the state; second: who it waits on
@@ -48,18 +51,37 @@ Every key is optional. The defaults match the English templates in kitchen/:
     type_label = "Type"                  # then a line `<type_label><separator><one of types>`
     types = ["actionable", "proposal, awaiting user", "record"]
     notify = "#{ticket} answered, see the ticket {url}"   # message `--notify` sends; also {first_line}
+    # notify_types = ["actionable"]     # types that tell '#N' without --notify; default: the first type; [] for none
+
+    [executor]
+    default = "codex"                    # `ding new` dispatches to this kind: "codex" or "claude"; --executor overrides
 
     [watch]
     idle_minutes = 45                    # 0 disables idle-executor wakes
-    design_answer_minutes = 30           # 0 disables unanswered-station and PR backstops
-    unrouted_wait_minutes = 30           # 0 disables unknown-station wait reminders
-    handoff = ["hand to "]               # written right before a station name to hand it work, e.g. ["交"]
+    design_answer_minutes = 30           # 0 disables unanswered-role and PR backstops
+    unrouted_wait_minutes = 30           # 0 disables unknown-role wait reminders
+    executor_listener_minutes = 30       # 0 disables wakes for a Claude Code executor without `ding inbox --wait`
+    stale_minutes = 30                   # 0 disables wakes for a `ding launch --progress` job whose progress stopped moving
+    overrun_factor = 1.5                 # wake once a `ding launch --expect-hours H` job runs past factor x H; 0 disables
+    handoff = ["hand to "]               # written right before a role name to hand it work, e.g. ["交"]
 
     [merge]
-    required_checks = []                # e.g. ["hca-check"]; only success permits merging
+    required_checks = []                # e.g. ["ci"]; only success permits merging
     review_check = ""                   # e.g. "review": the commit status `ding review` writes and `ding merge` requires
     review_pass = "Reviewed {sha}: pass"                                 # first line of a passing review
     review_changes = "Reviewed {sha}: changes requested, see below"      # first line of a failing review
+    refresh = ""                        # e.g. "scripts/refresh_checks.sh {pr} {tip}": run before merging; nonzero refuses
+    # by = "orchestrator"               # who merges PRs: "orchestrator" (`ding merge`) or "team" (`ding merge` refuses);
+    #                                   # default: "team" in a shared code repo, else "orchestrator"
+
+    [outbound]                           # `ding pr` and `ding code-issue`, which write into the code repo
+    user_decision = "user decision"     # what follows a role's signature on the first line of a user decision,
+                                        # e.g. "Orchestrator: user decision"; `--approval` must link one
+
+    [review]                             # `ding review --ticket N`: a verdict on a ticket's run stage
+    verdict_pass = "Verdict: pass"                    # line 2 of a passing verdict, after the verifier's line 1
+    verdict_changes = "Verdict: changes requested"    # line 2 of a failing one; it wakes the orchestrator and design
+    notify = "#{ticket} {verdict}, see the ticket {url}"   # message to the ticket's executor; also {first_line}
 
     [check]                              # `ding check` and `ding map`; absent means no repo checks
     library = ["src/name"]               # areas: repo paths for each kind; see `ding check --help`
@@ -74,6 +96,8 @@ Every key is optional. The defaults match the English templates in kitchen/:
     ruff = true                          # run `ruff check` and `ruff format --check` on the whole tree
     imports = true                       # run `lint-imports` with the contracts in pyproject.toml
     commands = []                        # the repo's own checks, e.g. [["python", "scripts/check_gpu_ids.py"]]
+    rules = ""                           # printed after "rules in" when a check fails; default docs/agents/code.md
+    # A code repo can carry these same keys in its own pyproject.toml [tool.dkitchen.check]; that table wins.
 
     [build]                              # notes the build skills keep for each other; `ding` skips this table
 """
@@ -83,22 +107,26 @@ from dataclasses import dataclass, field, fields as dataclass_fields, replace
 from pathlib import Path
 import math
 import re
+import shlex
 import string
 import subprocess
 import sys
+import unicodedata
 
 if sys.version_info >= (3, 11):
     import tomllib
 else:
     import tomli as tomllib
 
-from dkitchen import ding
+from dkitchen import ding, kitchens
 
 FILE = ".dkitchen.toml"
+RENAME_WARNED: set[Path] = set()  # files already warned about [stations] in this process
+BOTH_WARNED: set[Path] = set()  # checkouts already warned that the registry overrides their own .dkitchen.toml
 
 
 @dataclass(frozen=True)
-class Stations:
+class Roles:
     orchestrator: str = "Orchestrator"
     designer: str = "Designer"
     verifier: str = "Verifier"
@@ -185,6 +213,12 @@ class Rule:
     types: tuple[str, ...] = ("actionable", "proposal, awaiting user", "record")
     notify: str = "#{ticket} answered, see the ticket {url}"
     signatures: tuple[str, ...] = ()
+    notify_types: tuple[str, ...] | None = None
+
+    @property
+    def default_notify_types(self) -> tuple[str, ...]:
+        """Types whose ruling tells the ticket's executor when `ding rule` gets neither --notify nor --no-notify."""
+        return self.types[:1] if self.notify_types is None else self.notify_types
 
 
 @dataclass(frozen=True)
@@ -195,10 +229,21 @@ class Launch:
 
 
 @dataclass(frozen=True)
+class Executor:
+    default: str = "codex"
+
+
+EXECUTOR_KINDS = ("codex", "claude")
+
+
+@dataclass(frozen=True)
 class Watch:
     idle_minutes: float = 45
     design_answer_minutes: float = 30
     unrouted_wait_minutes: float = 30
+    executor_listener_minutes: float = 30
+    stale_minutes: float = 30
+    overrun_factor: float = 1.5
     handoff: tuple[str, ...] = ("hand to ",)
 
 
@@ -208,6 +253,32 @@ class Merge:
     review_check: str = ""
     review_pass: str = "Reviewed {sha}: pass"
     review_changes: str = "Reviewed {sha}: changes requested, see below"
+    refresh: str = ""
+    by: str | None = None
+
+    def refresh_argv(self, pr: int, sha: str, tip: str) -> list[str]:
+        """The refresh command as argv, with {pr}, {sha} and {tip} substituted in each word."""
+        return [word.replace("{pr}", str(pr)).replace("{sha}", sha).replace("{tip}", tip)
+                for word in shlex.split(self.refresh)]
+
+
+MERGE_BY = ("orchestrator", "team")
+
+
+@dataclass(frozen=True)
+class Outbound:
+    user_decision: str = "user decision"
+
+
+@dataclass(frozen=True)
+class Review:
+    verdict_pass: str = "Verdict: pass"
+    verdict_changes: str = "Verdict: changes requested"
+    notify: str = "#{ticket} {verdict}, see the ticket {url}"
+
+    def verdict(self, word: str) -> str:
+        """The verdict line for `pass` or `changes`."""
+        return self.verdict_pass if word == "pass" else self.verdict_changes
 
 
 AREAS = ("library", "tools", "experiments", "tests", "docs", "outputs", "assets", "vendor")
@@ -228,49 +299,54 @@ class Check:
     ruff: bool = True
     imports: bool = True
     commands: tuple[tuple[str, ...], ...] = ()
+    rules: str = ""
 
     def areas(self) -> dict[str, str]:
         """Each area path and its kind."""
         return {path: kind for kind in AREAS for path in getattr(self, kind)}
 
 
-def check_section(values: object) -> Check:
+def check_section(values: object, file: str = FILE, table: str = "[check]") -> Check:
     if not isinstance(values, dict):
-        raise ValueError(f"{FILE}: [check] must be a table")
+        raise ValueError(f"{file}: {table} must be a table")
     known = {field.name for field in dataclass_fields(Check)}
     unknown = sorted(set(values) - known)
     if unknown:
-        raise ValueError(f"{FILE}: unknown keys in [check]: {', '.join(unknown)}")
+        raise ValueError(f"{file}: unknown keys in {table}: {', '.join(unknown)}")
     settings = {}
     seen: dict[str, str] = {}
     for key, value in values.items():
         if key in AREAS or key == "root_files":
             if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
-                raise ValueError(f"{FILE}: [check] {key} must be a list of repo paths")
+                raise ValueError(f"{file}: {table} {key} must be a list of repo paths")
             paths = tuple(item.strip().strip("/") for item in value)
             for path in paths:
                 parts = path.split("/")
                 if (path.startswith(".") and key in AREAS) or ".." in parts or "" in parts or path.startswith("~"):
-                    raise ValueError(f"{FILE}: [check] {key}: {path!r} must be a relative path inside the repo")
+                    raise ValueError(f"{file}: {table} {key}: {path!r} must be a relative path inside the repo")
                 if key == "root_files" and len(parts) > 1:
-                    raise ValueError(f"{FILE}: [check] root_files: {path!r} must be a top-level file name")
+                    raise ValueError(f"{file}: {table} root_files: {path!r} must be a top-level file name")
                 if key in AREAS:
                     if path in seen:
-                        raise ValueError(f"{FILE}: [check] {path!r} is in both {seen[path]} and {key}")
+                        raise ValueError(f"{file}: {table} {path!r} is in both {seen[path]} and {key}")
                     seen[path] = key
             settings[key] = paths
+        elif key == "rules":
+            if not isinstance(value, str):
+                raise ValueError(f"{file}: {table} rules must be a string: the path or URL of the rules")
+            settings[key] = value.strip()
         elif key in {"ruff", "imports"}:
             if not isinstance(value, bool):
-                raise ValueError(f"{FILE}: [check] {key} must be true or false")
+                raise ValueError(f"{file}: {table} {key} must be true or false")
             settings[key] = value
         else:
             if (not isinstance(value, list) or not all(
                     isinstance(argv, list) and argv and all(isinstance(item, str) and item for item in argv)
                     and argv[0].strip() for argv in value)):
-                raise ValueError(f"{FILE}: [check] commands must be a list of nonempty argv lists")
+                raise ValueError(f"{file}: {table} commands must be a list of nonempty argv lists")
             settings[key] = tuple(tuple(argv) for argv in value)
     if not seen:
-        raise ValueError(f"{FILE}: [check] names no area; give at least one of {', '.join(AREAS)}")
+        raise ValueError(f"{file}: {table} names no area; give at least one of {', '.join(AREAS)}")
     return Check(**settings)
 
 
@@ -300,9 +376,12 @@ def session_template(value: object) -> str:
 
 @dataclass(frozen=True)
 class Config:
-    root: Path
-    repo: str | None = None
-    stations: Stations = Stations()
+    root: Path                           # the kitchen's checkout: where .dkitchen.toml and the house rules live
+    repo: str | None = None              # the kitchen repo, which holds the tickets
+    code: str | None = None              # the code repo, when it is not the kitchen repo
+    shared: bool = False                 # whether other people also work in and merge into the code repo
+    code_root: Path | None = None        # the code repo's main checkout on this machine, from the registry
+    roles: Roles = Roles()
     status: Status = Status()
     labels: Labels = Labels()
     log: Log = Log()
@@ -311,16 +390,37 @@ class Config:
     relay: Relay = Relay()
     rule: Rule = Rule()
     launch: Launch = Launch()
+    executor: Executor = Executor()
     watch: Watch = Watch()
     merge: Merge = Merge()
+    review: Review = Review()
+    outbound: Outbound = Outbound()
     check: Check | None = None
 
     @property
     def designer_signatures(self) -> tuple[str, ...]:
-        return self.rule.signatures or (self.stations.signature(self.stations.designer),)
+        return self.rule.signatures or (self.roles.signature(self.roles.designer),)
+
+    @property
+    def split(self) -> bool:
+        """Whether the kitchen lives in its own repo, apart from the code repo."""
+        return self.code is not None and self.code != self.repo
+
+    @property
+    def merger(self) -> str:
+        """Who merges PRs: [merge] by, else the team in a shared code repo and the orchestrator otherwise."""
+        return self.merge.by or ("team" if self.shared else "orchestrator")
+
+    def code_repo(self) -> str:
+        """The repo the work lands in, as commits and PRs."""
+        return self.code or self.kitchen_repo()
 
     def repository(self) -> str:
-        """The configured repository, or the one gh sees from the repository root."""
+        """The kitchen repo; kept for callers that predate the split."""
+        return self.kitchen_repo()
+
+    def kitchen_repo(self) -> str:
+        """The repo holding the tickets: the configured one, or the one gh sees from the kitchen's checkout."""
         if self.repo:
             return self.repo
         result = subprocess.run(["gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"],
@@ -346,6 +446,10 @@ def section(cls, values: object, name: str):
                 kind = {"fields": "field names", "types": "words", "signatures": "signatures"}[key]
                 raise ValueError(f"{FILE}: [{name}] {key} must be a nonempty list of {kind}")
             value = tuple(value) if key == "signatures" else tuple(item.strip() for item in value)
+        elif key == "notify_types":
+            if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+                raise ValueError(f"{FILE}: [rule] notify_types must be a list of types (it may be empty)")
+            value = tuple(item.strip() for item in value)
         elif key == "required_checks":
             if (not isinstance(value, list)
                     or not all(isinstance(item, str) and item.strip() for item in value)):
@@ -354,6 +458,13 @@ def section(cls, values: object, name: str):
         elif key == "review_check":
             if not isinstance(value, str) or (value and not value.strip()):
                 raise ValueError(f"{FILE}: [merge] review_check must be a check name or an empty string")
+        elif key == "refresh":
+            try:
+                words = shlex.split(value) if isinstance(value, str) and "\n" not in value and "\r" not in value else []
+            except ValueError:
+                words = []
+            if not isinstance(value, str) or (value and not words):
+                raise ValueError(f"{FILE}: [merge] refresh must be one command line or an empty string")
         elif key == "handoff":
             if not isinstance(value, list) or not value or not all(isinstance(item, str) and item.strip() for item in value):
                 raise ValueError(f"{FILE}: [watch] handoff must be a nonempty list of nonempty words")
@@ -376,25 +487,35 @@ def section(cls, values: object, name: str):
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or value < 0):
                 raise ValueError(f"{FILE}: [launch] keep_days must be a nonnegative finite number of days")
-        elif key in {"idle_minutes", "design_answer_minutes", "unrouted_wait_minutes"}:
+        elif key in {"idle_minutes", "design_answer_minutes", "unrouted_wait_minutes", "executor_listener_minutes",
+                     "stale_minutes"}:
             if (isinstance(value, bool) or not isinstance(value, (int, float))
                     or not math.isfinite(value) or value < 0):
                 raise ValueError(f"{FILE}: [watch] {key} must be a nonnegative finite number of minutes")
+        elif key == "overrun_factor":
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not math.isfinite(value) or value < 0 or 0 < value < 1):
+                raise ValueError(f"{FILE}: [watch] overrun_factor must be 0 (off) or a finite number of at least 1")
         elif key == "aliases":
             if (not isinstance(value, dict) or any(
-                    not isinstance(station, str) or not station.strip()
+                    not isinstance(role, str) or not role.strip()
                     or not isinstance(aliases, list) or not aliases
                     or not all(isinstance(alias, str) and alias.strip() for alias in aliases)
-                    for station, aliases in value.items())):
-                raise ValueError(f"{FILE}: [stations.aliases] must map station names to nonempty lists of names")
-            value = {station.strip(): tuple(alias.strip() for alias in aliases) for station, aliases in value.items()}
+                    for role, aliases in value.items())):
+                raise ValueError(f"{FILE}: [roles.aliases] must map role names to nonempty lists of names")
+            value = {role.strip(): tuple(alias.strip() for alias in aliases) for role, aliases in value.items()}
         elif key == "notify":
-            if not isinstance(value, str) or "{url}" not in value:
-                raise ValueError(f"{FILE}: [rule] notify must be a string holding {{url}}")
+            needed = ("{url}", "{verdict}") if cls is Review else ("{url}",)
+            if not isinstance(value, str) or not all(field in value for field in needed):
+                raise ValueError(f"{FILE}: [{name}] notify must be a string holding {' and '.join(needed)}")
             try:
-                value.format(ticket=1, url="u", first_line="l")
+                value.format(ticket=1, url="u", first_line="l", verdict="v")
             except (ValueError, KeyError, IndexError) as exc:
-                raise ValueError(f"{FILE}: [rule] notify is not a valid template: {exc}") from exc
+                raise ValueError(f"{FILE}: [{name}] notify is not a valid template: {exc}") from exc
+        elif key in {"verdict_pass", "verdict_changes"}:
+            if not isinstance(value, str) or not value.strip() or "\n" in value or "\r" in value:
+                raise ValueError(f"{FILE}: [review] {key} must be one nonempty line")
+            value = value.strip()
         elif key == "name" and cls is Sessions:
             value = session_template(value)
         elif key == "parent" and cls is Sessions:
@@ -404,6 +525,12 @@ def section(cls, values: object, name: str):
                 value.format(parent=1)
             except (ValueError, KeyError, IndexError) as exc:
                 raise ValueError(f"{FILE}: [sessions] parent is not a valid template: {exc}") from exc
+        elif key == "by" and cls is Merge:
+            if value not in MERGE_BY:
+                raise ValueError(f"{FILE}: [merge] by must be one of: {', '.join(MERGE_BY)}")
+        elif key == "default" and cls is Executor:
+            if value not in EXECUTOR_KINDS:
+                raise ValueError(f"{FILE}: [executor] default must be one of: {', '.join(EXECUTOR_KINDS)}")
         elif key == "issue":
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{FILE}: [{name}] issue must be a positive issue number")
@@ -412,7 +539,19 @@ def section(cls, values: object, name: str):
         if cls is Night and ("\n" in value or "\r" in value):
             raise ValueError(f"{FILE}: [night] {key} must be a single line")
         result = replace(result, **{key: value})
+    if cls is Review and normalized_line(result.verdict_pass) == normalized_line(result.verdict_changes):
+        raise ValueError(f"{FILE}: [review] verdict_pass and verdict_changes must differ")
+    if cls is Rule and result.notify_types is not None:
+        unknown = [kind for kind in result.notify_types if kind not in result.types]
+        if unknown:
+            raise ValueError(f"{FILE}: [rule] notify_types {', '.join(unknown)} must be among types: "
+                             f"{', '.join(result.types)}")
     return result
+
+
+def normalized_line(text: str) -> str:
+    """A one-line verdict as `ding watch` compares it: width-normalized and stripped."""
+    return unicodedata.normalize("NFKC", text).strip()
 
 
 def repository_root(cwd: Path | None = None) -> Path:
@@ -423,24 +562,68 @@ def repository_root(cwd: Path | None = None) -> Path:
 
 
 def load(cwd: Path | None = None) -> Config:
+    """The kitchen the directory belongs to.
+
+    A code repo registered on this machine (`ding kitchen link`) uses its registered kitchen, so an executor's worktree
+    finds the kitchen kept in its own repo. Otherwise the kitchen is the .dkitchen.toml at the checkout's root, if any."""
     root = repository_root(cwd)
+    registered = kitchens.lookup(root)
+    if registered is not None:
+        code, entry = registered
+        if (root / FILE).exists() and root not in BOTH_WARNED:
+            BOTH_WARNED.add(root)
+            print(f"ding: {root / FILE} is ignored: {code} is linked to the kitchen at {entry.kitchen} "
+                  f"({kitchens.registry_path()})", file=sys.stderr)
+        if not (entry.kitchen / FILE).exists():
+            raise ValueError(f"{kitchens.registry_path()}: {code} is linked to {entry.kitchen}, which has no {FILE}; "
+                             "run `ding kitchen link` there again")
+        settings = read(entry.kitchen / FILE, entry.kitchen)
+        if settings.code != code:
+            raise ValueError(f"{kitchens.registry_path()}: {code} is linked to {entry.kitchen}, whose {FILE} "
+                             f"sets code = {settings.code!r}; run `ding kitchen link` there again")
+        return replace(settings, code_root=entry.code)
     path = root / FILE
     if not path.exists():
         return Config(root=root)
+    settings = read(path, root)
+    if settings.split:
+        entry = kitchens.entries().get(settings.code)
+        if entry is not None and entry.kitchen == root:
+            settings = replace(settings, code_root=entry.code)
+    return settings
+
+
+def read(path: Path, root: Path) -> Config:
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as exc:
         raise ValueError(f"{path}: {exc}") from exc
-    sections = {"stations": Stations, "status": Status, "labels": Labels, "log": Log, "sessions": Sessions, "relay": Relay,
-                "rule": Rule, "launch": Launch, "watch": Watch, "night": Night, "merge": Merge}
-    unknown = sorted(set(data) - {"repo", "check", "build", *sections})
+    sections = {"roles": Roles, "status": Status, "labels": Labels, "log": Log, "sessions": Sessions, "relay": Relay,
+                "rule": Rule, "launch": Launch, "executor": Executor, "watch": Watch, "night": Night, "merge": Merge,
+                "review": Review, "outbound": Outbound}
+    if "stations" in data:
+        if "roles" in data:
+            raise ValueError(f"{FILE}: [stations] and [roles] are the same section; keep only [roles]")
+        if path not in RENAME_WARNED:
+            RENAME_WARNED.add(path)
+            print(f"{FILE}: [stations] is now [roles]; rename the section", file=sys.stderr)
+        data["roles"] = data.pop("stations")
+    unknown = sorted(set(data) - {"repo", "code", "shared", "check", "build", *sections})
     if unknown:
         raise ValueError(f"{FILE}: unknown keys: {', '.join(unknown)}")
-    repo = data.get("repo")
-    if repo is not None and (not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo)):
-        raise ValueError(f"{FILE}: repo must look like owner/name")
+    repo, code, shared = data.get("repo"), data.get("code"), data.get("shared", False)
+    for key, value in (("repo", repo), ("code", code)):
+        if value is not None and (not isinstance(value, str) or not kitchens.REPO.fullmatch(value)):
+            raise ValueError(f"{FILE}: {key} must look like owner/name")
+    if not isinstance(shared, bool):
+        raise ValueError(f"{FILE}: shared must be true or false")
+    if code is not None and repo is None:
+        raise ValueError(f"{FILE}: code needs repo too: repo is the kitchen repo, which holds the tickets")
+    if shared and (code is None or code == repo):
+        raise ValueError(f"{FILE}: a shared code repo needs a kitchen repo of its own: "
+                         "set code to the code repo and repo to a separate kitchen repo")
     if "build" in data and not isinstance(data["build"], dict):
         raise ValueError(f"{FILE}: [build] must be a table")
     check = check_section(data["check"]) if "check" in data else None
-    return Config(root=root, repo=repo, check=check, **{name: section(cls, data[name], name)
-                                                        for name, cls in sections.items() if name in data})
+    return Config(root=root, repo=repo, code=code, shared=shared, check=check,
+                  **{name: section(cls, data[name], name) for name, cls in sections.items() if name in data})

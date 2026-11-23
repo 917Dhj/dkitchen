@@ -6,8 +6,9 @@ Steps, each stopping the command before anything is sent when it fails:
 - with --reply-to, no comment came after the one answered (--force posts anyway); without it, the latest
   comment is shown as a hint;
 - with --edit-body, the ticket body still equals the baseline file (--base).
-Then it posts with gh and prints only the URL gh returns. A failed notification is reported but never undoes
-the comment.
+Then it posts with gh and prints only the URL gh returns, and tells a session: the one --notify names, or, for a
+comment whose type is among `[rule] notify_types` (default: the first type), the ticket's executor unless
+--no-notify is given. A failed notification is reported but never undoes the comment.
 """
 from __future__ import annotations
 
@@ -22,7 +23,7 @@ from dkitchen import ding, refs, truncate
 from dkitchen.config import Config
 from dkitchen.orchestrate import call, fail
 
-CLAUDE_ADDRESS = re.compile(r"^(?:uds|bridge|did):|^local_")
+CLAUDE_ADDRESS = re.compile(r"^(?:uds|bridge|did):")
 COMMENT_URL = re.compile(r"^https://\S+#issuecomment-\d+$")
 COMMENT_ID = re.compile(r"(?:#issuecomment-)?(\d+)$")
 
@@ -33,18 +34,30 @@ def first_line(text: str) -> str:
 
 def format_problem(draft: str, config: Config) -> str | None:
     """Why the draft's first two lines are wrong, or None when they are right."""
-    stations, rule = config.stations, config.rule
+    roles, rule = config.roles, config.rule
     lines = draft.split("\n")
     if not lines[0].startswith(config.designer_signatures):
         signatures = " or ".join(repr(signature) for signature in config.designer_signatures)
         return f"line 1 must start with {signatures}, not {truncate(lines[0], 40)!r}"
-    label = f"{rule.type_label}{stations.separator}"
+    label = f"{rule.type_label}{roles.separator}"
     if len(lines) < 2 or not lines[1].startswith(label):
         return f"line 2 must start with {label!r}, not {truncate(lines[1] if len(lines) > 1 else '', 40)!r}"
-    kind = lines[1][len(label):].strip()
+    kind = ruling_type(draft, config)
     if kind not in rule.types:
         return f"line 2 type {kind!r} must be one of: {', '.join(rule.types)}"
     return None
+
+
+def ruling_type(draft: str, config: Config) -> str:
+    """The type on line 2 of a draft whose first two lines `format_problem` accepts."""
+    return draft.split("\n")[1][len(config.rule.type_label) + len(config.roles.separator):].strip()
+
+
+def notify_target(args, config: Config, ticket: int, draft: str) -> str | None:
+    """Who hears about the ruling: --notify, else the ticket's executor for a comment of a notifying type."""
+    if args.notify is not None or args.no_notify or args.edit_body:
+        return args.notify
+    return f"#{ticket}" if ruling_type(draft, config) in config.rule.default_notify_types else None
 
 
 def comments_of(config: Config, repo: str, ticket: int) -> list[dict]:
@@ -95,19 +108,33 @@ def guard_reply(config: Config, repo: str, ticket: int, args) -> int | None:
                 "Nothing posted")
 
 
-def notify(config: Config, args, ticket: int, url: str, draft: str) -> int:
+def notify(config: Config, args, target: str | None, ticket: int, url: str, draft: str) -> int:
+    if target is None:
+        return 0
     message = config.rule.notify.format(ticket=ticket, url=url, first_line=first_line(draft))
     if "{first_line}" not in config.rule.notify:
         message += "\n" + first_line(draft)
-    send = ["send", args.notify, "--from", config.stations.designer, "--message", message]
+    hint = ("" if args.notify is not None else
+            f" It went to {target} because the ruling's type notifies by default; when a ruling of this type is "
+            "not for the ticket's executor, pass --no-notify.")
+    return deliver(target, config.roles.designer, message, url, hint)
+
+
+def deliver(target: str, sender: str, message: str, url: str, hint: str = "") -> int:
+    """Send `message` about the comment at `url` with `ding send`; `no_listener` counts as queued, and a failure
+    leaves the comment and exits 1."""
+    send = ["send", target, "--from", sender, "--message", message]
     try:
         with contextlib.redirect_stdout(sys.stderr):
             code = ding.main(send)
     except SystemExit as error:
         code = error.code or 1
+    if code == ding.NO_LISTENER_EXIT:
+        print(f"ding: posted {url}; {ding.no_listener_note(target)}", file=sys.stderr)
+        return 0
     if code:
-        return fail(f"posted {url}, but the notification to {args.notify} failed (ding send exit {code}); "
-                    "the comment stays. Send the message by hand")
+        return fail(f"posted {url}, but the notification to {target} failed (ding send exit {code}); the comment "
+                    f"stays. Tell the executor yourself.{hint}")
     return 0
 
 
@@ -142,14 +169,14 @@ def edit_body(config: Config, repo: str, ticket: int, args, draft: str) -> int:
     if current().rstrip("\n").encode("utf-8") != draft.rstrip("\n").encode("utf-8"):
         return fail(f"edited {url}, but the body read back differs from the draft; check the ticket before relying on it")
     print(url)
-    return 0 if args.notify is None else notify(config, args, ticket, url, draft)
+    return notify(config, args, args.notify, ticket, url, draft)
 
 
 def rule(args, config: Config) -> int:
     ticket = args.ticket
     if args.notify and CLAUDE_ADDRESS.search(args.notify):
-        return fail(f"--notify {args.notify}: ding cannot message a Claude Code session; use SendMessage for it. "
-                    "Nothing posted")
+        return fail(f"--notify {args.notify}: that is a SendMessage address; give the ticket or the Claude Code "
+                    "session id, whose inbox ding can reach. Nothing posted")
     try:
         with open(args.draft, encoding="utf-8") as handle:
             draft = handle.read()
@@ -161,6 +188,7 @@ def rule(args, config: Config) -> int:
         problem = format_problem(draft, config)
         if problem:
             return fail(f"{args.draft}: {problem}. Nothing posted")
+    target = notify_target(args, config, ticket, draft)
     try:
         repo = args.repo or config.repository()
         args.repo = repo
@@ -180,7 +208,7 @@ def rule(args, config: Config) -> int:
     if not COMMENT_URL.match(url):
         return fail(f"gh did not print a comment link (got {url!r}); look at the ticket before posting again")
     print(url)
-    return 0 if args.notify is None else notify(config, args, ticket, url, draft)
+    return notify(config, args, target, ticket, url, draft)
 
 
 def _refs_args(args):

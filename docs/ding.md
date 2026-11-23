@@ -2,7 +2,7 @@
 
 `ding` is the bell in the kitchen. It creates Codex sessions, lets one agent session message another, and wakes a session when the long job it started has finished.
 
-It talks to Codex sessions through the Codex App Server. Claude Code sessions can use it to message Codex sessions, but `ding` cannot wake a Claude Code session.
+It talks to Codex sessions through the Codex App Server. A Claude Code session can message Codex sessions with it, and when it serves as an executor it receives messages and wake-ups through a file inbox it keeps listening on (see [Claude Code executors](#claude-code-executors-claim-and-inbox)).
 
 - [Before you start](#before-you-start)
 - [A quick tour](#a-quick-tour)
@@ -15,6 +15,7 @@ It talks to Codex sessions through the Codex App Server. Claude Code sessions ca
 - [Run a long job: `launch`](#run-a-long-job-launch)
 - [Wrap a command yourself: `run`](#wrap-a-command-yourself-run)
 - [Kitchen commands](#kitchen-commands)
+- [A kitchen in its own repo](#a-kitchen-in-its-own-repo)
 - [Files `ding` keeps](#files-ding-keeps)
 - [When a wake-up does not arrive](#when-a-wake-up-does-not-arrive)
 
@@ -66,20 +67,27 @@ ding new --cwd /work/worktree-57 --issue 57 --name 'Ablation' --message-file bri
 
 `--cwd`, `--name`, and one of `--message` or `--message-file` are required. The working directory must exist. `ding` resolves its path and uses that directory, including a subdirectory or a directory outside Git. The title and first message must contain non-whitespace text; their text is sent unchanged. `--message -` reads the first message from stdin, and `--message-file PATH` reads it from a UTF-8 file. `--socket PATH` selects an existing App Server socket.
 
-`--issue N` starts the session for ticket `#N` in the repository of `--cwd`. `--name` is still required and should be a short title; `ding` fills it into the `[sessions] name` template from [.dkitchen.toml](#dkitchentoml), by default `【#{issue}】{name}`, so `--issue 57 --name 'Ablation'` names the session `【#57】Ablation`. `ding` writes nothing to GitHub. Instead, the first message opens with one paragraph asking the new session to claim the ticket:
+`--issue N` starts the session for ticket `#N` in the repository of `--cwd`. `--name` is still required and should be a short title; `ding` fills it into the `[sessions] name` template from [.dkitchen.toml](#dkitchentoml), by default `【#{issue}】{name}`, so `--issue 57 --name 'Ablation'` names the session `【#57】Ablation`. `ding` writes nothing to GitHub. Instead, the first message opens with one paragraph asking the new session to claim the ticket with [`ding claim`](#claude-code-executors-claim-and-inbox):
 
 ```text
-You own ticket 917Dhj/my-repo#57. Before anything else, post a comment on it with the line `Codex owner: 019a2b3c-...`.
+You own ticket 917Dhj/my-repo#57. Before anything else, run `ding claim 917Dhj/my-repo#57` and do what it prints.
 ```
 
-Until that comment is posted, `'#57'` does not resolve to the new session; pass its UUID instead.
+Until the session has claimed it, `'#57'` does not resolve to the new session; pass its UUID instead.
 
-A ticket has one executor. `--issue N` reads the ticket's `Codex owner:` lines first and refuses when any of those sessions is not archived. Give each run its own sub-ticket instead, or pass `--replace` when the ticket really changes hands (the new owner line then wins).
+A ticket has one executor. `--issue N` reads the ticket's owner lines first and refuses while any of those sessions is still working: a Codex session that is not archived, or a Claude Code session whose inbox waiter is running, or that claimed the ticket, started a waiter, or read its inbox in the last 30 minutes. When the Codex App Server cannot be reached, `ding` warns and checks only the Claude Code owners. Give each run its own sub-ticket instead, or pass `--replace` when the ticket really changes hands (the new owner line then wins).
 
 `--parent N` opens that sub-ticket for you: a new ticket titled `--title` (default: `--name`), whose body is the `[sessions] parent` line (default `Parent: #N`), attached to `#N` as a GitHub sub-issue. The new session then owns the sub-ticket exactly as with `--issue`. This is the one form of `new` that writes to GitHub. If the ticket opens but cannot be attached, no session starts, and the error names the new ticket.
 
 ```bash
 ding new --cwd /work/worktree-57 --parent 57 --title '27B v9 run' --name '27B v9' --message-file brief.md
+```
+
+**Which executor.** `[executor] default` in [.dkitchen.toml](#dkitchentoml) names the kind `new` dispatches to, `codex` (the default) or `claude`; `--executor codex|claude` overrides it for one dispatch. `ding` cannot open a Claude Code session, so for `claude`, and for any dispatch with `--print`, `new` runs the owner check, prints the complete first message to stdout, and creates nothing. Open a Claude Code session with that message, or hand it to the user to open. `--cwd` and `--name` are then optional; with `--cwd`, the message also says which directory to work in.
+
+```bash
+ding new --issue 57 --message-file brief.md                     # [executor] default = "claude": prints the message
+ding new --issue 57 --executor claude --cwd /work/wt-57 --message-file brief.md
 ```
 
 After the App Server accepts the first turn, `new` prints only the session UUID to stdout and exits with code 0. It does not wait for the reply. Use that UUID to continue or inspect the session:
@@ -99,6 +107,7 @@ Every command that talks to one session (`read`, `status`, `info`, `rename`, `se
 | Target | Example |
 | --- | --- |
 | Session UUID | `019a2b3c-...` |
+| Claude Code session id | `local_…`, or `claude:<id>` for any id |
 | Exact session name, as shown by `board` | `'Evaluation runner'` |
 | Issue in the current repo | `'#42'` or `--issue 42` |
 | Issue in any repo | `917Dhj/my-repo#42` |
@@ -111,17 +120,44 @@ Quote `'#42'`, or your shell will treat it as a comment. Links to `/pull/42` wor
 ```text
 Codex owner: 019a2b3c-...      # "this ticket is mine"
 Codex session: 019a2b3c-...    # "this comment came from me"
+Claude owner: local_…          # the same, for a Claude Code executor
 ```
 
-`ding` looks at the issue body and every comment:
+`ding claim` posts the owner line, so executors do not write it by hand. `ding` looks at the issue body and every comment:
 
-1. If any `Codex owner:` line exists, the **latest** one wins. When a ticket changes hands, the new executor posts its own owner line.
+1. If any owner line exists, `Codex owner:` or `Claude owner:`, the **latest** one wins. When a ticket changes hands, the new executor posts its own owner line.
 2. Otherwise, all `Codex session:` lines must name the same session.
 3. If they name different sessions, `ding` refuses and lists the candidates with their status and latest comment. Pick one by UUID or name.
 
 When a name matches several sessions, or none, `ding` shows the candidates instead of guessing.
 
-A Claude Code session working as the executor signs with `Claude session: <name>`. `ding watch` and `ding merge` count such a comment as an executor comment, but `ding` never delivers messages to it.
+A bare UUID is a Codex session unless a Claude Code inbox waiter has run under that id or recorded it as its transcript id. `rename` works on Codex sessions only; `read`, `status` and `info` also read Claude Code sessions, as [below](#read-a-session-read-status-and-info).
+
+## Claude Code executors: `claim` and `inbox`
+
+`ding` cannot push a message into a Claude Code session, so the session pulls. It keeps `ding inbox --wait` running as a background task; when a message arrives, the waiter prints it and exits, and Claude Code wakes the session. The session starts the waiter again at once, then handles what it read; a message that arrives meanwhile wakes it again.
+
+```bash
+ding claim '#57'            # run by the executor itself, Codex or Claude Code
+ding inbox --wait           # Claude Code: a background task, on its own
+ding inbox                  # print unread messages without waiting
+ding inbox --all            # every message, read or not
+```
+
+**`claim`** reads the calling session's identity (`CODEX_THREAD_ID`; else `CLAUDE_CODE_HOST_SESSION_ID`, then `CLAUDE_CODE_SESSION_ID`) and posts on the ticket a status block saying work has started, the owner line, and the session line. It refuses while another working executor owns the ticket, unless `--replace`. Then it prints the next step: for a Claude Code session, starting the waiter.
+
+**Delivery.** `send`, `relay`, the notifications of `rule` and `review --ticket`, and the exit wake of `launch` reach a Claude Code session by appending to its inbox:
+
+| Outcome | Meaning | Exit |
+| --- | --- | --- |
+| `inbox_queued` | A waiter is running; the session reads the message when the waiter wakes it | 0 |
+| `no_listener` | No waiter is running; the message stays in the inbox for the next `ding inbox --wait`. Do not resend: `ding watch` reports the missing waiter | 3 |
+
+Any other failure exits 1. `relay` and `rule` treat both outcomes as delivered: the comment is left, the command exits 0, and after `no_listener` it says so on stderr. `--supersede` withdraws the sender's earlier unread messages. A Claude Code session reads its inbox between turns, so `--steer` queues there, and `--interrupt` is refused.
+
+Run the waiter alone: no `&`, no redirection, nothing chained before it, the same as `ding watch`. Only one waiter runs per session; a second exits at once. The waiter marks messages read only after printing them, so a waiter killed in between prints them again rather than losing them.
+
+**Seeing Claude Code executors.** `claim` records the ticket and working directory, and each waiter its transcript id, start, a heartbeat every minute, and its stop. From these, `board` lists a Claude Code session ([below](#see-what-everyone-is-doing-board)) while its waiter runs and for 24 hours after its last activity, `read` prints the last reply in its transcript, and the orchestrator's `ding watch` reports an in-progress executor whose waiter has been gone for `[watch] executor_listener_minutes`. All of this reads files on the host where the session runs.
 
 ## Rename a session: `rename`
 
@@ -152,14 +188,14 @@ data-cleanup      /work/repo/.wt/issue57  idle    #57    Merged the loader fix. 
 
 | Column | What it shows |
 | --- | --- |
-| `NAME` | Session name, or its UUID if it has none |
+| `NAME` | Session name, or its UUID if it has none; `claude:<id>` for a Claude Code session |
 | `CWD` | The session's working directory |
-| `STATUS` | `active` (working), `idle`, `notLoaded`, or `unavailable` if the App Server cannot be reached |
-| `ISSUE` | The ticket parsed from `[sessions] name`, otherwise tickets this session owns or has signed comments on |
-| `HEAD` | The first paragraph of its latest final reply |
+| `STATUS` | `active` (working), `idle`, `notLoaded`, or `unavailable` if the App Server cannot be reached; for a Claude Code session, `waiting` while its `ding inbox --wait` runs, else `no-waiter` |
+| `ISSUE` | The ticket parsed from `[sessions] name`, or the one a Claude Code session claimed, otherwise tickets this session owns or has signed comments on |
+| `HEAD` | The first paragraph of its latest final reply; for a Claude Code session, of the last reply in its transcript |
 | `RUN` | The state of its most recent wrapped job ([states below](#job-states)) |
 
-By default the board shows loaded sessions and sessions with registered jobs in the current Git repo and its worktrees (or the current directory outside Git). Options:
+By default the board shows loaded sessions and sessions with registered jobs in the current Git repo and its worktrees (or the current directory outside Git), and Claude Code sessions there that keep a `ding` inbox: those whose waiter runs, and those active (claimed, waiting, or reading) in the last 24 hours. Claude Code sessions show even when the App Server cannot be reached. Options:
 
 - `--all` shows every non-archived session in every directory. It is slower.
 - `--status` replaces `HEAD` with the status block from the session's latest issue comment. Otherwise it falls back to the final reply.
@@ -222,6 +258,12 @@ ding info '#42'            # the session's ID, name, working directory, and stat
 
 `name` is `null` for a session that has never been named. `info` only reads: it starts no model turn and writes nothing to GitHub.
 
+For a Claude Code session (`claude:<id>`, a bare id with an inbox record, or a ticket whose latest owner line is `Claude owner:`), the three read its inbox record and transcript instead of the App Server. `read` prints the text of the last assistant message in the transcript (`$CLAUDE_CONFIG_DIR`, default `~/.claude`, under `projects/*/<transcript id>.jsonl`), which needs a waiter to have recorded the transcript id. `status` prints `{"type": "waiting", "waiter_pid": …}` while a waiter runs, otherwise `{"type": "no-waiter", "minutes_without_waiter": …}`, both with `last_read`, the UTC time it last read its inbox. `info` adds the claimed ticket and the transcript id; its `name` is `null`, since `ding` cannot see a Claude Code session's title:
+
+```json
+{"id": "claude:local_…", "name": null, "cwd": "/work/wt-42", "status": {"type": "waiting", "waiter_pid": 4242, "last_read": "2026-11-12T08:15:02Z"}, "ticket": "OWNER/REPO#42", "transcript_id": "…"}
+```
+
 ## Send a message: `send`
 
 ```bash
@@ -257,7 +299,7 @@ Every send is written to `~/.local/state/ding/sent.jsonl` before delivery, with 
 
 ## Run a long job: `launch`
 
-From inside a Codex session:
+From inside a Codex or Claude Code session:
 
 ```bash
 ding launch train -- python train.py --config big.yaml
@@ -278,7 +320,8 @@ Then end your turn. The wake-up will come.
 Options:
 
 - `--message TEXT`, `--message-file PATH`, or `--message -` set your own wake-up text. `--from NAME` works as in `send`.
-- `--progress PATH` names the task's `progress.json` (schema `progress-v1`: `current` stage with `done`/`total`, `rate_per_hour`, `eta`, `updated`). `ding board` then adds a PROGRESS column, such as `answer 120/500 34/h ETA 10-20 05:10`, and marks a running task whose file has not been updated for 10 minutes `STALE 14m`. `ding` only reads the file; the task writes it.
+- `--progress PATH` names the task's `progress.json` (schema `progress-v1`: `current` stage with `done`/`total`, `rate_per_hour`, `eta`, `updated`). `ding board` then adds a PROGRESS column, such as `answer 120/500 34/h ETA 10-20 05:10`, and marks a running task whose file has not been updated for 10 minutes `STALE 14m`. `ding` only reads the file; the task writes it. The orchestrator's `ding watch` also wakes on a task whose running file has not changed for `[watch] stale_minutes`.
+- `--expect-hours H` records how long you expect the task to take, in the run registry. The orchestrator's `ding watch` wakes once when the task has run longer than `[watch] overrun_factor` (default 1.5) times H, so a job far past its estimate is not left unnoticed. `run` takes the same option.
 - `--record PATH` writes the job's record somewhere you choose.
 - `--socket PATH` picks the App Server.
 
@@ -374,17 +417,23 @@ These commands carry out the kitchen's routine steps, as the house rules in [kit
 
 | Command | Who runs it | What it does |
 | --- | --- | --- |
-| `ding relay 42 --message TEXT [--comment TEXT]` | Orchestrator | Sends the message to ticket #42's executor and, only once delivery is confirmed, leaves it (or `--comment`) on the ticket, signed. The message opens with the `[relay] superseding` line and is sent with `--steer --supersede`: it enters the executor's current turn and deletes the orchestrator's relays still queued for it. `--queue` queues it plainly instead; `--interrupt` also stops the current turn first. `--to SESSION` picks the executor when the ticket has no owner line; `--no-comment` only sends. |
+| `ding relay 42 --message TEXT [--comment TEXT]` | Orchestrator | Sends the message to ticket #42's executor and, only once the message is delivered or queued in a Claude Code inbox, leaves it (or `--comment`) on the ticket, signed. The message opens with the `[relay] superseding` line and is sent with `--steer --supersede`: it enters the executor's current turn and deletes the orchestrator's relays still queued for it. `--queue` queues it plainly instead; `--interrupt` also stops the current turn first. `--to SESSION` picks the executor when the ticket has no owner line; `--no-comment` only sends. |
 | `ding review 57 a1b2c3d pass --body-file review.md` | Reviewer | Posts the review comment and a commit status on the full PR HEAD, using `[merge] review_check`. Use `changes` for a failed review. |
+| `ding review --ticket 42 pass\|changes --body-file verdict.md` | Verifier | Posts a verdict on a run stage of ticket #42 and tells its executor. See [Stage verdicts](#stage-verdicts). |
+| `ding review 57 a1b2c3d pass --ticket 42 --body-file review.md` | Reviewer, in a shared code repo | Posts the PR review as a verdict on ticket #42, whose `PR:` line names the PR, and leaves the PR alone. See [A kitchen in its own repo](#a-kitchen-in-its-own-repo). |
+| `ding pr 42 --title T --body-file pr.md --draft`<br>`ding pr 42 --ready 57` | Executor, or a role with `--from` | Opens a PR in the code repo from the current, pushed branch and records `PR: owner/code#N` on ticket #42; `--ready` marks the ticket's PR ready for review. See [A kitchen in its own repo](#a-kitchen-in-its-own-repo). |
+| `ding code-issue 42 --title T --body-file issue.md` | Any role | Opens an issue in the code repo and records `Code issue: owner/code#N` on ticket #42. |
+| `ding kitchen`<br>`ding kitchen link CODE_CHECKOUT` | Anyone; once per machine | Prints the kitchen this directory belongs to, its kitchen and code repos, and how it was found; `link`, run in a kitchen repo's checkout, records where the code repo is checked out on this machine. |
 | `ding merge 57 a1b2c3d` | Orchestrator | Merges PR #57 only if its HEAD is still the reviewed `a1b2c3d`, it is open and not a draft, its base is the default branch, and the required checks and the review status pass on that HEAD. Then it confirms the merge and prints the merge commit. |
-| `ding log --item TEXT [--pending TEXT]` | Orchestrator | Posts a signed, UTC-stamped entry to the orchestrator log ticket: one line per `--item`, then the matters waiting for the user. |
+| `ding log --item TEXT [--pending TEXT]` | Orchestrator | Posts a signed, UTC-stamped entry to the orchestrator log ticket: one line per `--item`, then the matters waiting for the user. With `[log] issue` set, `--issue N` for any other ticket is refused (use `gh issue comment` for a note on a work ticket, or `ding relay --comment` when its executor should hear it too) unless `--force`. An entry with no items and nothing pending (no `--pending`, or only the configured "none" word) is not posted; `ding` says so on stderr and exits 0. |
 | `ding night open\|show\|close` | Orchestrator opens/closes; any role reads | Records night orders on `[log] issue`, shows the open orders and their link, or closes them. Orders expire at `--until`. Calls no model. |
 | `ding watch [--for NAME]` | A role, in the background | Waits for GitHub activity, prints it as one batch, and exits. `--for NAME` selects requests and explicit handoffs to that role. See [Watches](../kitchen/team/watch.md). |
-| `ding waits [--for NAME] [--minutes N] [--json]` | Any role | Lists overdue unanswered waits from the latest executor comment on each open ticket, oldest first. Read-only; no model calls or watch state changes. |
-| `ding check [--base REF]` | Executor before hand-over; CI on every PR | Runs the repo checks set in `[check]`: layout rules on the files added since `--base` (default `origin/main`), then Ruff, import-linter and the repo's own checks on the whole tree, and the guard-change trailer rule. See [Repo checks](#repo-checks). |
+| `ding role take NAME`<br>`ding role [NAME]`<br>`ding role NAME --to` | The session taking a role; anyone who needs its holder | `take` records the calling session's id (Claude Code host session id or Codex thread id) as NAME's holder on this host, for this repository, and prints the previous holder. Without NAME it lists every held role; with NAME it prints only the holder's id, and exits 1 when nobody holds it. `--to` prints the address to message the holder at now, for `SendMessage`'s `to`. See [Role holders](#role-holders-role). |
+| `ding waits [--for NAME] [--minutes N] [--stalled-hours H] [--json]` | Any role | Lists overdue unanswered waits from the latest executor comment on each open ticket, oldest first, then under `stalled:` the lines that name no wait yet have not moved for H hours. Read-only; no model calls or watch state changes. |
+| `ding check [--base REF]` | Executor before hand-over; CI on every PR | Runs the repo checks set in `[check]`, or in the checkout's `pyproject.toml` `[tool.dkitchen.check]`: layout rules on the files added since `--base` (default `origin/main`), then Ruff, import-linter and the repo's own checks on the whole tree, and the guard-change trailer rule. See [Repo checks](#repo-checks). |
 | `ding map [FOLDER…]` | Any role | Lists each Python module under the library areas, or the given folders, with the first line of its docstring. |
 | `ding check-refs draft.md` | Verifier | Checks every `file:line` in a draft comment, in backticks or not (a name written right next to it must appear on that line), and every `sha256`, against `origin/main` or `--root DIR`. It also asks GitHub that each `#N` ticket, `PR#N`, issue or PR link, and comment link exists, that a `PR#N` or `/pull/` link is a PR, and that a comment link's comment belongs to the ticket in the link (`--repo` for bare `#N`, `--offline` to skip). It prints how many references of each kind it checked, and lists every wrong one and every one it could not check, also in its JSON line. Exits 1 when something is wrong. Give several drafts to check them one by one: each line then names its file, the JSON lines carry a `draft` key, and the exit status is nonzero (1 for a wrong reference, 2 for an unreadable file) if any draft fails. |
-| `ding rule 42 draft.md [--reply-to LINK_OR_ID] [--notify SESSION] [--force]`<br>`ding rule 42 body.md --edit-body --base base.md` | Designer | Posts the designer's ruling on ticket #42. Nothing is sent unless the draft's line 1 starts with one of `[rule] signatures`, line 2 with the `[rule] type_label` and one of `[rule] types`, and `check-refs` finds nothing wrong (it takes `--ref`, `--root`, `--tolerance`, `--repo`, `--offline`). With `--reply-to`, it stops and lists the link and first line of every comment that came after the one answered; `--force` posts anyway. Without it, it shows the latest comment's time and first line as a hint. It posts with `gh issue comment` and prints only the comment URL on stdout. `--notify SESSION` then sends `[rule] notify` plus the draft's complete stripped first nonempty line to a Codex session with `ding send`; if that fails, the error says so and the comment stays. `ding` cannot message Claude Code sessions, so `--notify` refuses a `uds:` or `local_` address before posting; tell those with `SendMessage`, using the printed URL. `--edit-body` replaces the ticket body instead: it stops unless the current body equals the `--base` file (line endings and trailing newlines aside), edits with `gh issue edit`, then reads the body back and fails unless it matches the draft byte for byte, ignoring trailing newlines. The line 1 and 2 check applies to comments only. |
+| `ding rule 42 draft.md [--reply-to LINK_OR_ID] [--notify SESSION \| --no-notify] [--force]`<br>`ding rule 42 body.md --edit-body --base base.md` | Designer | Posts the designer's ruling on ticket #42. Nothing is sent unless the draft's line 1 starts with one of `[rule] signatures`, line 2 with the `[rule] type_label` and one of `[rule] types`, and `check-refs` finds nothing wrong (it takes `--ref`, `--root`, `--tolerance`, `--repo`, `--offline`). With `--reply-to`, it stops and lists the link and first line of every comment that came after the one answered; `--force` posts anyway. Without it, it shows the latest comment's time and first line as a hint. It posts with `gh issue comment` and prints only the comment URL on stdout. Then it sends `[rule] notify` plus the draft's complete stripped first nonempty line with `ding send`: to `--notify SESSION`, a Codex session or a Claude Code executor's inbox, or, when the comment's type is in `[rule] notify_types` (default: the first type), to `'#42'`, the ticket's executor, unless `--no-notify` is given. `--notify` and `--no-notify` exclude each other. If the notification fails, it exits 1, the error says so, and the comment stays. After `no_listener` it exits 0 and says on stderr that the message waits in the executor's inbox. A `SendMessage` address (`uds:`, `bridge:`, `did:`) is not a `ding` session, so `--notify` refuses it before posting; tell those with `SendMessage`, using the printed URL. `--edit-body` replaces the ticket body instead: it stops unless the current body equals the `--base` file (line endings and trailing newlines aside), edits with `gh issue edit`, then reads the body back and fails unless it matches the draft byte for byte, ignoring trailing newlines. The line 1 and 2 check applies to comments only, and a body edit tells someone only with `--notify`. |
 
 Every merge checks the repository's current default branch against the PR base. A stacked PR targeting another branch is refused with both branch names; there is no bypass.
 
@@ -396,6 +445,19 @@ required_checks = ["ci"]
 ```
 
 The default is `[]`. With no `review_check` either, there are no check API calls; the HEAD, draft and base gates still apply. Names match exactly, including spaces and case; the value must be a list of nonempty strings. After the draft, reviewed-HEAD and base gates pass, `ding merge` reads all pages of the latest check runs and commit statuses on the full reviewed HEAD. Every configured name must have a result, and every matching result must be `success`. This includes same-name results from different apps or from both APIs. `neutral` and `skipped` refuse, as do failures, cancellations, timeouts and other non-success results. Missing or pending checks refuse with `check NAME has not finished on HEAD`. Refusals report every blocking name, its result and its URL when available. API/read errors also refuse. Checks for another SHA do not count. The command never waits or polls and has no bypass flag; The merge still uses `--match-head-commit` to reject a HEAD that moves after these reads.
+
+### Refreshing stale checks before a merge
+
+Checks that went green on the HEAD were computed against the default branch as it was then. Once other PRs merge, the combination is untested. To have `ding merge` refresh them first, set:
+
+```toml
+[merge]
+refresh = "scripts/refresh_checks.sh {pr} {tip}"
+```
+
+The default is `""` (off). The value is one command line, split like a shell would split it but not run through a shell. In each word, `{pr}` becomes the PR number, `{sha}` the full reviewed HEAD, and `{tip}` the full SHA of the default branch's tip that `ding merge` read for this run. After every other gate passes, `ding merge` reads that tip and runs the command in the repository root. The command must validate against `{tip}`, not its own idea of the default branch, such as a local `origin/main` that may not have been fetched: the merge is safe only because the commit the command checked is still the tip when `ding merge` merges. The command decides whether anything is stale: it should exit 0 at once when the checks were computed against `{tip}`, and otherwise test the merge with `{tip}` and write a fresh status on the same HEAD.
+
+Before each run `ding merge` prints `ding: refresh against <branch> <tip8>: <command>` on stderr; after a zero exit it prints `ding: refresh passed: ` and the command's last line of standard output, also on stderr. Stdout keeps only the `PR #N merged as <sha>` result. A nonzero exit, or a command that cannot start, refuses the merge and prints its last 20 lines of output. After a zero exit, `ding merge` reads the required and review checks on the HEAD again, since the command may have replaced a status, and reads the tip again. If the tip moved during the run, the command runs again with the new `{tip}`; if it moved during each of 3 runs, the merge is refused with `<branch> kept moving`. There is no timeout: a refresh that hangs keeps `ding merge` waiting in the foreground until it is interrupted. Which checks to re-run is the repository's knowledge, kept behind this one command; `ding watch` and `ding waits` never run it.
 
 ### Commit-bound review and PR readiness
 
@@ -412,11 +474,22 @@ ding review 57 a1b2c3d changes --body-file findings.md
 
 `review_check` defaults to `""` (disabled); a configured value must be a nonempty check name. `ding review` requires it, resolves the supplied SHA or prefix against the current PR HEAD, and refuses a mismatch before posting. The comment starts with `[merge] review_pass` or `review_changes`, `{sha}` replaced by the first 8 digits of the HEAD (by default `Reviewed <sha8>: pass` or `Reviewed <sha8>: changes requested, see below`), followed by the UTF-8 file. It then writes `success` or `failure` to the full SHA under that context, linking the status to the comment. Failure exits nonzero and identifies the failed call; if the status write fails, the comment remains and its URL is printed. A new HEAD has no inherited verdict.
 
+### Stage verdicts
+
+```bash
+ding review --ticket 42 pass --body-file verdict.md
+ding review --ticket 42 changes --body-file findings.md
+```
+
+A verdict on a run stage of a ticket, such as a first batch or a final state, goes on the ticket, not on a PR, and writes no commit status. The file's line 1 must start with the verifier's signature (`[roles] verifier` plus the separator, by default `Verifier: `), and N must be a ticket, not a PR (a PR number is refused with a pointer to `ding review PR SHA`), or nothing is posted. The comment is the file with `[review] verdict_pass` or `verdict_changes` inserted as line 2. On `changes` a third line hands the ticket to its design line, the first `[watch] handoff` word followed by its name (by default `hand to Designer`): the first designer role or alias named in the ticket body's first three nonempty lines, or, when they name none and the first is the `[sessions] parent` line, in the parent's; otherwise `[roles] designer`. It prints only the comment URL on stdout, then sends `[review] notify` plus the file's first nonempty line, unless the template holds `{first_line}`, to `'#42'`, the ticket's executor, with `ding send --from` the verifier. As with `ding rule`, `no_listener` exits 0 and says not to resend, and any other failed delivery exits 1 and keeps the comment.
+
+The orchestrator's `ding watch` wakes on a comment whose line 2 is `verdict_changes`, and the design line's `ding watch --for` wakes on its handoff. A `pass` verdict, like any other verifier comment, is listed in the orchestrator's next batch for reference without waking it. The verdict carries no release: whether the executor goes on after a pass is the repository's rule.
+
 With `review_check` configured, `merge`, `watch` and `waits` share the same readiness function: the PR must be open, non-draft, target the repository's default branch, and have every configured check plus the review check succeed on its exact HEAD. `merge` never reads executor comments. To hold a PR, mark it draft.
 
 PR watches read open PR facts and HEAD check rollups in one paginated GraphQL request (up to 100 PRs per page), sharing those checks with the readiness function. A rollup exceeding 100 contexts falls back to the paginated REST check reads. PR watches report `ready`, `review-failed`, and reviewed non-draft PRs blocked by failed checks or a wrong base to the orchestrator, and `review-missing` (including a pending review check) to the reviewer. The reviewer is the first nonempty `review:<NAME>` label, or the verifier role when absent. `ding watch --for NAME` accepts that name even when it is not a configured role. With `review_check` set, a first line matching `review_pass` or `review_changes` is recognised as a verifier comment, never a user approval; PR readiness events carry the verdict. Each event is reported once per PR, HEAD and event kind, persisted in `pr_reported`; a new HEAD can wake again. A PR blocked only by pending or missing checks waits for the backstop. An unreviewed PR, a reviewed blocked PR, or a ready but unmerged PR wakes the orchestrator once after `[watch] design_answer_minutes`. These timers start when that watch first observes the condition, persist in `pr_observed`, and do not reset on unrelated PR comments. Setting the threshold to 0 disables these delayed reminders, not the immediate PR events. Without `review_check`, PR status polling is disabled.
 
-`ding watch` keeps its place in `~/.local/state/ding/watch/OWNER-REPO.json`, so rerunning the same command after handling a batch loses nothing. Only one watch runs per state file. It always skips the orchestrator log ticket; add `--skip-issue N` for others. On an independent schedule, it also checks for executors still marked in progress whose attributed board sessions are all `idle` or `notLoaded`, with no running `ding run` or live `issue<N>` tmux job. After `[watch] idle_minutes` (default 45), it reports the ticket once per executor comment. The check interval is `idle_minutes / 3`, capped at 15 minutes; a longer `--interval` is shortened to meet that deadline. `--stale-every` controls only the existing stale check. Awaiting-user tickets, `--skip-issue`, and the log ticket are excluded; another `status:` label suppresses idle/stale checks only when its latest addition is after the executor comment; a ticket without an attributed session uses only the existing stale check.
+`ding watch` keeps its place in `~/.local/state/ding/watch/OWNER-REPO.json`, so rerunning the same command after handling a batch loses nothing. Only one watch runs per state file. It always skips the orchestrator log ticket; add `--skip-issue N` for others. On an independent schedule, it also checks for executors still marked in progress whose attributed board sessions are all `idle` or `notLoaded`, with no running `ding run` or live tmux job (named `issue<N>`, or launched by the session that owns the ticket; only runs started in this kitchen's checkout, its code checkout, or their worktrees count). After `[watch] idle_minutes` (default 45), it reports the ticket once per executor comment. The check interval is `idle_minutes / 3`, capped at 15 minutes; a longer `--interval` is shortened to meet that deadline. `--stale-every` controls only the existing stale check. Awaiting-user tickets, `--skip-issue`, and the log ticket are excluded; another `status:` label suppresses idle/stale checks only when its latest addition is after the executor comment; a ticket without an attributed session uses only the existing stale check.
 
 `ding board` does not expose session update times. Watch therefore saves when it first observes all the idle conditions, and waits from the later of that observation and the executor comment's update. This observation survives restarts. A new executor comment or a failed idle condition resets the period. Setting `[watch] idle_minutes = 0` disables this wake; the stale check remains enabled.
 
@@ -431,18 +504,18 @@ ding watch --for '总设计（训练）'
 
 Using the orchestrator's name or any of its aliases selects the complete orchestrator watch, including comment collection, stale/idle checks and all backstops, with the same default state file as bare `ding watch`. Other targets use the role watch described below.
 
-Use the role's name or a `review:<NAME>` label target. This mode wakes for executor comments whose waiting-on field names the role, including on awaiting-user tickets, or whose Next field contains a `[watch] handoff` word followed by NAME (by default `hand to NAME`). An executor marked `[status] waiting_on_design` with no designer named in its waiting field wakes the default `[stations] designer`.
+Use the role's name or a `review:<NAME>` label target. This mode wakes for executor comments whose waiting-on field names the role, including on awaiting-user tickets, or whose Next field contains a `[watch] handoff` word followed by NAME (by default `hand to NAME`). An executor marked `[status] waiting_on_design` with no designer named in its waiting field wakes the default `[roles] designer`.
 
 Verifier, orchestrator, and user comments wake the role only when they contain `@NAME`, a handoff word followed by NAME, or a line starting with `NAME` followed by the configured separator. Designer comments, including the role's own rulings, never trigger a role watch. A configured `[status] paused` executor never triggers `--for`; the orchestrator treats that status like in progress.
 
 A role watch skips issue-label events, newly opened PR events, stale/idle checks, ticket backstops, board, and tmux. With `review_check` configured it also polls PR readiness and reviewer labels. `--settle`, `--skip-issue`, the log-ticket exclusion, and bounded error retries still apply.
 
-Names are compared after width normalization, so `总设计(训练)` matches `总设计（训练）`. Matching includes `[stations.aliases]` and excludes occurrences inside longer configured names or aliases; trailing signature separators are removed before comparison. For example, when `总设计（训练）：` is configured, `--for 总设计` does not wake for a comment waiting only on `总设计（训练）`; `--for '总设计（训练）'` does.
+Names are compared after width normalization, so `总设计(训练)` matches `总设计（训练）`. Matching includes `[roles.aliases]` and excludes occurrences inside longer configured names or aliases; trailing signature separators are removed before comparison. For example, when `总设计（训练）：` is configured, `--for 总设计` does not wake for a comment waiting only on `总设计（训练）`; `--for '总设计（训练）'` does.
 
 Aliases are optional and apply to both role watches and the orchestrator's waiting-field test:
 
 ```toml
-[stations.aliases]
+[roles.aliases]
 "总设计（训练）" = ["训练设计"]
 
 [status]
@@ -456,7 +529,13 @@ Each alias value must be a nonempty list of nonempty names. Thus `训练设计` 
 
 The orchestrator's watch checks each ticket's latest executor comment for unanswered designer or verifier requests on the idle-check cadence, using the same query as `ding waits`. After `[watch] design_answer_minutes` (default 30), it reports that comment if its state is waiting on design or its waiting field names a designer or verifier. Verifier requests clear when a verifier comment follows; existing designer reminders still clear on a reply from any designer role. The line names the unanswered roles and links to the executor comment. Configured paused requests are excluded. Reported comment IDs remain in `design_reported`, including verifier requests, so restarting does not repeat them. Set the threshold to 0 to disable the backstop; it remains enabled when only idle wakes are disabled. Existing open requests can be reported even when older than `--since`.
 
+The orchestrator's watch also wakes when a ticket that another ticket waits on finishes. It reads the *Waiting on* field of the latest executor status on each open ticket, skipping `none` and any ticket whose status is `[status] paused`, for `#N` references; `PR #N`, a pull URL, and `owner/repo#N` are not tickets, and in a kitchen of its own `#N` always names a kitchen ticket. When #N gets an executor `done` status or is closed, it prints `#M is waiting on #N, which just finished <link>` once for each pair, and the pair stays in `wait_reported`, so a restart does not repeat it and a reopened #N that finishes again wakes no one. A ticket closed as not planned or as a duplicate is reported as `which was closed as not planned` (or `as a duplicate`). A waiter whose latest status is `[status] done` is skipped; `blocked` still fires. A wait posted after #N already finished is not reported by this check. The orchestrator decides whether to relay the result; nothing is sent to #M's executor. The finish is read from the comment and event listings the poll already fetches, so a poll in which nothing finished costs no extra GitHub calls; a finished ticket costs one list of open tickets and one comment read per open ticket, once for each finished ticket (and again after a restart while the finish is still inside the watch window). `--for NAME` watches do not run it.
+
 The orchestrator also reports an unknown-role wait once per executor comment after `[watch] unrouted_wait_minutes` (default 30; 0 disables it), on the idle-check cadence. The latest executor status must be in progress, its waiting field nonempty and not `none`, and no configured role or alias may match. Any newer comment restarts the silence interval; a live `ding run` or tmux job suppresses the reminder, using the same job test as stale checks. Reported IDs persist in `unrouted_reported`.
+
+It also reports a Claude Code executor that has kept no `ding inbox --wait` running for `[watch] executor_listener_minutes` (default 30; 0 disables it), on the same cadence, once per executor comment: without a waiter, messages wait unread and task-exit wakes reach no one. Only sessions that ran `ding claim` on this host are checked, through the ticket the claim recorded; the ticket must be open and not awaiting the user, its latest owner line must name the session, and its latest executor comment must be in progress. The silence counts from the waiter's stop or last heartbeat, or from the claim when no waiter has run. Reported IDs persist in `waiter_reported`.
+
+It reports two things about a running `ding launch` job started in this kitchen's checkout or its code checkout (or a worktree of either), read from the run registry and the job's progress file with no GitHub calls until one is reported. A **stall**: a job launched with `--progress` whose file still says `running` but has not changed for `[watch] stale_minutes` (default 30; 0 disables it; never less than the board's 10-minute STALE mark). It is reported once for each stall: the key is the run and the file's last update time, so a job that moves and then stalls again is reported again. An **overrun**: a job launched with `--expect-hours H` that has run longer than `[watch] overrun_factor` × H (default 1.5; 0 disables it), once for each run. Both lines name the job by its progress file (or its run id without one), the ticket, and the job's last progress line. The ticket is the one whose latest owner line names the launching session, as for the idle check's launched jobs; with none, the line says `no ticket found`. An ended job is never reported, and a job that died hard (progress still `running`, no process) is left to the task-exit wake. The overrun clock starts at each launch, so a relaunched run starts a new one. A progress file with no usable update time is aged by its modification time. If the ticket lookup fails, the job is not reported that poll and is retried on the next. Reported keys persist in `job_stall_reported` and `job_overrun_reported`.
 
 `ding watch` refuses to start with stdout redirected to `/dev/null`: it prints an error on stderr and exits 3 before polling, creating locks/directories, or reading/writing the state file. Pipes and regular files are allowed, including the files used by background tasks. Keep the printed batch until every item is handled; `ding waits` can recover unanswered waits after a prior batch has already advanced the watch cursor.
 
@@ -466,6 +545,21 @@ Terminal comment hints keep the first 100 characters and add `…` when shortene
 
 Run `ding watch --help` for the timing options.
 
+### Role holders: `role`
+
+Session names are not identities: a fork copies the name, and a handover leaves two sessions under it. `ding role take NAME`, run inside the session that takes the role, records that session's id instead. NAME is a standing role, held by one session: the orchestrator, a designer line, or the verifier, by its `[roles]` name or an alias from `[roles.aliases]`. It is stored under its configured name, so `ding role ALIAS` finds the same holder. The executor and the user are refused: executors are one per ticket and found by their claim lines, and the user is not a session. Outside a Claude Code or Codex session it refuses; nobody types an id by hand.
+
+To message a role, send to what `ding role NAME --to` prints, and look it up again for each send. To reply, copy the incoming message's `from`. The id that `ding role NAME` prints stays the holder's identity, for scripts and logs, but the desktop app delivers a `local_…` id only between sessions on the same SSH connection.
+
+- **Claude Code holder.** `--to` reads `~/.claude/sessions/*.json` (under `$CLAUDE_CONFIG_DIR` when set). It keeps the records whose `hostSessionId` (or `sessionId`) is the holder's id, whose process runs, and whose `procStart` equals that process's start time in `/proc/<pid>/stat`, so files left by restarts and reused pids drop out. With exactly one left, it prints `uds:<messagingSocketPath>` once the socket exists. Every session on the host can send to that address. With none, it exits 1 with `NAME is held by ID, but no live Claude Code process has it on this host`. With more than one, it exits 1 and lists them.
+- **Codex holder.** `--to` prints the thread id, which `ding send` takes.
+
+A socket address is good only while its process runs, so never store one in a note or a rule.
+
+Records are appended under a lock to `~/.local/state/ding/roles/OWNER-REPO.jsonl` as `{role, kind, id, taken_at, previous}`; the latest record per role wins and earlier ones stay as history. The ids are only valid on this host, and each repository keeps its own file.
+
+`ding watch`, and `ding watch --for NAME` for a standing role, read the holder at start and on each poll. When another session holds the role, the watch refuses to start (exit 3, on stderr), or a running watch prints `role NAME is held by ID since TIME` and exits 3 without advancing its state, which wakes the old session. When nobody has taken the role, or the watch runs with no session id (in tmux, say), it runs as before and says so once on stderr.
+
 ### Unanswered waits: `waits`
 
 ```bash
@@ -474,11 +568,22 @@ ding waits --for '总设计（训练）' --minutes 45
 ding waits --json
 ```
 
-For each open ticket, `ding waits` considers only the latest executor comment. It lists each role named by that comment's waiting field when more than N minutes have passed without a subsequent comment from that role. Names include the configured orchestrator, designers, verifier, executor, user, and `[stations.aliases]` keys. Matching shares watch's aliases, width normalization, and longest-name precedence. A user reply is a comment whose role is user; designer replies are matched to the named designer/signature or alias. Configured paused states are excluded from ticket waits. PRs use the separate readiness query when `review_check` is set. No labels or running-job checks hide waits, and no watch cursor or reported-ID state is read or changed.
+For each open ticket, `ding waits` considers only the latest executor comment. It lists each role named by that comment's waiting field when more than N minutes have passed without a subsequent comment from that role. Names include the configured orchestrator, designers, verifier, executor, user, and `[roles.aliases]` keys. Matching shares watch's aliases, width normalization, and longest-name precedence. A user reply is a comment whose role is user; designer replies are matched to the named designer/signature or alias. Configured paused states are excluded from ticket waits. PRs use the separate readiness query when `review_check` is set. No labels or running-job checks hide waits, and no watch cursor or reported-ID state is read or changed.
 
 The threshold defaults to `[watch] design_answer_minutes`; `--minutes` accepts a nonnegative finite number. For `waits`, 0 lists any positive-duration wait, including when the periodic backstop is disabled. `--for NAME` keeps only waits on that role or its aliases. A design-state comment with no role named in its waiting field belongs only to the existing watch fallback, not this list.
 
-Text output is one line per unanswered role, with ticket, role, minutes, summary, and comment URL, oldest first. Empty text output is blank; both empty and nonempty lists exit 0. `--json` emits an array (empty: `[]`) whose objects contain `ticket`, `station`, `minutes`, `summary`, `url`, `comment_id`, and `created_at`. GitHub/query errors exit nonzero rather than returning an empty list.
+Text output is one line per unanswered role, with ticket, role, minutes, summary, and comment URL, oldest first. Empty text output is blank; both empty and nonempty lists exit 0. `--json` emits an array (empty: `[]`) whose objects contain `ticket`, `role`, `minutes`, `summary`, `url`, `comment_id`, and `created_at`. Each object also carries `station`, equal to `role`; it is deprecated and will be removed in 0.7.0. GitHub/query errors exit nonzero rather than returning an empty list.
+
+**Waits on finished PRs.** The waiting field can name PRs of this repository as `PR #N`, `PRN` (any width of `#`, spaces allowed), or a `/pull/N` link. If every PR it names is merged or closed and belongs to the ticket, the rows for the roles that review and merge it are dropped: the orchestrator, the verifier, and each PR's `review:<NAME>` reviewer. Rows for other roles the same status names, such as the user, stay. A PR belongs to ticket N when its body cites `#N` or the ticket's link, or its head branch contains `issueN`. A finished PR of another ticket is a dependency that is now ready, so the rows stay and the summary ends with `(PR #M merged)` or `(PR #M closed)`. A `PR #N` that GitHub does not know as a PR keeps its rows. The orchestrator's unanswered-request backstop uses the same rule. Waits on an open PR, and waits that name no PR, are listed as before.
+
+**Stalled lines.** After the waits, a `stalled:` section lists, oldest first, what names no wait but has not moved for `--stalled-hours` (default 48; 0 disables the section):
+
+- each open draft PR not updated for that long, with its title;
+- each open ticket, not labelled awaiting-user, whose latest executor status is in progress with an empty or `none` waiting field, which has had no comment or other update for that long, and which has no running `ding run` or live tmux job (named `issue<N>`, or launched by the session that owns the ticket; only runs started in this kitchen's checkout, its code checkout, or their worktrees count) (the stale check's test, since a long job is quiet by design), with that status's summary and link.
+
+Each row shows the ticket or PR, the status line or title, and the hours since the last update. The section belongs to the orchestrator: `--for` another role leaves it out. In `--json` its objects carry `"kind": "stalled"`, `pr` (true for a draft PR), `role` (the orchestrator, also as the deprecated `station`), and the usual `ticket`, `minutes`, `summary`, `url`, and `created_at`.
+
+The orchestrator's `ding watch` runs the same check on its stale cadence (`--stale-every`) with its own `--stalled-hours` (default 48; 0 disables it), and wakes once per stalled item per 24 hours, so the orchestrator decides whether to resume, hand it over, or close it. Report times persist in `stalled_reported`; an item that moves again is forgotten, so it is reported at once if it stalls later.
 
 With `review_check`, PR rows exclude drafts unless their review failed. PR rows use the same `ready`, `review-failed`, `review-missing`, or `blocked` terms and reasons as the watch and merge checks. `--for` also accepts reviewer-label names. PR JSON rows include `head`, `kind`, and `reasons` instead of `comment_id`. Their `minutes` and `created_at` describe time since the PR's last GitHub update; unlike watch's persistent backstop timers, this read-only listing does not measure continuous observed readiness. The minute filter applies to both ticket and PR rows.
 
@@ -505,7 +610,7 @@ ding check --base origin/main
 ding map
 ```
 
-`ding check` needs a `[check]` table in `.dkitchen.toml`; without one it prints how to set it up and exits 2. The table maps each **area** kind to the repo paths that hold that kind of thing:
+`ding check` needs a `[check]` table in `.dkitchen.toml`, or a `[tool.dkitchen.check]` table in the `pyproject.toml` of the checkout being checked; without either it prints how to set it up and exits 2. The table maps each **area** kind to the repo paths that hold that kind of thing:
 
 ```toml
 [check]
@@ -521,7 +626,10 @@ root_files = ["Makefile.local"]     # top-level files allowed beyond the usual n
 ruff = true                         # ruff check and ruff format --check on the whole tree
 imports = true                      # lint-imports with the contracts in pyproject.toml
 commands = [["python", "scripts/check_gpu_ids.py"]]   # the repo's own checks
+rules = "CONTRIBUTING.md#layout"     # printed after `rules in` on a failure; default docs/agents/code.md
 ```
+
+**Settings in `pyproject.toml`.** A code repo can keep the same table, with the same keys, as `[tool.dkitchen.check]` in its own `pyproject.toml`. `ding check` and `ding map` read it from the checkout being checked, whether or not the machine is linked to a kitchen and with or without any `.dkitchen.toml`, so CI and people who do not use dkitchen need only `pip install dkitchen`. When the kitchen's `[check]` is also set, the `pyproject.toml` table wins and `ding` warns once that `[check]` is ignored. `rules` names the path or URL a failing run points at; set it to the team's own docs, since the kitchen's `docs/agents/code.md` is not in the code repo.
 
 Paths are relative and inside the repo; a path belongs to one kind only; a file belongs to the longest area path that holds it. Hidden top-level folders such as `.github` are outside the layout rules.
 
@@ -544,7 +652,7 @@ Vendor areas are never checked.
 
 **Whole-tree tools** run from the repo root: `ruff check` and `ruff format --check` with the vendor and outputs areas excluded, and `lint-imports`, each with the settings in `pyproject.toml`. Each can be switched off in `[check]`, for example until a cleanup ticket lands. A tool that is not installed is a failure, not a skip. Each `commands` entry runs from the repo root with `--base <commit>` appended; a nonzero exit fails the check and its output is shown.
 
-**Guard changes.** When this change touches `[check]` or `[merge]` in `.dkitchen.toml`, `[tool.ruff]` or `[tool.importlinter]` in `pyproject.toml`, a file under `.github/workflows/`, or a file a `commands` entry runs, some commit since `--base` must carry a trailer `Guard-change: #<ticket> <reason>`. Installing the checks, when `--base` has no `[check]`, is not a guard change. The trailers found are printed for the reviewer.
+**Guard changes.** When this change touches `[check]` or `[merge]` in `.dkitchen.toml`, `[tool.ruff]`, `[tool.importlinter]` or `[tool.dkitchen.check]` in `pyproject.toml`, a file under `.github/workflows/`, or a file a `commands` entry runs, some commit since `--base` must carry a trailer `Guard-change: #<ticket> <reason>`. Installing the checks, when no check settings were in force on `--base`, is not a guard change; moving settings already in force, such as a kitchen's `[check]`, into `[tool.dkitchen.check]` is one. The trailers found are printed for the reviewer.
 
 `ding check` exits 0 when everything passes, 1 on any problem, and 2 when it cannot run, such as an unknown `--base` or a missing `[check]`. `--json` prints the findings, the guard changes, and the trailers.
 
@@ -553,9 +661,11 @@ Vendor areas are never checked.
 Put this file at the repo root to change the kitchen's words. Every key is optional; these are the defaults:
 
 ```toml
-repo = "owner/name"                  # default: the repository gh sees here
+repo = "owner/name"                  # the kitchen repo, holding the tickets; default: the repository gh sees here
+# code = "owner/code"               # the code repo, for a kitchen in its own repo; see A kitchen in its own repo
+# shared = false                    # true when other people work in the code repo; needs a code other than repo
 
-[stations]
+[roles]
 orchestrator = "Orchestrator"
 designer = "Designer"
 verifier = "Verifier"
@@ -563,7 +673,7 @@ executor = "Executor"
 user = "User"
 separator = ": "                     # written after a role name to sign a comment
 
-# [stations.aliases]
+# [roles.aliases]
 # "Training designer" = ["Training"]  # optional equivalent names
 
 [status]
@@ -598,30 +708,52 @@ superseding = "New decision; it replaces earlier relays not yet carried out."   
 # signatures = ["Designer: ", "Training designer: "]  # default: designer + separator
 type_label = "Type"                  # line 2 reads `<type_label><separator><one of types>`
 types = ["actionable", "proposal, awaiting user", "record"]
-notify = "#{ticket} answered, see the ticket {url}"   # the `--notify` message; `{first_line}` is also available
+notify = "#{ticket} answered, see the ticket {url}"   # the notification's message; `{first_line}` is also available
+# notify_types = ["actionable"]     # types whose ruling tells '#N' without --notify; default: the first type
 
 [merge]
 required_checks = []                # e.g. ["ci"]; only success permits merging
 review_check = ""                   # e.g. "review": the status `ding review` writes and `ding merge` requires
 review_pass = "Reviewed {sha}: pass"                              # first line of a passing review
 review_changes = "Reviewed {sha}: changes requested, see below"   # first line of a failing review
+refresh = ""                        # e.g. "scripts/refresh_checks.sh {pr} {tip}": `ding merge` runs it first; nonzero refuses
+# by = "orchestrator"               # who merges: "orchestrator" (`ding merge`) or "team" (`ding merge` refuses);
+                                    # default: "team" in a shared code repo, else "orchestrator"
+
+[outbound]                           # `ding pr` and `ding code-issue`, which write into the code repo
+user_decision = "user decision"     # follows a role's signature on a user decision's first line; `--approval` links one
+
+[review]                             # `ding review --ticket N`: a verdict on a ticket's run stage
+verdict_pass = "Verdict: pass"                   # line 2 of a passing verdict
+verdict_changes = "Verdict: changes requested"   # line 2 of a failing one; wakes the orchestrator and the design line
+notify = "#{ticket} {verdict}, see the ticket {url}"   # message to the executor; `{first_line}` is also available
+
+[executor]
+default = "codex"                    # what `ding new` dispatches to: "codex" or "claude"; --executor overrides
 
 [watch]
 idle_minutes = 45                    # 0 disables idle-executor wakes
 design_answer_minutes = 30           # 0 disables unanswered-role and PR backstops
 unrouted_wait_minutes = 30           # 0 disables unknown-role wait reminders
+executor_listener_minutes = 30       # 0 disables wakes for a Claude Code executor without `ding inbox --wait`
+stale_minutes = 30                   # 0 disables wakes for a `ding launch --progress` job whose progress stopped moving
+overrun_factor = 1.5                 # wake once a `ding launch --expect-hours H` job runs past factor x H; 0 disables
 handoff = ["hand to "]               # written right before a role name to hand it work, e.g. ["交"]
 
-[check]                              # repo checks for `ding check` and `ding map`; see Repo checks. Absent by default.
+[check]                              # repo checks for `ding check` and `ding map`; see Repo checks. Absent by default; a code repo's pyproject.toml [tool.dkitchen.check] wins over it.
 
 [build]                              # notes the build skills keep for each other; `ding` skips this table
 ```
 
+Earlier versions named `[roles]` `[stations]`. A file with only `[stations]` still loads, as `[roles]`, and each `ding` command prints `.dkitchen.toml: [stations] is now [roles]; rename the section` on stderr; 0.7.0 drops the old name. A file with both sections is refused.
+
 `[sessions] name` may use `{issue}`, `{name}` (the `--name` text), and `{repo}` (`OWNER/REPO`), with an optional format spec such as `{issue:04d}`. Any other field is an error when the file is read. The `--name` text is filled in as is, so braces in it are kept. `ding new` without `--issue` and `ding rename` use `--name` unchanged.
 
-`[watch] idle_minutes`, `design_answer_minutes`, and `unrouted_wait_minutes` must be nonnegative finite numbers of minutes; unknown `[watch]` keys are errors.
+`[watch] idle_minutes`, `design_answer_minutes`, `unrouted_wait_minutes`, `executor_listener_minutes`, and `stale_minutes` must be nonnegative finite numbers of minutes, and `overrun_factor` 0 (off) or a finite number of at least 1; unknown `[watch]` keys are errors.
 
-`[rule] signatures` lists the full first-line prefixes accepted as designer signatures by both `ding rule` and `ding watch`. It must be a nonempty list of nonempty strings. `ding rule` matches prefixes verbatim, including spaces; `ding watch` also recognizes width-normalized forms and configured aliases. When omitted, it defaults to `[stations] designer` plus `[stations] separator`.
+`[rule] signatures` lists the full first-line prefixes accepted as designer signatures by both `ding rule` and `ding watch`. It must be a nonempty list of nonempty strings. `ding rule` matches prefixes verbatim, including spaces; `ding watch` also recognizes width-normalized forms and configured aliases. When omitted, it defaults to `[roles] designer` plus `[roles] separator`.
+
+`[rule] notify_types` lists the types whose ruling `ding rule` sends to the ticket's executor (`'#N'`) when neither `--notify` nor `--no-notify` is given. Each entry must be one of `[rule] types`. When omitted, it is the first entry of `types`, the actionable type; `[]` makes every notification explicit, as before 0.6.3.
 
 For example, a repository with two designers can set:
 
@@ -633,6 +765,47 @@ signatures = ["总设计：", "总设计（训练）："]
 `ding watch` recognizes either prefix as the designer; verifier and orchestrator matching is unchanged. With no list configured, it requires the full default signature, so a line beginning with only the designer's name no longer counts as a designer comment.
 
 `ding board --status` also uses `[status] fields`, after `--status-fields` and `DING_STATUS_FIELDS`. A misspelled key is an error, so a typo cannot silently fall back to a default.
+
+## A kitchen in its own repo
+
+A kitchen can live in a private **kitchen repo** of its own, paired with one **code repo**: the kitchen repo holds the house rules, `.dkitchen.toml` and the tickets; the code repo receives only PRs and code issues, written in the user's name. Nothing of the kitchen lands in the code repo, so it suits a repo other people work in, and also a personal repo you want free of kitchen files. [ADR 0003](adr/0003-kitchen-repo-apart-from-code-repo.md) records why.
+
+```toml
+# .dkitchen.toml in the kitchen repo
+repo = "me/project-kitchen"          # the kitchen repo: tickets, labels, the log
+code = "team/project"                # the code repo: PRs and code issues
+shared = true                        # other people work in team/project
+```
+
+`code` needs `repo`, and `shared = true` needs a `code` other than `repo`: a shared code repo always gets a kitchen of its own. Without `code`, the kitchen is the repo it sits in, as before.
+
+**Linking a machine.** Each machine that runs sessions records where the two checkouts are:
+
+```bash
+cd ~/work/project-kitchen
+ding kitchen link ~/work/project     # records the pair in ~/.config/dkitchen/kitchens.toml
+ding kitchen                         # prints the kitchen, the code repo, and how it was found
+```
+
+The registry is keyed by the code repo's `owner/name`, read from `origin`, so `ding` run anywhere in the code repo's checkout or any of its worktrees finds the kitchen and its `.dkitchen.toml`. When a code checkout also has a `.dkitchen.toml` of its own, the registry wins and `ding` warns once. A machine with no registry runs no extra git command.
+
+**Where sessions run.** The orchestrator, designers and verifier work in the kitchen's checkout and read the code repo's checkout beside it. Executors work in worktrees of the code repo: in a kitchen of its own, `ding new` refuses a `--cwd` that is not a code repo checkout, and gives the executor the kitchen's location. A Codex session gets it as developer instructions, alongside its own: read the kitchen's `AGENTS.md` first, `#N` means a ticket in the kitchen repo, and PRs and code issues go out through `ding pr` and `ding code-issue` as the kitchen's `docs/agents/contributing.md` says. For a Claude Code executor the same paragraph opens the printed first message, and `ding` reminds you on stderr to open the session with `--add-dir <kitchen>`.
+
+**Commands and the two repos.** Tickets, labels, the log and night orders are read and written in the kitchen repo, wherever `ding` runs. `ding merge`, `ding review PR SHA` and the PR checks of `ding watch` and `ding waits` use the code repo. `ding check` and `ding map` run in a code repo checkout, with the kitchen's `[check]`, or with the code repo's own `[tool.dkitchen.check]` once the team adopts the checks; the guard-change rule then covers the code repo's tool settings and CI files, since `.dkitchen.toml` is not there. `ding check-refs` run in the kitchen's checkout reads `file:line` references from the linked code checkout. `ding board` lists sessions working in either checkout and their worktrees.
+
+**`ding pr` and `ding code-issue`.** `ding pr 42 --title T --body-file pr.md [--draft] [--base B]` opens a PR in the code repo from the current branch, which `origin` must already hold at HEAD, then comments `PR: owner/code#N` on ticket #42. That line ties the PR to the ticket for the watches, `ding waits` and shared reviews. `ding pr 42 --ready 57` marks the ticket's PR 57 ready for review. `ding code-issue 42 --title T --body-file issue.md` opens a code issue and comments `Code issue: owner/code#N`; a ticket that starts from a code issue carries the same line in its body. The ticket comment is signed by `--from ROLE`, or else by the calling executor session, after a status block. Both commands also work in a single-repo kitchen, where the PR goes to the same repo.
+
+Before anything is posted from a kitchen of its own, the title and body are scanned, and refused when a line opens with a role signature (also behind a markdown heading or quote), names a role or alias written in a non-Latin script anywhere in the line (an ASCII name such as `Executor` is also an everyday word, so only its signature counts), carries a session or owner line, `PR:` or `Code issue:`, names the kitchen repo, or has a bare `#N` other than a code issue the ticket records: the code repo would read `#N` as its own issue. Two or more status-field lines count as a status block. `ding review PR SHA` runs the same scan on the comment it would post to the code repo, with the review line included, and a leak posts no comment and writes no commit status; there `--ticket N` names the ticket whose recorded code issues a bare `#N` may cite, and without it none are allowed. In a shared code repo the verdict goes on the ticket instead, so nothing reaches the code repo. Fix the text and run the command again; there is no bypass.
+
+**A shared code repo.** With `shared = true`:
+
+- `ding pr` runs `ding check` against the PR's base first when check settings exist, in the kitchen's `[check]` or the code repo's `[tool.dkitchen.check]`, and refuses on a problem.
+- A PR that is not a draft, `--ready`, and every code issue need `--approval URL`: a link to a user decision on the same ticket, a comment whose first line opens with the orchestrator's or a designer's signature followed by `[outbound] user_decision` (by default `Orchestrator: user decision`), or the night orders open now. A decision may approve a PR's handing over ahead of time; each code issue and each reply to someone in the code repo is approved on its own. The ticket comment records the approval as an `Approval:` line, and `ding code-issue` refuses a user decision that already approved a code issue.
+- `ding review PR SHA pass|changes --ticket N` posts the verdict on ticket N instead of the PR, with a line naming the reviewed HEAD and the PR, and writes no commit status. N's `PR:` line must name the PR. The verdict reaches the executor as a [stage verdict](#stage-verdicts) does.
+- `ding merge` refuses: the team merges. `[merge] by` says who merges, `orchestrator` or `team`; it defaults to `team` in a shared code repo and `orchestrator` elsewhere, so a personal code repo kept apart from its kitchen still merges with `ding merge`.
+- `ding watch` and `ding waits` leave PR waits alone, since the team, not a role, answers them.
+
+**Watching both repos.** A `PR:` line in a new ticket comment reads as `PR owner/code#N opened, recorded on #T`. The orchestrator's watch also wakes for comments by other people on code repo PRs and issues that your account opened, such as `team/project#57 code repo comment by @alice`. Such a comment never counts as your words, even from your own login; an answer goes back through the ticket. Reviews submitted with no line comments are not seen, since GitHub lists them per PR only. Stalled drafts are those you opened in the code repo.
 
 ## Files `ding` keeps
 
@@ -647,6 +820,10 @@ Everything lives under `${XDG_STATE_HOME:-~/.local/state}/ding/`, readable only 
 | `launch-records/<name>-<id>.log` | Everything the launch's pane showed; deleted after `[launch] keep_days` |
 | `watch/OWNER-REPO.json` | Where `ding watch` left off |
 | `run-locks/<run id>.lock` | Held while a wrapper is alive; this is how `board` tells `running` from `lost` |
+| `inbox/<session>.jsonl` | A Claude Code session's inbox: `message`, `read`, and `withdrawn` events |
+| `inbox/<session>.lock`, `inbox/<session>.waiter.json` | Held by the live `ding inbox --wait`; and what `claim` and the waiters recorded: ticket, claim time, pid, transcript id, working directory, start, heartbeat, stop |
+
+One file lives elsewhere: `${XDG_CONFIG_HOME:-~/.config}/dkitchen/kitchens.toml`, written by `ding kitchen link`, pairs each code repo with the checkouts of its kitchen repo and of the code repo on this machine. Remove an entry by hand to unlink a kitchen.
 
 A `runs.jsonl` line looks like this:
 

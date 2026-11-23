@@ -8,6 +8,8 @@ ding launch issue42-stage1 --message "$message" --record /absolute/path/task-exi
 
 After launching, end your turn: the job's exit wakes you. Look at progress only when the user asks.
 
+Add `--progress /absolute/path/progress.json` so a hung job shows on the board and wakes the orchestrator once its progress stops moving for `[watch] stale_minutes` (default 30), and `--expect-hours H` so a job running past `[watch] overrun_factor` × H (default 1.5) wakes it once. Both wake the orchestrator, not you, and a job with neither is never reported while it runs.
+
 - **Environment**: tmux carries over only `PATH`, `HOME`, `PYTHONPATH`, `XDG_STATE_HOME`, and the session ID. Pass anything else the job needs as `env K=V` in the command.
 - **After exit**: the tmux session closes itself, however the job ended. Its output and errors are in the log the wake-up names; read it there.
 - **Unwrapped jobs**: the end of `ding board` lists tmux jobs on this host that have run for over 10 minutes without `ding`. The orchestrator asks the executor that owns one to relaunch it with `ding launch`.

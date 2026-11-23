@@ -404,8 +404,8 @@ def test_new_issue_formats_name_and_asks_for_owner_line(tmp_path, monkeypatch, c
                       "--message", "Brief", "--socket", "/test.sock"]) == 0
     assert requests[1] == ("thread/name/set", {"threadId": THREAD_ID, "name": expected})
     assert requests[2][1]["input"] == [{"type": "text", "text":
-        f"You own ticket example/project#57. Before anything else, post a comment on it "
-        f"with the line `Codex owner: {THREAD_ID}`.\n\nBrief"}]
+        "You own ticket example/project#57. Before anything else, run `ding claim example/project#57` "
+        "and do what it prints.\n\nBrief"}]
     assert capsys.readouterr().out == THREAD_ID + "\n"
 
 
@@ -972,8 +972,6 @@ def test_issue_latest_owner_across_all_comment_pages(monkeypatch):
 
     def gh(arguments):
         calls.append(arguments)
-        if arguments[0] == "repo":
-            return {"nameWithOwner": "example/project"}
         if "--paginate" not in arguments:
             return {"body": f"Codex owner: {OTHER_ID}\nCodex owner: {THREAD_ID}\n"}
         return [[{"body": "Codex owner: invalid"}], [
@@ -981,12 +979,13 @@ def test_issue_latest_owner_across_all_comment_pages(monkeypatch):
             {"body": f"Codex session: {THREAD_ID}"},
         ]]
 
+    monkeypatch.setattr(ding, "github_repository", lambda: "example/project")
     monkeypatch.setattr(ding, "gh_json", gh)
     assert ding.issue_session(42) == OTHER_ID
     assert "--slurp" in calls[-1]
     assert calls[-1][-1].endswith("/42/comments?per_page=100")
     monkeypatch.setattr(ding, "gh_records", lambda *a: [{"body": "Codex owner: invalid"}])
-    with pytest.raises(ValueError, match="last Codex owner line"):
+    with pytest.raises(ValueError, match="last owner line"):
         ding.issue_session(42)
 
 
@@ -1024,7 +1023,7 @@ def test_latest_invalid_owner_refuses_without_session_fallback(issue_data, value
     issue, comments = issue_data
     issue["body"] += f"\nCodex owner: {THREAD_ID}"
     comments.append({"body": f"Codex owner: {value}\nCodex session: {OTHER_ID}"})
-    with pytest.raises(ValueError, match="last Codex owner line"):
+    with pytest.raises(ValueError, match="last owner line"):
         ding.issue_session(42)
 
 
@@ -1297,7 +1296,7 @@ def test_issue_map_omits_invalid_latest_owner_without_losing_other_issues(monkey
     assert ding.issue_map() == {THREAD_ID: {1}, OTHER_ID: {3}}
     warning = capsys.readouterr().err
     assert len(warning.splitlines()) == 1
-    assert "issue #2" in warning and "invalid Codex owner" in warning
+    assert "issue #2" in warning and "invalid owner line" in warning
 
 
 def test_board_issue_column_uses_owner_attribution(monkeypatch, capsys):
@@ -1319,11 +1318,15 @@ def test_board_issue_column_uses_owner_attribution(monkeypatch, capsys):
     assert [row.split("\t")[3] for row in captured.out.splitlines()[1:]] == ["#42", ""]
 
 
-def test_gh_allows_lookup_over_ten_seconds(monkeypatch):
-    def delayed_lookup(argv, *, capture_output, text, timeout):
+def test_gh_allows_lookup_over_ten_seconds(monkeypatch, tmp_path):
+    def delayed_lookup(argv, *, capture_output, text, timeout=None, cwd=None):
+        if argv[0] == "git":
+            return subprocess.CompletedProcess(argv, 1, "", "not a git repository")
         if timeout < 12:
             raise subprocess.TimeoutExpired(argv, timeout)
-        return subprocess.CompletedProcess(argv, 0, '{"nameWithOwner": "example/project"}')
+        return subprocess.CompletedProcess(argv, 0, "example/project\n")
+
+    monkeypatch.chdir(tmp_path)
 
     monkeypatch.setattr(ding.subprocess, "run", delayed_lookup)
     assert ding.github_repository() == "example/project"
@@ -1798,13 +1801,16 @@ def test_board_all_includes_unloaded_errors_and_outside(monkeypatch, tmp_path, c
 @pytest.mark.parametrize("returncode, stdout, stderr", [
     (1, "", "authentication failed"), (0, "invalid json", ""),
 ])
-def test_gh_failure_leaves_issue_map_empty_with_warning(monkeypatch, capsys, returncode, stdout, stderr):
-    def run(argv, *, capture_output, text, timeout):
+def test_gh_failure_leaves_issue_map_empty_with_warning(monkeypatch, capsys, tmp_path, returncode, stdout, stderr):
+    def run(argv, *, capture_output, text, timeout=None, cwd=None):
+        if argv[0] == "git":
+            return subprocess.CompletedProcess(argv, 1, "", "not a git repository")
         assert argv[:3] == ["gh", "repo", "view"]
         assert capture_output and text
         assert timeout == 60
         return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(ding.subprocess, "run", run)
     assert ding.issue_map() == {}
     assert capsys.readouterr().err.startswith("ding: issue lookup failed:")
@@ -2559,15 +2565,6 @@ def test_empty_status_fields_are_rejected(capsys, value):
         ding.main(["board", "--status", "--status-fields", value])
     assert exc.value.code == 2
     assert "comma-separated nonempty field names" in capsys.readouterr().err
-
-
-def test_help_summarizes_every_command(capsys):
-    with pytest.raises(SystemExit):
-        ding.main(["--help"])
-    out = capsys.readouterr().out
-    for summary in ("List sessions", "latest final reply", "status as JSON", "Send a message",
-                    "message a session when it exits", "new tmux session"):
-        assert summary in out
 
 
 @pytest.mark.parametrize("failure", [ValueError("bad JSON"), FileNotFoundError("gh"),

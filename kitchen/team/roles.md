@@ -6,6 +6,8 @@ Read this once at session start. Before messaging another session, read [relayin
 
 When a session is replaced, edit only this table. Everywhere else, write the role, never a session name.
 
+The table is for people to read. Sessions find each other with `ding role`: the session holding a role runs `ding role take <role>`, and `ding role <role>` prints its session id.
+
 | Role | Session name |
 | --- | --- |
 | Orchestrator | (not yet opened) |
@@ -14,10 +16,10 @@ When a session is replaced, edit only this table. Everywhere else, write the rol
 
 ## Duties
 
-- **Orchestrator** (Claude Code, the strongest model available): reports progress to the user in facts and schedules, starting from `ding board`. Dispatches executors, schedules GPUs and concurrency, merges PRs, and closes tickets. In its first report each day, it reminds the user to run `/improve-kitchen` when the last pass in `docs/agents/improve-kitchen-history.md` is more than 14 days old, or there has been none.
+- **Orchestrator** (Claude Code, the strongest model available): reports progress to the user in facts and schedules, starting from `ding board`. Dispatches executors, schedules compute and concurrency, merges PRs, and closes tickets.<!-- module:shared --> In this shared code repo the team merges instead; the orchestrator gets PRs ready, with the user's approval, and brings people's comments in the code repo to their tickets.<!-- /module:shared --> In its first report each day, it reminds the user to run `/improve-kitchen` when the last pass in `docs/agents/improve-kitchen-history.md` is more than 14 days old, or there has been none.
 - **Designer** (Claude Code, the strongest model available): designs the work, writes tickets with the `write-ticket` skill, and interprets results.<!-- module:model-text --> Owns model-visible text ([model-text.md](model-text.md)).<!-- /module:model-text -->
 - **Verifier** (Claude Code, a cheaper model): checks facts and makes no decisions. Reads code and data and runs scripts that call no model; runs no models and edits no repo files. Reviews PRs unless a ticket names another reviewer.
-- **Executor** (Codex): one sub-ticket, one session, and one worktree per run (`ding new --parent <ticket>`). The parent ticket holds only the design, rulings, and summary; execution and run requests go on the sub-ticket. A ticket has one executor: `ding new --issue` refuses while another unarchived session owns it, and `--replace` hands it over on purpose. Carries out the ticket and copies text the ticket gives verbatim.<!-- module:model-text --> Stops and hands back to the designer when the work needs new or changed model-visible text.<!-- /module:model-text --> A ticket may name a Claude Code session as its executor; it follows the same rules and signs as [issue-tracker.md](issue-tracker.md#executor-comments) says.
+- **Executor** (Codex): one sub-ticket, one session, and one worktree per run (`ding new --parent <ticket>`).<!-- module:split --> The worktree is the code repo's; `ding new` tells the session where the kitchen and its rules are.<!-- /module:split --> The parent ticket holds only the design, rulings, and summary; execution and run requests go on the sub-ticket. A ticket has one executor: `ding new --issue` refuses while another unarchived session owns it, and `--replace` hands it over on purpose. Carries out the ticket and copies text the ticket gives verbatim.<!-- module:model-text --> Stops and hands back to the designer when the work needs new or changed model-visible text.<!-- /module:model-text --> A ticket may name a Claude Code session as its executor; it follows the same rules and signs as [issue-tracker.md](issue-tracker.md#executor-comments) says.
 
 ## Design lines
 
@@ -27,19 +29,19 @@ Where these rules say "designer", the designer line that owns the ticket acts. E
 
 ## Who owns what
 
-**The user decides** the research direction, how datasets are used, and what the paper claims<!-- module:run-budgets -->; also each ticket's budget, approved once, a change of model or endpoint, and service starts ([run-budgets.md](run-budgets.md))<!-- /module:run-budgets -->. On these, other roles propose and wait for the user, as in [Asking the user](#asking-the-user). An approval counts only in the user's own words; no role can produce one.
+**The user decides** the project's direction, what the work is judged against, and what is claimed or shipped in the user's name<!-- fill: rewrite the three before this in the repo's own terms, as build-team settles them; for a research repo, the research direction, how datasets are used, and what the paper claims --><!-- module:run-budgets -->; also each ticket's budget, approved once, a change of model or endpoint, and service starts ([run-budgets.md](run-budgets.md))<!-- /module:run-budgets --><!-- module:shared -->; and, in this shared code repo, everything written there in the user's name beyond a draft PR ([contributing.md](contributing.md))<!-- /module:shared -->. On these, other roles propose and wait for the user, as in [Asking the user](#asking-the-user). An approval counts only in the user's own words; no role can produce one.
 
 Everything else goes to its owner below. Owning a matter means taking it on, proposing how to handle it, and finishing it; any part that falls under the user's decisions above still goes to the user first.
 
 | Matter | Owner |
 | --- | --- |
-| Method design, evaluation rules, and result interpretation<!-- module:model-text -->; model-visible text<!-- /module:model-text --> | Designer |
+| The approach, how results are judged, and what they mean<!-- module:model-text -->; model-visible text<!-- /module:model-text --> | Designer |
 | A ticket rule that turns out not to fit reality during a run | Designer |
 | Whether a ticket's premises hold when work starts | Executor |
 | Spot checks of finished runs, requests, and outputs; finding why a stuck run is stuck when the designer asks | Verifier |
-| When and in what order to dispatch; scheduling GPUs and concurrency | Orchestrator |
+| When and in what order to dispatch; scheduling compute and concurrency | Orchestrator |
 | Closing out tickets and PRs: closing, reopening, labels, PRs left behind by shelved tickets | Orchestrator |
-| Implementation details the ticket leaves open that change neither what a model sees nor an experiment's conclusion | Executor, stating its choice in its comment |
+| Implementation details the ticket leaves open that change no result's meaning<!-- module:model-text --> and no model-visible text<!-- /module:model-text --> | Executor, stating its choice in its comment |
 
 Anything missing from the table that you are unsure about goes to the user.
 
@@ -57,7 +59,7 @@ Everything else the executor does first, and the verifier spot-checks afterwards
 
 The executor checks a ticket's premises against the code and data when it starts, and writes `waiting on design` when one does not hold. A stuck run is first the executor's to diagnose; what it cannot explain goes to the designer, who calls in the verifier when needed. A designer's ruling takes effect when posted, never with conditions attached.
 
-The verifier writes each finding on the ticket as "the ticket says X; actually Y; evidence: file and line, or the command". Only on a discrepancy does it send the designer one line, "#N has a discrepancy, see the ticket". Outside PR review, it tells the orchestrator "pass" or "discrepancy" every time; review verdicts reach the orchestrator through its watch. Program behaviour it cannot work out is reported as "cannot check", without guessing.
+The verifier writes each finding on the ticket as "the ticket says X; actually Y; evidence: file and line, or the command". Only on a discrepancy does it send the designer one line, "#N has a discrepancy, see the ticket". A verdict on a run stage, such as a first batch or a final state, is published with `ding review --ticket <N> pass|changes --body-file <file>`, the file opening with the verifier's signature. It tells the ticket's executor by itself, and a `changes` verdict wakes the orchestrator and the ticket's design line through their watches, so the verifier sends no message after it. Whether the executor goes on after a pass is this repository's rule, not the verdict's. For other findings outside PR review, it tells the orchestrator "pass" or "discrepancy" every time; PR review verdicts reach the orchestrator through its watch. Program behaviour it cannot work out is reported as "cannot check", without guessing.
 
 Before posting, the verifier runs `ding check-refs <draft.md>` on its draft. It checks every `` `file:line` `` (a name written next to it must appear on that line) and every `sha256`. When the cited files are outside `origin/main`, such as in another worktree or an output folder, add `--root <dir>`.
 
@@ -82,12 +84,13 @@ Designer: <one-sentence conclusion>
 Type: actionable        (or: Type: proposal, awaiting user; or: Type: record)
 ```
 
-`ding rule <ticket> <draft.md> [--reply-to <comment>] [--notify <session>]` posts it: it checks the two lines and the references, stops if a comment came after the one answered, and prints the comment's URL (see `ding rule --help`). Who hears about it depends on the type:
+`ding rule <ticket> <draft.md> [--reply-to <comment>] [--notify <session> | --no-notify]` posts it: it checks the two lines and the references, stops if a comment came after the one answered, and prints the comment's URL (see `ding rule --help`). Who hears about it depends on the type:
 
-- **Actionable, carried out by the executor**: add `--notify '#N'`, which sends "#N answered, see the ticket" straight to the ticket's executor. The orchestrator does not relay it.
-- **Everything else**, such as a proposal, a record, or anything the orchestrator schedules or merges: tell the orchestrator in one line, "#N answered, see the ticket", without restating the answer.
+- **Actionable, carried out by the executor**: `ding rule` itself sends "#N answered, see the ticket" straight to the ticket's executor. The orchestrator does not relay it.
+- **Actionable, but for the orchestrator**, such as anything it schedules or merges: add `--no-notify`, then tell the orchestrator in one line, "#N answered, see the ticket", without restating the answer.
+- **Everything else**, a proposal or a record: `ding rule` tells nobody; tell the orchestrator in the same one line.
 
-When `--notify` reports a failed delivery, or the executor is a Claude Code session, which `ding` cannot reach, tell the orchestrator, which relays it.
+When `ding rule` reports a failed delivery, tell the orchestrator, which relays it. When it says the message is queued but no waiter is running, do nothing: the Claude Code executor reads it when its waiter starts again, and the orchestrator's watch reports the missing waiter.
 
 The orchestrator and executors act on the Type line alone: an actionable reply is carried out, and a proposal is left untouched until the user decides. With a proposal, the designer also labels the ticket `status:awaiting-user`.
 
@@ -104,7 +107,7 @@ Actionable, decided by the designer:
 
 Exit thresholds and decision rules set in advance stay as they are.
 
-Waiting for the user: changing the goal, the dataset, or experimental conditions; changing decision rules and thresholds set in advance; research conclusions and paper claims; changing a model or endpoint; opening tickets in a new direction. When the verifier and the designer disagree, both views stay on the ticket for the user.
+Waiting for the user: anything [the user decides](#who-owns-what); changing the goal, or decision rules and thresholds set in advance; opening tickets in a new direction. When the verifier and the designer disagree, both views stay on the ticket for the user.
 
 ## Asking the user
 
