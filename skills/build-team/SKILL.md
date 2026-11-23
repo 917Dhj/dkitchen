@@ -35,7 +35,7 @@ Summarize what is present and what is missing in a short list, ending with your 
 
 ## 3. Settle each section
 
-One section, one answer, then the next. Lead each with your recommendation so the user can accept it in a word, and skip any section that exploration already settled.
+Ask the sections as rounds, as [Installing](../../kitchen/README.md#installing) says, and skip any section that exploration already settled. B's details for each extra line wait for B's answer, and E and F wait for D, since the modules chosen decide which gaps and scripts exist.
 
 **A. Roles.** The kitchen has an orchestrator, a designer, a verifier, and executors. Ask which model each Claude Code role runs; the defaults are the strongest available model for the orchestrator and designer and a cheaper one for the verifier.
 
@@ -49,7 +49,7 @@ With one designer, say so and move on.
 
 **C. What stays with the user.** Show the default list from the roles template (research direction, how datasets are used, what the paper claims, spending beyond a ticket's budget) and ask what to add or remove. For a repo that is not a research project, rewrite the first three in the repo's own terms.
 
-**D. Modules.** Recommend each from its signals, as a multi-select:
+**D. Modules.** One question per module, each recommended from its signals:
 
 | Module | Recommend when |
 | --- | --- |

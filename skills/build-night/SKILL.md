@@ -19,7 +19,7 @@ Done when you know whether the team is installed, whether this run is an update,
 
 ## 2. Settle each section
 
-One section, one answer. Lead each with your recommendation.
+Ask both sections in one round, as [Installing](../../kitchen/README.md#installing) says.
 
 **A. Hard stops.** Show the default list in the template (changing the goal, a dataset, the experimental conditions, or thresholds set in advance; touching a held-out test set; changing model-visible text; top-ups; runaway spend). Ask what to add or remove. For a repo that is not a research project, rewrite it in the repo's own terms.
 

@@ -27,7 +27,7 @@ A module is optional within its skill. Every other file of a folder is installed
 
 ## Installing
 
-Every build skill installs its templates the same way. The skill's own file says which templates, questions, and checks are its own; this section holds what they share.
+Every build skill installs its templates the same way, and asks its questions the same way. The skill's own file says which templates, questions, and checks are its own; this section holds what they share.
 
 - **Where the kitchen lives.** In the code repo itself, or in a private kitchen repo of its own ([ADR 0003](../docs/adr/0003-kitchen-repo-apart-from-code-repo.md)), which `/setup-dkitchen` settles; a code repo other people work in always gets its own. A kitchen in its own repo has `code` (and `shared = true` when others work in the code repo) in its `.dkitchen.toml`. Then every build skill works in the kitchen's checkout: its rules, pointer blocks, settings, repo scripts, labels, and tickets all go there, and `gh` runs there. The code repo is read from its checkout, which `ding kitchen` names. What belongs to the code repo itself, such as code, tests, its tool settings, and its CI, reaches it only as a PR the user approves, written as `docs/agents/contributing.md` says.
 - **Prerequisites.** The kitchen runs on GitHub issues: `git remote -v` and `gh repo view` must show a GitHub remote, and `gh auth status` must pass. A repo without one stops here; tell the user, and offer to continue once one exists. `ding --version` must report 0.6.0 or later; when it is missing or older, offer `pipx install dkitchen` or `pipx upgrade dkitchen`. The kitchen needs both Claude Code (`claude --version`) for the orchestrator, designer, and verifier, and Codex (`codex --version`, an App Server socket under `/tmp/codex-daemon-$(id -u)`) for executors, plus `tmux -V`.
@@ -37,6 +37,15 @@ Every build skill installs its templates the same way. The skill's own file says
 - **Updating in place.** A `<!-- dkitchen:start -->` block or a `.dkitchen.toml` means dkitchen is already installed, and this run updates it. Before rendering over an installed file, read it: carry over its filled gaps, its wording, and everything added since it was installed, such as rows of known situations and standing rules, and show the user the diff. A file from another setup, such as an issue-tracker doc from Matt Pocock's skills, is merged: keep its sections dkitchen does not cover, and replace or add dkitchen's.
 - **Pointer blocks.** `render.py` prints the two blocks for every file installed in `docs/agents/`, whichever skill installed it. Wrap each in `<!-- dkitchen:start -->` and `<!-- dkitchen:end -->`, replacing the existing block in place. The first goes in `AGENTS.md`, created if needed, because Codex reads `AGENTS.md`. The second goes in the `CLAUDE.md` Claude Code already loads, at the root or in `.claude/`, or a new root `CLAUDE.md`; it imports `AGENTS.md` (`@AGENTS.md`, or `@../AGENTS.md` and `../`-prefixed links from `.claude/`).
 - **Settings.** `.dkitchen.toml` holds only keys that differ from the defaults ([the keys](../docs/ding.md#dkitchentoml)). Each skill writes its own keys and keeps the rest.
+- **Asking the user.** Settle a skill's questions in rounds. A round asks every question whose prerequisites are already answered; a question that hangs on another one still open waits for the next round. Write the round in the message, in the user's language, and never through a multiple-choice tool such as `AskUserQuestion`: a popup hides the reasons, and the user should leave each round knowing what they chose and what it changes. Open the round with one line on where the setup stands and what this round decides, then ask each question in this shape, numbering on from the last round so every number names one question:
+
+  ```
+  ❓ **Q<n> - <short title>**: <what this setting is, and what it changes in the kitchen: which file or key, and what a role then does differently. When there are choices, one bullet each, with what it costs and what it gets. Add what exploration found that bears on it.>
+
+  ➡️ <your recommended answer, and why: the evidence from this repo, or the reason it is the default>
+  ```
+
+  Separate questions with `---`. Finding facts is your job: anything you can learn by reading the repo or running a command is not a question, so state what you found and move on. The user may answer each number in their own words, or "all as recommended" with exceptions. Before the next round, list in one line each what the last round settled, so a misunderstanding surfaces now and not in the draft.
 - **Approval.** Nothing is written or posted before the user approves the draft, including each GitHub change by name.
 - **Checks every skill runs.** `grep -rn '<!-- module:\|<!-- /module:\|<!-- fill:' docs/agents AGENTS.md CLAUDE.md .claude/CLAUDE.md` finds nothing, and every relative link in the installed files resolves to an existing file.
 

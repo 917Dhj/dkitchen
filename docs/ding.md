@@ -452,7 +452,7 @@ Checks that went green on the HEAD were computed against the default branch as i
 
 ```toml
 [merge]
-refresh = "python -m hca review {pr} --refresh --base {tip}"
+refresh = "scripts/refresh_checks.sh {pr} {tip}"
 ```
 
 The default is `""` (off). The value is one command line, split like a shell would split it but not run through a shell. In each word, `{pr}` becomes the PR number, `{sha}` the full reviewed HEAD, and `{tip}` the full SHA of the default branch's tip that `ding merge` read for this run. After every other gate passes, `ding merge` reads that tip and runs the command in the repository root. The command must validate against `{tip}`, not its own idea of the default branch, such as a local `origin/main` that may not have been fetched: the merge is safe only because the commit the command checked is still the tip when `ding merge` merges. The command decides whether anything is stale: it should exit 0 at once when the checks were computed against `{tip}`, and otherwise test the merge with `{tip}` and write a fresh status on the same HEAD.
@@ -713,7 +713,7 @@ required_checks = []                # e.g. ["ci"]; only success permits merging
 review_check = ""                   # e.g. "review": the status `ding review` writes and `ding merge` requires
 review_pass = "Reviewed {sha}: pass"                              # first line of a passing review
 review_changes = "Reviewed {sha}: changes requested, see below"   # first line of a failing review
-refresh = ""                        # e.g. "python -m hca review {pr} --refresh --base {tip}": `ding merge` runs it first; nonzero refuses
+refresh = ""                        # e.g. "scripts/refresh_checks.sh {pr} {tip}": `ding merge` runs it first; nonzero refuses
 # by = "orchestrator"               # who merges: "orchestrator" (`ding merge`) or "team" (`ding merge` refuses);
                                     # default: "team" in a shared code repo, else "orchestrator"
 
