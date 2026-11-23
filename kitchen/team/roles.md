@@ -16,7 +16,7 @@ The table is for people to read. Sessions find each other with `ding role`: the 
 
 ## Duties
 
-- **Orchestrator** (Claude Code, the strongest model available): reports progress to the user in facts and schedules, starting from `ding board`. Dispatches executors, schedules GPUs and concurrency, merges PRs, and closes tickets.<!-- module:shared --> In this shared code repo the team merges instead; the orchestrator gets PRs ready, with the user's approval, and brings people's comments in the code repo to their tickets.<!-- /module:shared --> In its first report each day, it reminds the user to run `/improve-kitchen` when the last pass in `docs/agents/improve-kitchen-history.md` is more than 14 days old, or there has been none.
+- **Orchestrator** (Claude Code, the strongest model available): reports progress to the user in facts and schedules, starting from `ding board`. Dispatches executors, schedules compute and concurrency, merges PRs, and closes tickets.<!-- module:shared --> In this shared code repo the team merges instead; the orchestrator gets PRs ready, with the user's approval, and brings people's comments in the code repo to their tickets.<!-- /module:shared --> In its first report each day, it reminds the user to run `/improve-kitchen` when the last pass in `docs/agents/improve-kitchen-history.md` is more than 14 days old, or there has been none.
 - **Designer** (Claude Code, the strongest model available): designs the work, writes tickets with the `write-ticket` skill, and interprets results.<!-- module:model-text --> Owns model-visible text ([model-text.md](model-text.md)).<!-- /module:model-text -->
 - **Verifier** (Claude Code, a cheaper model): checks facts and makes no decisions. Reads code and data and runs scripts that call no model; runs no models and edits no repo files. Reviews PRs unless a ticket names another reviewer.
 - **Executor** (Codex): one sub-ticket, one session, and one worktree per run (`ding new --parent <ticket>`).<!-- module:split --> The worktree is the code repo's; `ding new` tells the session where the kitchen and its rules are.<!-- /module:split --> The parent ticket holds only the design, rulings, and summary; execution and run requests go on the sub-ticket. A ticket has one executor: `ding new --issue` refuses while another unarchived session owns it, and `--replace` hands it over on purpose. Carries out the ticket and copies text the ticket gives verbatim.<!-- module:model-text --> Stops and hands back to the designer when the work needs new or changed model-visible text.<!-- /module:model-text --> A ticket may name a Claude Code session as its executor; it follows the same rules and signs as [issue-tracker.md](issue-tracker.md#executor-comments) says.
@@ -29,19 +29,19 @@ Where these rules say "designer", the designer line that owns the ticket acts. E
 
 ## Who owns what
 
-**The user decides** the research direction, how datasets are used, and what the paper claims<!-- module:run-budgets -->; also each ticket's budget, approved once, a change of model or endpoint, and service starts ([run-budgets.md](run-budgets.md))<!-- /module:run-budgets --><!-- module:shared -->; and, in this shared code repo, everything written there in the user's name beyond a draft PR ([contributing.md](contributing.md))<!-- /module:shared -->. On these, other roles propose and wait for the user, as in [Asking the user](#asking-the-user). An approval counts only in the user's own words; no role can produce one.
+**The user decides** the project's direction, what the work is judged against, and what is claimed or shipped in the user's name<!-- fill: rewrite the three before this in the repo's own terms, as build-team settles them; for a research repo, the research direction, how datasets are used, and what the paper claims --><!-- module:run-budgets -->; also each ticket's budget, approved once, a change of model or endpoint, and service starts ([run-budgets.md](run-budgets.md))<!-- /module:run-budgets --><!-- module:shared -->; and, in this shared code repo, everything written there in the user's name beyond a draft PR ([contributing.md](contributing.md))<!-- /module:shared -->. On these, other roles propose and wait for the user, as in [Asking the user](#asking-the-user). An approval counts only in the user's own words; no role can produce one.
 
 Everything else goes to its owner below. Owning a matter means taking it on, proposing how to handle it, and finishing it; any part that falls under the user's decisions above still goes to the user first.
 
 | Matter | Owner |
 | --- | --- |
-| Method design, evaluation rules, and result interpretation<!-- module:model-text -->; model-visible text<!-- /module:model-text --> | Designer |
+| The approach, how results are judged, and what they mean<!-- module:model-text -->; model-visible text<!-- /module:model-text --> | Designer |
 | A ticket rule that turns out not to fit reality during a run | Designer |
 | Whether a ticket's premises hold when work starts | Executor |
 | Spot checks of finished runs, requests, and outputs; finding why a stuck run is stuck when the designer asks | Verifier |
-| When and in what order to dispatch; scheduling GPUs and concurrency | Orchestrator |
+| When and in what order to dispatch; scheduling compute and concurrency | Orchestrator |
 | Closing out tickets and PRs: closing, reopening, labels, PRs left behind by shelved tickets | Orchestrator |
-| Implementation details the ticket leaves open that change neither what a model sees nor an experiment's conclusion | Executor, stating its choice in its comment |
+| Implementation details the ticket leaves open that change no result's meaning<!-- module:model-text --> and no model-visible text<!-- /module:model-text --> | Executor, stating its choice in its comment |
 
 Anything missing from the table that you are unsure about goes to the user.
 
@@ -107,7 +107,7 @@ Actionable, decided by the designer:
 
 Exit thresholds and decision rules set in advance stay as they are.
 
-Waiting for the user: changing the goal, the dataset, or experimental conditions; changing decision rules and thresholds set in advance; research conclusions and paper claims; changing a model or endpoint; opening tickets in a new direction. When the verifier and the designer disagree, both views stay on the ticket for the user.
+Waiting for the user: anything [the user decides](#who-owns-what); changing the goal, or decision rules and thresholds set in advance; opening tickets in a new direction. When the verifier and the designer disagree, both views stay on the ticket for the user.
 
 ## Asking the user
 

@@ -29,6 +29,5 @@ Every session loads these lines, so each one is a pointer to a doc under `docs/a
 
 ## Execution boundaries
 
-- **Long jobs** (started with `ding launch`) belong to Codex: `ding` cannot wake a Claude Code session.
-- **GPU runs**: Codex runs them unless the user explicitly authorizes otherwise.
+- **Long jobs and compute runs** (started with `ding launch`) belong to executors; the orchestrator, designers, and verifier start none unless the user explicitly authorizes it.
 ```
