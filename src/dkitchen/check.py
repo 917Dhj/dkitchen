@@ -4,7 +4,8 @@
   apply to added files only; Ruff, the import contracts, and the repo's own commands look at the whole tree; a change
   to a check needs a Guard-change trailer. Exits 1 on any problem, 2 when the check cannot run.
 - map: each Python module under an area, with the first line of its docstring.
-The areas and switches come from the [check] table of .dkitchen.toml.
+The areas and switches come from [tool.dkitchen.check] in the code repo's pyproject.toml when it has one, else from
+the [check] table of .dkitchen.toml.
 """
 from __future__ import annotations
 
@@ -23,7 +24,7 @@ else:
     import tomli as tomllib
 
 from dkitchen import kitchens
-from dkitchen.config import FILE, Check, Config
+from dkitchen.config import FILE, Check, Config, check_section
 
 ROOT_FILES = ("README*", "LICENSE*", "COPYING*", "NOTICE*", "CHANGELOG*", "CONTRIBUTING*", "CODE_OF_CONDUCT*",
               "SECURITY*", "CITATION*", "AGENTS.md", "CLAUDE.md", "GLOSSARY.md", "GLOSSARY-MAP.md", "pyproject.toml",
@@ -36,6 +37,9 @@ VERSION = re.compile(r"(?i)(?:^|[_-])v\d+(?=$|[_.-])")
 SNAKE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)*")
 TRAILER = re.compile(r"#?\d+\s+\S")
 STANDARD = "docs/agents/code.md"
+PYPROJECT_TABLE = "[tool.dkitchen.check]"
+NO_TABLE = f"{FILE} has no [check] table and pyproject.toml has no [tool.dkitchen.check] table"
+IGNORED_WARNED: set[Path] = set()  # code checkouts already told that the kitchen's [check] is ignored
 
 
 class CheckError(RuntimeError):
@@ -80,7 +84,7 @@ def docstring_line(source: str) -> str | None:
     return docstring.strip().splitlines()[0].strip() if docstring and docstring.strip() else None
 
 
-def layout(root: Path, base: str, check: Check) -> list[dict]:
+def layout(root: Path, base: str, check: Check, table: str = "[check]") -> list[dict]:
     """Layout rules on every file the working tree adds against `base`."""
     added = sorted(set(paths(git(root, "diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", base, "--")))
                    | set(untracked(root)))
@@ -98,16 +102,16 @@ def layout(root: Path, base: str, check: Check) -> list[dict]:
         if len(parts) == 1:
             if not any(fnmatch(name, pattern) for pattern in allowed):
                 findings.append(finding(path, "root-file", "a new top-level file; put it in an area, or list it in "
-                                        f"[check] root_files"))
+                                        f"{table} root_files"))
             continue
         area = area_of(path, areas)
         if area is None:
             if parts[0] not in tops:
                 findings.append(finding(path, "top-level-dir", f"{parts[0]}/ is in no area; use an existing area, or "
-                                        f"add the folder to one in [check]"))
+                                        f"add the folder to one in {table}"))
             else:
                 findings.append(finding(path, "no-area", "in no area; move it into one, or add its folder to an area "
-                                        "in [check]"))
+                                        f"in {table}"))
             continue
         kind = areas[area]
         relative = PurePosixPath(path).relative_to(area).parts
@@ -159,18 +163,51 @@ def toml_at(root: Path, revision: str | None, name: str) -> dict:
         raise CheckError(f"{name} at {revision or 'the working tree'}: {exc}") from exc
 
 
-def guard_changes(root: Path, base: str, check: Check, *, own_config: bool = True) -> list[str]:
+def settings(config: Config, root: Path) -> tuple[Check | None, bool]:
+    """The check settings in force and whether they came from the code repo's pyproject.toml.
+
+    A [tool.dkitchen.check] table in `root`'s pyproject.toml wins over the kitchen's [check], so a repo can run the
+    same checks without the kitchen. Raises ValueError when that table is malformed."""
+    path = root / "pyproject.toml"
+    if path.is_file():
+        try:
+            data = tomllib.loads(path.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as exc:
+            raise ValueError(f"{path}: {exc}") from exc
+        table = pyproject_check(data)
+        if table is not None:
+            if config.check is not None and root not in IGNORED_WARNED:
+                IGNORED_WARNED.add(root)
+                print(f"ding: {config.root / FILE} [check] is ignored: {path} has [tool.dkitchen.check]",
+                      file=sys.stderr)
+            return check_section(table, "pyproject.toml", PYPROJECT_TABLE), True
+    return config.check, False
+
+
+def pyproject_check(data: dict) -> object:
+    table = data.get("tool", {})
+    table = table.get("dkitchen", {}) if isinstance(table, dict) else {}
+    return table.get("check") if isinstance(table, dict) else None
+
+
+def guard_changes(root: Path, base: str, check: Check, *, own_config: bool = True, from_pyproject: bool = False,
+                  kitchen_check: bool = False) -> list[str]:
     """What this change does to the checks: their settings, CI, and the repo's own check scripts.
 
     `own_config` is false when the checks' settings live in a kitchen repo apart from the code repo; changes to
-    them are that repo's business, and the code repo's tools and CI are still guarded."""
+    them are that repo's business, and the code repo's tools and CI are still guarded. `from_pyproject` is true when the
+    settings in use are the code repo's own [tool.dkitchen.check]; the kitchen's [check] is then not a check.
+    `kitchen_check` says a kitchen apart from the code repo has a [check], so checks were already in force at `base`."""
     changes = []
-    if own_config:
-        before, after = toml_at(root, base, FILE), toml_at(root, None, FILE)
-        if "check" not in before:
-            return []  # the checks are being installed
-        changes = [f"{FILE} [{name}]" for name in ("check", "merge") if before.get(name) != after.get(name)]
     old, new = toml_at(root, base, "pyproject.toml"), toml_at(root, None, "pyproject.toml")
+    before, after = (toml_at(root, base, FILE), toml_at(root, None, FILE)) if own_config else ({}, {})
+    if pyproject_check(old) is None and "check" not in before and not (kitchen_check and not own_config):
+        return []  # no checks were in force at base: they are being installed
+    if own_config:
+        names = ("merge",) if from_pyproject else ("check", "merge")
+        changes = [f"{FILE} [{name}]" for name in names if before.get(name) != after.get(name)]
+    if pyproject_check(old) != pyproject_check(new):
+        changes.append(f"pyproject.toml {PYPROJECT_TABLE}")
     changes += [f"pyproject.toml [tool.{name}]" for name in ("ruff", "importlinter")
                 if old.get("tool", {}).get(name) != new.get("tool", {}).get(name)]
     changed = set(paths(git(root, "diff", "--name-only", "-z", "--no-renames", base, "--"))) | set(untracked(root))
@@ -185,9 +222,9 @@ def guard_trailers(root: Path, base: str) -> list[str]:
     return [value.strip() for value in log.split("\0") if TRAILER.match(value.strip())]
 
 
-def run_tool(root: Path, rule: str, argv: list[str]) -> dict | None:
+def run_tool(root: Path, rule: str, argv: list[str], table: str = "[check]") -> dict | None:
     if shutil.which(argv[0]) is None:
-        return finding(".", rule, f"{argv[0]} is not installed; install it, or turn {rule} off in [check]")
+        return finding(".", rule, f"{argv[0]} is not installed; install it, or turn {rule} off in {table}")
     result = subprocess.run(argv, cwd=root, capture_output=True, text=True)
     if result.returncode:
         output = (result.stdout + result.stderr).strip()
@@ -196,30 +233,33 @@ def run_tool(root: Path, rule: str, argv: list[str]) -> dict | None:
 
 
 def check(args, config: Config) -> int:
-    settings = config.check
-    if settings is None:
-        print(f"ding check: {FILE} has no [check] table; the build-repo skill sets it up", file=sys.stderr)
-        return 2
     try:
         root = kitchens.code_checkout(config)
+        found, from_pyproject = settings(config, root)
     except (OSError, ValueError) as error:
         print(f"ding check: {error}", file=sys.stderr)
         return 2
-    standard = STANDARD if not config.split else str(config.root / STANDARD)
+    if found is None:
+        print(f"ding check: {NO_TABLE}; the build-repo skill sets it up", file=sys.stderr)
+        return 2
+    standard = found.rules or (STANDARD if not config.split else str(config.root / STANDARD))
     try:
         base = git(root, "rev-parse", "--verify", "--end-of-options", f"{args.base}^{{commit}}").strip()
-        findings = layout(root, base, settings)
-        excluded = ",".join(settings.vendor + settings.outputs)
+        table = PYPROJECT_TABLE if from_pyproject else "[check]"
+        findings = layout(root, base, found, table)
+        excluded = ",".join(found.vendor + found.outputs)
         exclude = ["--extend-exclude", excluded] if excluded else []
         tools = []
-        if settings.ruff:
+        if found.ruff:
             tools += [("ruff", ["ruff", "check", "--quiet", *exclude, "."]),
                       ("format", ["ruff", "format", "--check", "--quiet", *exclude, "."])]
-        if settings.imports:
+        if found.imports:
             tools.append(("imports", ["lint-imports"]))
-        tools += [("command", [*argv, "--base", base]) for argv in settings.commands]
-        findings += [item for rule, argv in tools if (item := run_tool(root, rule, argv))]
-        changes, trailers = guard_changes(root, base, settings, own_config=not config.split), guard_trailers(root, base)
+        tools += [("command", [*argv, "--base", base]) for argv in found.commands]
+        findings += [item for rule, argv in tools if (item := run_tool(root, rule, argv, table))]
+        changes = guard_changes(root, base, found, own_config=not config.split, from_pyproject=from_pyproject,
+                                kitchen_check=config.check is not None)
+        trailers = guard_trailers(root, base)
         if changes and not trailers:
             findings.append(finding(".", "guard-change", "this change touches the checks (" + ", ".join(changes) +
                                     "); add a commit trailer `Guard-change: #<ticket> <reason>`"))
@@ -240,13 +280,13 @@ def check(args, config: Config) -> int:
 
 
 def module_map(args, config: Config) -> int:
-    settings = config.check
-    if settings is None and not args.paths:
-        print(f"ding map: {FILE} has no [check] table; name the folders to map", file=sys.stderr)
-        return 2
-    folders = [path.strip("/") for path in args.paths] or list(settings.library)
     try:
         root = kitchens.code_checkout(config)
+        found = settings(config, root)[0]
+        if found is None and not args.paths:
+            print(f"ding map: {NO_TABLE}; name the folders to map", file=sys.stderr)
+            return 2
+        folders = [path.strip("/") for path in args.paths] or list(found.library)
         files = set(paths(git(root, "ls-files", "-z", "--", *folders))) | {
             path for path in untracked(root) if area_of(path, dict.fromkeys(folders, "")) is not None}
     except (CheckError, OSError, ValueError) as error:
