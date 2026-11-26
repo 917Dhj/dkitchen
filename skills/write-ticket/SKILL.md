@@ -13,7 +13,7 @@ Write in the repo's language and its ticket layout: the Writing tickets section 
 
 - **The decision behind it**: the user's words or the designer's ruling, verbatim, with its date and link.
 - **The evidence**: each incident or measurement the problem rests on, with its link and its number.
-- **The landing points**: the files and functions the change touches, read on the current `main`, not from memory.
+- **The landing points**: the files and functions the change touches, read on the current `main`, not from memory; in a kitchen kept in its own repo, in the code repo's checkout.
 - **Neighbouring tickets**: those that must finish first, and those that change the same files and so must run one after the other.
 
 Done when every claim you will make has a link, a number, or a file and line behind it.
@@ -24,6 +24,7 @@ Done when every claim you will make has a link, a number, or a file and line beh
 - **Second line**: the design line that owns the ticket and the reviewer of its PR. Watches and design lines route the ticket by this line.
 - **Approval**: the user's words quoted verbatim with their date, when a user decision is the ticket's origin.
 - **Depends on**: the tickets that must finish first, and why.
+- **Code issue**: in a kitchen kept in its own repo, the code repo issue the work comes from, as `Code issue: owner/name#N`, when there is one. It is never a ticket number.
 - **Problem**: what goes wrong today, one point per incident, each with its evidence. The problem, not the fix.
 - **Do**: the behaviour to reach and where it lands. Write decisions, not options. Write the rules and limits that apply in full, since the executor never sees policy messages sent to other roles. Write model-visible text verbatim. Where the work needs a judgment halfway, write a checkpoint: "explore, then wait for the designer".
 - **Leave alone**: what must not change even when it looks related, such as interfaces, running jobs, or other tickets' files.
@@ -46,6 +47,6 @@ Check the draft, and fix what fails:
 - nothing the work needs lives only in this conversation;
 - `ding check-refs <draft.md>` reports no wrong reference.
 
-Then post it with `gh issue create --title … --body-file <draft.md>` and give the link. Change a posted ticket's body with `ding rule <ticket> <draft.md> --edit-body --base <current body>`.
+Then post it with `gh issue create --title … --body-file <draft.md>` in the kitchen repo and give the link. Change a posted ticket's body with `ding rule <ticket> <draft.md> --edit-body --base <current body>`.
 
 Done when the ticket is posted and every check passed.

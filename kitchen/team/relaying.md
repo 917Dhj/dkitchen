@@ -8,7 +8,7 @@ The orchestrator messages an executor with `ding relay <ticket> --message … [-
 
 Relay only to an executor whose task the decision changes: a rule, limit, input, or schedule on its ticket. Send only the part that concerns it, in terms of its task, such as "the 'summary only' line on your ticket is cancelled". Policy decisions go only to the designer and the verifier; a new dispatch writes the current rules into its brief. A designer messaging an executor follows the same rule.
 
-An executor that needs the designer does not go through the orchestrator. It writes `waiting on design` and names the designer in *Waiting on*, which wakes the designer's watch ([watch.md](watch.md)), and the designer answers with `ding rule --notify`. The orchestrator relays only the user's decisions and changes to the schedule.
+An executor that needs the designer does not go through the orchestrator. It writes `waiting on design` and names the designer in *Waiting on*, which wakes the designer's watch ([watch.md](watch.md)), and the designer answers with `ding rule`, which tells the ticket's executor of an actionable ruling by itself. The orchestrator relays only the user's decisions and changes to the schedule.
 
 When work is stuck because a designer has not replied, the orchestrator messages that designer directly, without waiting for its watch.
 
@@ -22,5 +22,8 @@ All roles post from one GitHub account, so comments are told apart by how they a
 - The designer, verifier, and orchestrator start the first line with their role name: `Designer:`, `## Verifier:`, `Orchestrator:`.
 - A PR review comment starts with the line `ding review` writes.
 - Everything else is the user's. The user's comments never start with a role name.
+<!-- module:split -->
+- In the code repo nothing is signed: what the kitchen writes there reads as the user's own ([contributing.md](contributing.md)). `ding watch` reports other people's comments there as code repo comments, never as the user's.
+<!-- /module:split -->
 
 Role names, the signature separator, status fields and words, and the log ticket's number live in the repo's `.dkitchen.toml`, which `ding` reads. When you change this wording, change the docs and that file together.

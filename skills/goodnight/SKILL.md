@@ -58,7 +58,7 @@ Give every stop exactly one disposition:
 - **Rule**: "if <observable>, then <action>; otherwise <action>". The observable is something a role can read without judgment, such as an exit code, a gate in `summary.json`, or a count.
 - **Park**: it waits for the morning, and the user knows that now.
 
-Then list the **hard stops**: things that halt work whatever the orders say. Start from the repo's rules for what the user decides. Typical hard stops are changing the goal, a dataset, conditions or decision thresholds, touching a held-out test set, changing model-visible text, top-ups, and runaway spend. Add the designers' lists.
+Then list the **hard stops**: things that halt work whatever the orders say. Start from the repo's rules for what the user decides. Typical hard stops are changing the goal or decision thresholds set in advance, top-ups, runaway spend, and the repo's own, as `docs/agents/unattended.md` lists them. Add the designers' lists.
 
 A designer who has not replied when the timer fires gets one line: "<designer>: no reply; its line is parked until morning". Do not wait longer: the user is about to leave.
 

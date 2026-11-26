@@ -105,11 +105,13 @@ ding launch train -- python train.py                  # 在 tmux 里跑，退出
 - `ding relay` 给票的执行者发消息，确认送达后才在票里留记录。
 - `ding review` 将审查结论绑定到当前 PR HEAD。配置 `[merge] review_check` 后，`ding merge`、`ding watch` 和 `ding waits` 共用 PR 就绪判断；所有合并都要求目标为默认分支。详见 [review 与 merge 文档](docs/ding.md)。
 - `ding watch` 在每个岗位后台等着，票需要它时唤醒它。
-- `ding waits` 列出超时未回应的等待，包括上一批 watch 之后还没处理的。
+- `ding role take NAME` 按会话 id 记录谁持有某个角色；`ding role NAME` 打印该 id，同伴不再靠会话名互相寻找。
+- `ding waits` 列出超时未回应的等待，包括上一批 watch 之后还没处理的，以及没写等待却停滞的工作线。
 - `ding log` 记下你不在时总编排做了什么。
 - `ding night` 在这份日志上开启、查看和关闭有时限的夜间指令。在总编排会话里运行 `/goodnight` 和 `/goodmorning`，收集指令并汇报使用情况。
 - `ding check-refs` 核对总核查引用的每个文件、行号和摘要。
 - `ding check` 在每个 PR 上跑仓库检查，`ding map` 列出库里的模块，让改动落到已有的模块上。
+- `ding pr` 和 `ding code-issue` 在代码仓库里开 PR 或 issue，并记到票上。厨房单独放在一个仓库时，带有厨房内部信息的文字会被拒绝；在别人也在用的仓库里，它们还需要你的批准。`ding kitchen link` 告诉一台机器厨房和代码仓库各 checkout 在哪里。
 
 ### 📜 厨房规矩
 
@@ -117,7 +119,7 @@ ding launch train -- python train.py                  # 在 tmux 里跑，退出
 
 ### 🧩 Skills
 
-插件会装上十个 skill。搭建类 skill 各搭厨房的一块，以后可以再跑一次原地更新：
+插件会装上十一个 skill。搭建类 skill 各搭厨房的一块，以后可以再跑一次原地更新：
 
 | Skill | 做什么 |
 | --- | --- |
@@ -132,6 +134,7 @@ ding launch train -- python train.py                  # 在 tmux 里跑，退出
 | Skill | 什么时候用 |
 | --- | --- |
 | `write-ticket` | 每次有岗位写票；模型会自己调用 |
+| `write-contribution` | 每次有岗位在代码仓库里写 PR、issue 或回复，按那个仓库自己的规范写 |
 | `/shift-change` | 某个岗位换成新会话时交接 |
 | `/improve-kitchen` | 每两周左右一次：把反复出错的地方做成检查、工具或规则，并删掉被它们取代的文字 |
 | `/goodnight`、`/goodmorning` | 你走开之前和回来之后 |
@@ -166,7 +169,7 @@ claude plugin install dkitchen@dkitchen
 /setup-dkitchen
 ```
 
-这个 skill 会先读你的仓库，了解你在做什么、已经有什么：agent 说明文件、测试、GPU、模型调用、长任务。它检查前提条件，定好语言，再问你需要哪几块：团队、代码规范、运行器、夜班。然后依次走每一块的搭建 skill；每个 skill 一次问一个问题，把打算写入的每一条规则、每个脚本和每项 GitHub 改动先拿给你看，你同意后才写。之后想改设置，随时再运行一次。
+这个 skill 会先读你的仓库，了解你在做什么、已经有什么：agent 说明文件、测试、GPU、模型调用、长任务。它检查前提条件，定好语言，问厨房放在哪里（你的仓库里，还是单独的私有仓库），再问你需要哪几块：团队、代码规范、运行器、夜班。然后依次走每一块的搭建 skill；每个 skill 一次问一个问题，把打算写入的每一条规则、每个脚本和每项 GitHub 改动先拿给你看，你同意后才写。之后想改设置，随时再运行一次。
 
 从 0.5 升级？先读 [CHANGELOG](https://github.com/917Dhj/dkitchen/blob/main/CHANGELOG.md)（英文）里的 *Upgrading*。
 
@@ -177,6 +180,9 @@ claude plugin install dkitchen@dkitchen
 
 **适合我的仓库吗？**
 这些规则是为计算类科研写的，其中大部分也适用于任何有长任务的仓库。安装 skill 会按你的仓库改写这些规则。团队和夜班不挑编程语言；代码检查和运行器只支持 Python 仓库。
+
+**能用在别人也在开发的仓库里吗？**
+可以，把厨房放进一个单独的私有仓库。规则、票和 `.dkitchen.toml` 都留在那里；团队的仓库只收到 PR 和 issue，以你的名义、按它自己的规范写，不带任何厨房的东西。在多人仓库里，PR 转为可审、issue 发出去都要你批准，审查结论留在你的票上，合并交给团队。队友的评论会唤醒总编排，但永远不算你的原话。`/setup-dkitchen` 发现仓库里还有别人时会推荐这种方式；详见 [A kitchen in its own repo](https://github.com/917Dhj/dkitchen/blob/main/docs/ding.md#a-kitchen-in-its-own-repo)（英文）。
 
 **必须同时用 Claude Code 和 Codex 吗？**
 目前是的，这是我每天在用的组合。

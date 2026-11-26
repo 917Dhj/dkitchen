@@ -12,7 +12,7 @@ When asked for night orders, each designer replies under its signature within 10
 
 Before writing `waiting on user`, or stopping to wait for the user, **every role runs `ding night show`**. If an open order covers the case, it acts within that order's scope and limits and names the order number in its comment. Otherwise it waits for the user. An order ends when closed or when its end time passes. During the night, every `ding log --item` the orchestrator writes names the order number it relied on, or the standing approval covering the action.
 
-Night orders never lift the hard stops: changing the goal, a dataset, the experimental conditions, or decision thresholds set in advance; touching a held-out test set; changing model-visible text; top-ups; runaway spend. <!-- fill: rewrite this list in the repo's own terms when it is not a research repo. -->
+Night orders never lift the hard stops: anything [the user decides](roles.md#who-owns-what); changing the goal, or decision thresholds set in advance; top-ups; runaway spend<!-- fill: and what else in this repo must never move without the user, such as model-visible text when the team has the model-text module, or touching a held-out test set in a research repo -->.
 
 When the user returns, they invoke `/goodmorning` in the orchestrator session. The orchestrator closes the orders with `ding night close`, then reports decisions for the user, stalls and their idle card-hours (marking estimates), orders used or unused, progress, and orders worth making standing. An order becomes a standing rule only on the user's approval, and is then written into these rules.
 

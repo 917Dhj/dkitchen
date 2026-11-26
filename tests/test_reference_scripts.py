@@ -146,7 +146,8 @@ def test_render_keeps_chosen_modules_and_leaves_no_markers(tmp_path):
 
 
 @pytest.mark.parametrize("templates, modules", [("team", ""), ("team,night", "run-budgets,model-text"),
-                                                ("team,night", ""), ("team,repo,runner", "")])
+                                                ("team,night", ""), ("team,repo,runner", ""), ("team", "split"),
+                                                ("team,repo,runner,night", "run-budgets,model-text,split,shared")])
 def test_rendered_kitchen_has_no_markers_and_no_broken_links(tmp_path, templates, modules):
     import re
     out = tmp_path / "docs/agents"
@@ -228,3 +229,24 @@ def test_pointer_blocks_follow_the_installed_files(tmp_path):
     alone = subprocess.run([sys.executable, str(RENDER), "--templates", "team", "--modules", "nope", "--out", str(out)],
                            capture_output=True, text=True)
     assert alone.returncode == 2 and "unknown modules" in alone.stderr
+
+
+def test_split_and_shared_text_follows_the_modules(tmp_path):
+    def run(modules, out):
+        return subprocess.run([sys.executable, str(RENDER), "--templates", "team", "--modules", modules, "--out", str(out)],
+                              capture_output=True, text=True)
+    single, split, shared = (tmp_path / name for name in ("single", "split", "shared"))
+    assert run("", single).returncode == run("split", split).returncode == run("split,shared", shared).returncode == 0
+    for name in ("contributing.md", "issue-tracker.md", "roles.md", "reviewing.md", "watch.md"):
+        assert "code repo" not in (single / name).read_text() or name == "contributing.md", name
+    assert "## Two repos" not in (single / "contributing.md").read_text()
+    assert "## Two repos" in (split / "contributing.md").read_text()
+    assert "Others work in this repo" not in (split / "contributing.md").read_text()
+    assert "Others work in this repo" in (shared / "contributing.md").read_text()
+    assert "Code issue: <the code repo issue" in (split / "issue-tracker.md").read_text()
+    assert "the team merges" in (shared / "reviewing.md").read_text()
+    blocks = run("split", split).stdout
+    assert "**Code repo**: the work lands in the code repo" in blocks and "a code issue, or a reply" in blocks
+    assert "**Code repo**" not in run("", single).stdout
+    alone = run("shared", tmp_path / "alone")
+    assert alone.returncode == 2 and "shared needs split" in alone.stderr

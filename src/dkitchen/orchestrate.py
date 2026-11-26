@@ -2,7 +2,8 @@
 
 - review: post a review comment on the PR and write its verdict as the review_check status on the reviewed HEAD.
 - merge: merge a reviewed PR at the reviewed HEAD and print the merge commit; refuses drafts, moved HEADs,
-  wrong bases, and unsuccessful required or review checks.
+  wrong bases, and unsuccessful required or review checks. With [merge] refresh, the repo's refresh command runs
+  first, against the default-branch tip, and a nonzero exit refuses.
 - relay: send a message to a ticket's executor with `ding send`, then leave the matching ticket comment. By default
   the message goes into the executor's current turn and replaces the orchestrator's relays still queued for it.
 - log: post one entry to the orchestrator log, stamped with the current UTC time.
@@ -10,10 +11,12 @@ Relay and log comments carry the orchestrator signature; review comments identif
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 import json
 import re
+import shlex
 import subprocess
 import sys
 
@@ -22,16 +25,16 @@ from dkitchen.config import Config
 
 
 def signed(text: str, config: Config) -> str:
-    signature = config.stations.signature(config.stations.orchestrator)
+    signature = config.roles.signature(config.roles.orchestrator)
     text = text.strip()
     return text if text.startswith(signature.rstrip()) else signature + text
 
 
 def log_body(items: list[str], pending: list[str], moment: datetime, config: Config) -> str:
-    stations = config.stations
-    lines = [f"{stations.signature(stations.orchestrator)}{moment.astimezone(timezone.utc):%H:%M} UTC",
+    roles = config.roles
+    lines = [f"{roles.signature(roles.orchestrator)}{moment.astimezone(timezone.utc):%H:%M} UTC",
              *(f"- {item}" for item in items),
-             f"- {config.log.pending}{stations.separator}{'; '.join(pending) or config.status.none}"]
+             f"- {config.log.pending}{roles.separator}{'; '.join(pending) or config.status.none}"]
     return "\n".join(lines)
 
 
@@ -115,9 +118,15 @@ def readiness(config: Config, repo: str, pr: dict, branch: str, checks: dict | N
 
 
 def review(args, config: Config) -> int:
-    if not config.merge.review_check:
+    """Record a verdict on a PR HEAD: as a PR comment and commit status, or, in a shared code repo, on its ticket."""
+    if config.shared and getattr(args, "ticket", None) is None:
+        return fail(f"{config.code_repo()} is shared, so a PR verdict goes on its ticket, not the PR: "
+                    "add --ticket N, the ticket whose PR line names it")
+    if not config.shared and not config.split and getattr(args, "ticket", None) is not None:
+        return fail(f"{config.code_repo()} is not shared, so a PR verdict goes on the PR; drop --ticket")
+    if not config.shared and not config.merge.review_check:
         return fail("ding review requires [merge] review_check")
-    repo = config.repository()
+    repo = config.code_repo()
     result = call(config, "gh", "pr", "view", str(args.pr), "--repo", repo, "--json", "headRefOid")
     if result.returncode:
         return fail(f"cannot read PR HEAD: {result.stderr.strip()}")
@@ -130,7 +139,29 @@ def review(args, config: Config) -> int:
     if not args.sha or not sha.startswith(args.sha):
         return fail(f"PR #{args.pr} HEAD is now {sha}, not the reviewed {args.sha}; review it again")
     line = config.merge.review_pass if args.verdict == "pass" else config.merge.review_changes
+    if config.shared:
+        from dkitchen import outbound, verdict
+
+        try:
+            linked = outbound.links(config, args.ticket).prs
+        except (RuntimeError, ValueError, KeyError, TypeError) as error:
+            return fail(f"cannot read #{args.ticket}: {error}. Nothing posted")
+        if (repo, args.pr) not in linked:
+            return fail(f"#{args.ticket} has no PR line for {repo}#{args.pr}; `ding pr` writes one when it opens "
+                        "the PR. Nothing posted")
+        return verdict.review_ticket(args, config, f"{line.replace('{sha}', sha[:8])} ({repo}#{args.pr})")
     body = f"{line.replace('{sha}', sha[:8])}\n\n{Path(args.body_file).read_text(encoding='utf-8')}"
+    if config.split:
+        from dkitchen import outbound
+
+        try:
+            found = outbound.links(config, args.ticket) if args.ticket is not None else None
+            if found is not None and (repo, args.pr) not in found.prs:
+                return fail(f"#{args.ticket} has no PR line for {repo}#{args.pr}; `ding pr` writes one when it opens "
+                            "the PR. No comment, no status")
+            outbound.refuse_leaks(config, body, found)
+        except (RuntimeError, ValueError, KeyError, TypeError) as error:
+            return fail(f"{error}. No comment, no status")
     result = call(config, "gh", "api", f"repos/{repo}/issues/{args.pr}/comments", "-f", f"body={body}")
     if result.returncode:
         return fail(f"review comment failed: {result.stderr.strip()}; no status written")
@@ -149,8 +180,59 @@ def review(args, config: Config) -> int:
     return 0
 
 
+REFRESH_RUNS = 3
+REFRESH_LINES = 20
+
+
+def branch_tip(config: Config, repo: str, branch: str) -> str:
+    result = call(config, "gh", "api", f"repos/{repo}/git/ref/heads/{branch}")
+    if result.returncode:
+        raise RuntimeError(f"cannot read the tip of {branch}: {result.stderr.strip()}")
+    sha = json.loads(result.stdout)["object"]["sha"]
+    if not isinstance(sha, str) or not sha:
+        raise ValueError(f"{branch} has no tip commit")
+    return sha
+
+
+def refresh(config: Config, repo: str, number: int, pr: dict, branch: str) -> str | None:
+    """Run [merge] refresh until the default-branch tip holds still across a run; return why the merge is refused.
+
+    Each run gets the tip it must validate against as {tip}; the merge is safe only if that same tip is still the
+    tip afterwards. The command may replace a status on the HEAD, so the required checks are read again after each run.
+    """
+    if config.split and config.code_root is None:
+        return f"{repo}'s checkout is not linked on this machine, so refresh cannot run; run `ding kitchen link` first"
+    sha = pr["headRefOid"]
+    tip = branch_tip(config, repo, branch)
+    for _ in range(REFRESH_RUNS):
+        argv = config.merge.refresh_argv(number, sha, tip)
+        print(f"ding: refresh against {branch} {tip[:8]}: {shlex.join(argv)}", file=sys.stderr, flush=True)
+        try:
+            # The refresh command validates the code, so it runs in the code repo's checkout.
+            result = call(replace(config, root=config.code_root) if config.split else config, *argv)
+        except OSError as error:
+            return f"refresh could not run ({shlex.join(argv)}): {error}; merge refused"
+        if result.returncode:
+            lines = "\n".join((result.stdout + result.stderr).strip().splitlines()[-REFRESH_LINES:])
+            return (f"refresh exited {result.returncode} against {branch} {tip[:8]} ({shlex.join(argv)}); merge refused"
+                    + (f"\n{lines}" if lines else ""))
+        last = result.stdout.strip().splitlines()[-1:]
+        print(f"ding: refresh passed{': ' + last[0] if last else ''}", file=sys.stderr, flush=True)
+        failures = readiness(config, repo, pr, branch)["reasons"]
+        if failures:
+            return "PR readiness blocks merge after refresh:\n" + "\n".join(failures)
+        latest = branch_tip(config, repo, branch)
+        if latest == tip:
+            return None
+        tip = latest
+    return f"{branch} kept moving: its tip changed during each of {REFRESH_RUNS} refresh runs; merge refused, try again later"
+
+
 def merge(args, config: Config) -> int:
-    repo = config.repository()
+    repo = config.code_repo()
+    if config.merger == "team":
+        return fail(f"the team merges PRs in {repo} ([merge] by = team{'' if config.merge.by else ', the default for a shared code repo'}); "
+                    "nothing done")
 
     def view() -> dict:
         result = call(config, "gh", "pr", "view", str(args.pr), "--repo", repo, "--json", "isDraft,state,headRefOid,mergeCommit,body,baseRefName")
@@ -174,6 +256,10 @@ def merge(args, config: Config) -> int:
         failures = readiness(config, repo, pr, branch)["reasons"]
         if failures:
             return fail("PR readiness blocks merge:\n" + "\n".join(failures))
+        if config.merge.refresh:
+            refused = refresh(config, repo, args.pr, pr, branch)
+            if refused:
+                return fail(refused)
         result = call(config, "gh", "pr", "merge", str(args.pr), "--repo", repo, "--merge",
                       "--match-head-commit", pr["headRefOid"])
         if result.returncode:
@@ -194,16 +280,19 @@ def relay(args, config: Config) -> int:
     queue = getattr(args, "queue", False)
     text = signed(message, config)
     if not queue:
-        signature = config.stations.signature(config.stations.orchestrator)
+        signature = config.roles.signature(config.roles.orchestrator)
         text = f"{signature}{config.relay.superseding}\n{text[len(signature.rstrip()):].lstrip()}"
-    send = ["send", target, "--from", config.stations.orchestrator, "--message", text]
+    send = ["send", target, "--from", config.roles.orchestrator, "--message", text]
     if not queue:
         send += ["--steer", "--supersede"]
     if getattr(args, "interrupt", False):
         send += ["--interrupt"]
     if args.socket:
         send += ["--socket", args.socket]
-    if ding.main(send):
+    code = ding.main(send)
+    if code == ding.NO_LISTENER_EXIT:
+        print(f"ding: {ding.no_listener_note(target)}", file=sys.stderr)
+    elif code:
         return fail("ding send did not confirm delivery; check ~/.local/state/ding/sent.jsonl before sending again. "
                     "No comment was left.")
     if args.no_comment:
@@ -211,8 +300,21 @@ def relay(args, config: Config) -> int:
     return comment(config, repo, args.ticket, signed(args.comment or message, config))
 
 
+def log_is_empty(items: list[str], pending: list[str], config: Config) -> bool:
+    """True when the entry says nothing: no item with text and no pending matter besides the "none" word."""
+    return not any(item.strip() for item in items) and all(
+        not matter.strip() or matter.strip() == config.status.none for matter in pending)
+
+
 def log(args, config: Config) -> int:
     issue = args.issue or config.log.issue
     if issue is None:
         return fail("no orchestrator log ticket; set [log] issue in .dkitchen.toml or pass --issue")
+    if config.log.issue is not None and issue != config.log.issue and not getattr(args, "force", False):
+        return fail(f"#{issue} is not the orchestrator log ticket (#{config.log.issue}). Use `gh issue comment` for a "
+                    f"note on a work ticket, or `ding relay --comment` when its executor should hear it too; or pass --force "
+                    "to log here anyway")
+    if log_is_empty(args.item, args.pending, config):
+        print("ding: log entry is empty (no items, nothing pending); nothing posted", file=sys.stderr)
+        return 0
     return comment(config, config.repository(), issue, log_body(args.item, args.pending, datetime.now(timezone.utc), config))

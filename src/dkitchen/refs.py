@@ -83,9 +83,11 @@ class GitHub:
 class Source:
     """Files as saved in a git revision, or as they sit under a directory."""
 
-    def __init__(self, ref: str, root: Path | None) -> None:
+    def __init__(self, ref: str, root: Path | None, repository: Path | None = None) -> None:
+        """`repository` is the checkout whose revision `ref` names (default: the working directory's)."""
         self.ref, self.root = ref, root
-        command = ["git", "-C", str(root), "ls-files"] if root else ["git", "ls-tree", "-r", "--name-only", ref]
+        self.git = ["git", *(["-C", str(repository)] if repository else [])]
+        command = ["git", "-C", str(root), "ls-files"] if root else [*self.git, "ls-tree", "-r", "--name-only", ref]
         listing = subprocess.run(command, capture_output=True, text=True)
         self.names = listing.stdout.split("\n") if listing.returncode == 0 else []
 
@@ -99,7 +101,7 @@ class Source:
     def read(self, path: str) -> bytes:
         if self.root:
             return (self.root / path).read_bytes()
-        return subprocess.run(["git", "show", f"{self.ref}:{path}"], capture_output=True, check=True).stdout
+        return subprocess.run([*self.git, "show", f"{self.ref}:{path}"], capture_output=True, check=True).stdout
 
 
 def names_by_reference(line: str, spans: list[re.Match[str]]) -> dict[int, list[str]]:
@@ -215,6 +217,22 @@ def check(draft: str, source: Source, tolerance: int, github: GitHub | None = No
     return findings, notes, checked
 
 
+def code_repository() -> Path | None:
+    """The code repo checkout that `file:line` references point into, when the kitchen lives apart from it."""
+    from dkitchen import config
+
+    try:
+        settings = config.load()
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return None
+    if not settings.split or settings.root != config.repository_root():
+        return None  # in the code repo's own checkouts, its revisions are the working directory's
+    if settings.code_root is None:
+        raise ValueError(f"references point into {settings.code}, whose checkout is not linked on this machine; "
+                         "run `ding kitchen link`, or pass --root")
+    return settings.code_root
+
+
 def default_repository() -> str | None:
     try:
         from dkitchen import config
@@ -251,8 +269,8 @@ def check_refs(args, emit_json: bool = True) -> int:
     drafts = [args.draft] if isinstance(args.draft, (str, Path)) else list(args.draft)
     github = None if getattr(args, "offline", False) else GitHub(getattr(args, "repo", None), default=default_repository)
     try:
-        source = Source(args.ref, args.root)
-    except OSError as error:
+        source = Source(args.ref, args.root, None if args.root else code_repository())
+    except (OSError, ValueError) as error:
         print(f"ding: {error}", file=sys.stderr)
         return 2
     return max(report(path, args, source, github, len(drafts) > 1, emit_json) for path in drafts)

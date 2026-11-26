@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -265,3 +266,101 @@ def test_bad_check_config_is_refused(tmp_path, text, error):
 def test_build_notes_are_skipped(tmp_path):
     (tmp_path / config.FILE).write_text('[build.infra]\nrunner = "anything"\n[build.repo]\nnote = 1\n')
     assert config.load(tmp_path).check is None
+
+
+TABLE = KITCHEN.replace("[check]", "[tool.dkitchen.check]")
+
+
+def adopt(repo, table=TABLE, drop_kitchen=True):
+    """Move the settings into the repo's own pyproject.toml, as a committed change."""
+    if drop_kitchen:
+        git(repo.root, "rm", "-q", ".dkitchen.toml")
+    change(repo, {"pyproject.toml": PYPROJECT + "\n" + table}, "Adopt")
+    repo.base = git(repo.root, "rev-parse", "HEAD")
+
+
+def test_pyproject_table_alone_drives_check_and_map(repo, capsys):
+    adopt(repo)
+    assert not (repo.root / ".dkitchen.toml").exists()
+    change(repo, {"pkg/core_v2.py": '"""Copy."""\n'})
+    code, result = run(repo, capsys)
+    assert (code, rules(result)) == (1, ["version-copy"])
+    write(repo.root, {"pkg/bare.py": "x = 1\n"})
+    assert check.module_map(SimpleNamespace(paths=[]), config.load(repo.root)) == 0
+    assert "pkg/bare.py: (no docstring)" in capsys.readouterr().out
+
+
+def test_pyproject_table_wins_over_the_kitchen_and_says_so_once(repo, capsys, monkeypatch):
+    monkeypatch.setattr(check, "IGNORED_WARNED", set())
+    adopt(repo, TABLE.replace('"pkg"', '"lib"'),
+          drop_kitchen=False)
+    change(repo, {"pkg/core_v2.py": '"""Copy."""\n'})
+    args = SimpleNamespace(base=repo.base, json=True)
+    assert check.check(args, config.load(repo.root)) == 1
+    check.check(args, config.load(repo.root))
+    captured = capsys.readouterr()
+    err = captured.err
+    assert json.loads(captured.out.split("\n}\n")[0] + "\n}")["findings"][0]["rule"] == "top-level-dir"
+    assert err.count(f"ding: {repo.root / '.dkitchen.toml'} [check] is ignored: {repo.root / 'pyproject.toml'} "
+                     "has [tool.dkitchen.check]") == 1
+
+
+def test_rules_key_sets_the_printed_pointer(repo, capsys):
+    adopt(repo, TABLE + 'rules = "https://example.com/rules"\n')
+    change(repo, {"pkg/core_v2.py": '"""Copy."""\n'})
+    assert check.check(SimpleNamespace(base=repo.base, json=False), config.load(repo.root)) == 1
+    assert "rules in https://example.com/rules" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("text, error", [
+    ('[tool.dkitchen.check]\nlibrary = ["pkg"]\nlibary = ["x"]', "pyproject.toml: unknown keys in "
+     "\\[tool.dkitchen.check\\]: libary"),
+    ('[tool.dkitchen.check]\nlibrary = ["pkg"]\nruff = "yes"', "pyproject.toml: \\[tool.dkitchen.check\\] ruff must be"),
+    ('[tool.dkitchen.check]\nlibrary = ["pkg"]\nrules = 3', "pyproject.toml: \\[tool.dkitchen.check\\] rules must be a string"),
+    ("[tool.dkitchen.check]\nruff = true", "pyproject.toml: \\[tool.dkitchen.check\\] names no area"),
+    ("[tool.dkitchen]\ncheck = 1", "pyproject.toml: \\[tool.dkitchen.check\\] must be a table"),
+    ("[tool.dkitchen.check\n", "pyproject.toml"),
+])
+def test_bad_pyproject_table_is_refused(repo, capsys, text, error):
+    write(repo.root, {"pyproject.toml": text})
+    assert check.check(SimpleNamespace(base=repo.base, json=False), config.load(repo.root)) == 2
+    assert check.module_map(SimpleNamespace(paths=[]), config.load(repo.root)) == 2
+    import re
+    assert re.search(error, capsys.readouterr().err)
+
+
+def test_changing_the_pyproject_table_is_a_guard_change(repo, capsys):
+    adopt(repo)
+    change(repo, {"pyproject.toml": PYPROJECT + "\n" + TABLE.replace('vendor = ["third_party"]', 'vendor = ["third_party", "pkg/gen"]')})
+    code, result = run(repo, capsys)
+    assert (code, rules(result)) == (1, ["guard-change"])
+    assert result["guard_changes"] == ["pyproject.toml [tool.dkitchen.check]"]
+
+
+def test_moving_checks_in_force_into_pyproject_is_a_guard_change(repo, capsys):
+    change(repo, {"pyproject.toml": PYPROJECT + "\n" + TABLE})
+    code, result = run(repo, capsys)
+    assert "pyproject.toml [tool.dkitchen.check]" in result["guard_changes"]
+    assert "guard-change" in rules(result)
+
+
+def test_a_split_kitchens_checks_cannot_be_dropped_through_pyproject(repo, capsys, tmp_path, monkeypatch):
+    kitchen = replace(config.load(repo.root), root=tmp_path, repo="me/kitchen", code="team/project")
+    git(repo.root, "remote", "add", "origin", "https://github.com/team/project.git")
+    change(repo, {}, "No kitchen file in the code repo", remove=[".dkitchen.toml"])
+    repo.base = git(repo.root, "rev-parse", "HEAD")
+    change(repo, {"pyproject.toml": PYPROJECT + "\n" + TABLE.replace("[tool.dkitchen.check]", "[tool.dkitchen.check]\nruff = false"),
+                  ".github/workflows/ci.yml": "on: push\n"})
+    monkeypatch.chdir(repo.root)
+    code = check.check(SimpleNamespace(base=repo.base, json=True), kitchen)
+    result = json.loads(capsys.readouterr().out)
+    assert code == 1 and "guard-change" in rules(result)
+    assert {"pyproject.toml [tool.dkitchen.check]", ".github/workflows/ci.yml"} <= set(result["guard_changes"])
+
+
+def test_adopting_the_pyproject_table_is_not_a_guard_change(repo, capsys):
+    git(repo.root, "rm", "-q", ".dkitchen.toml")
+    git(repo.root, "commit", "-q", "-m", "No checks yet")
+    repo.base = git(repo.root, "rev-parse", "HEAD")
+    change(repo, {"pyproject.toml": PYPROJECT + "\n" + TABLE})
+    assert run(repo, capsys)[0] == 0

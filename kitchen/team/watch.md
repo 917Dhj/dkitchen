@@ -20,9 +20,17 @@ The watch exits about 5 minutes after the first of these appears, so related cha
 
 - an executor comment whose Status is not `in progress`, or whose *Waiting on* names a role or the user;
 - a comment from the user;
+- a ticket finishing, by an executor `done` status or by being closed, while another open ticket's latest executor status names it as `#N` in its *Waiting on*. The line is "#M is waiting on #N, which just finished" with a link, once for each pair (a reopened #N that finishes again wakes no one, and a wait posted after #N already finished is not reported); a ticket closed as not planned or a duplicate reads "which was closed as not planned" instead, and a waiter whose latest status is done is skipped. Relay the result to #M's executor yourself. In a kitchen of its own, `#N` is a kitchen ticket; a PR or `owner/code#N` is not one;
 - a `status:*` label being added;
-- a new PR, a PR ready to merge, or a PR whose review failed;
+- a new PR, a PR ready to merge, or a PR whose review failed;<!-- module:shared --> in this shared code repo, only new PRs, since verdicts go on tickets and the team merges;<!-- /module:shared -->
+<!-- module:split -->
+- a `PR:` line on a ticket, which `ding pr` leaves for each new PR in the code repo;
+- a comment from someone else on a code repo PR or code issue the kitchen opened. It is never the user's words: write what it asks on the ticket, and route it as any request;
+<!-- /module:split -->
+- a verifier's `changes` verdict on a run stage (`ding review --ticket`); a `pass` is only listed;
 - an executor gone quiet: `in progress` for over 6 hours without a comment, with no running `ding run` and no live tmux job whose session name contains `issue<ticket number>`;
+- a `ding launch` job gone quiet or late: one with `--progress` whose progress file has not changed for 30 minutes (`[watch] stale_minutes`), once for each stall, or one with `--expect-hours H` that has run past 1.5 × H (`[watch] overrun_factor`), once. The line names the job, the ticket, and the last progress line. Look at the job; ask its executor to stop, restart, or raise the estimate;
+- a stalled line, at most once a day for each: a draft PR not updated for 48 hours, or a ticket whose executor is `in progress`, waits on no one, and has not been updated for 48 hours. The orchestrator decides whether to resume it, hand it over, or close it;
 - a request to a designer or the verifier left unanswered for 30 minutes (`[watch] design_answer_minutes`). The orchestrator then sends that role one line, "#N is waiting on you, see <link>", without restating the request or answering it.
 
 It skips the orchestrator log ticket set in `.dkitchen.toml`. One watch runs per state file; a second exits at once. `ding watch --help` lists the timing options.
@@ -31,7 +39,7 @@ It skips the orchestrator log ticket set in `.dkitchen.toml`. One watch runs per
 
 - An executor comment whose *Waiting on* names the role or one of its aliases, or whose *Next* says "hand to <role>".
 - An executor in `waiting on design` that names no designer, which wakes the main designer.
-- A comment from the verifier, the orchestrator, or the user that writes `@<role>` or "hand to <role>", or has a line starting with the role's signature.
-- For the reviewer of a PR: a non-draft PR whose current HEAD has no review yet ([reviewing.md](reviewing.md)).
+- A comment from the verifier, the orchestrator, or the user that writes `@<role>` or "hand to <role>", or has a line starting with the role's signature. A `changes` verdict on a run stage hands the ticket to its design line this way.
+- For the reviewer of a PR: a non-draft PR whose current HEAD has no review yet ([reviewing.md](reviewing.md)).<!-- module:shared --> Not in this shared code repo, where the executor's hand-over comment wakes the reviewer.<!-- /module:shared -->
 
 A role watch ignores labels, new PRs, and quiet executors. Requests for the verifier go from the executor straight to it; the orchestrator does not forward them.

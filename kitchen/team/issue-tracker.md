@@ -1,6 +1,6 @@
 # Tickets: GitHub issues
 
-Every piece of work is a ticket: a GitHub issue in this repo, handled with `gh`. The ticket holds the whole story: the task, decisions, requests, and results. Anything said elsewhere that matters is written back to the ticket.
+Every piece of work is a ticket: a GitHub issue in this repo<!-- module:split -->, the kitchen repo; the code repo's issues are code issues ([contributing.md](contributing.md)), never tickets<!-- /module:split -->, handled with `gh`. The ticket holds the whole story: the task, decisions, requests, and results. Anything said elsewhere that matters is written back to the ticket.
 
 ## Writing tickets
 
@@ -12,6 +12,9 @@ Write tickets with the `write-ticket` skill. A ticket in this repo is laid out l
 Design: <the designer line that owns it>; reviewer: <role>
 > <the user's approval in their own words, with its date, when the ticket comes from a user decision>
 Depends on: <tickets that must finish first, or leave the line out>
+<!-- module:split -->
+Code issue: <the code repo issue it comes from, as owner/name#N, or leave the line out>
+<!-- /module:split -->
 
 ## Problem
 ## Do
@@ -75,7 +78,7 @@ Originals, such as the run's records, summaries, and progress files, stay in the
 
 ### PRs
 
-Open PRs as drafts, and mark one ready only when handing it over for review, as in [reviewing.md](reviewing.md).
+Open PRs as drafts with `ding pr`, and mark one ready only when handing it over for review, as in [reviewing.md](reviewing.md) and [contributing.md](contributing.md).
 <!-- module:run-budgets -->
 
 ### Run requests

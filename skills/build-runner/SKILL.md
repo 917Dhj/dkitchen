@@ -32,7 +32,7 @@ Summarize the scripts that fit and those that do not, how each handles resuming 
 
 ## 3. Settle each section
 
-One section, one answer, then the next. Lead each with your recommendation.
+Ask the sections as rounds, as [Installing](../../kitchen/README.md#installing) says. C and E wait for B, since the spec's fields decide which services and identity fields exist.
 
 **A. Scope.** The runner carries new item-by-item runs. Recommend leaving existing scripts as they are: they move to the runner when a ticket changes them.
 
@@ -59,7 +59,7 @@ Done when the user approves the draft.
 
 ## 5. Write
 
-Render with `--templates runner`, as [Installing](../../kitchen/README.md#installing) says, then fill and translate. Rewrite both pointer blocks from what `render.py` prints. Write the runner, the registry, the tests, and the check. Adding to `[check] commands` is a guard change: the commit carries `Guard-change: #<ticket> <reason>`.
+Render with `--templates runner`, as [Installing](../../kitchen/README.md#installing) says, then fill and translate. Rewrite both pointer blocks from what `render.py` prints. Write the runner, the registry, the tests, and the check. In a kitchen kept in its own repo, these are the code repo's code: write them in a worktree of the code repo, on a ticket, and they land as a PR opened with `ding pr`. Adding to `[check] commands` is a guard change: the commit carries `Guard-change: #<ticket> <reason>`.
 
 Done when every approved file exists with its approved content.
 

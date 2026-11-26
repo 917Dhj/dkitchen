@@ -9,6 +9,8 @@ Install the rules that keep the repo from filling up with copies: `docs/agents/c
 
 The checks are preventive: they hold from the first PR, with no baseline and no exception list. Layout rules look only at what a PR adds, so existing files never turn CI red. Ruff and the import contracts look at the whole tree, so the existing violations they find are cleaned up first, in a ticket of their own, before those checks are switched on.
 
+**A kitchen in its own repo.** When `.dkitchen.toml` sets `code`, `code.md` and `[check]` go in the kitchen, and everything this skill reads about layout, tools, and violations is read in the code repo's checkout, where `ding check` and `ding map` also run. The code repo's own files, its `pyproject.toml` tables and CI workflow, change only as a PR the user approves. When the code repo is shared, recommend installing nothing into it: executors run `ding check` in their worktrees, and `ding pr` runs it before each PR opens. Offer the checks to the team only when the user says the team adopts them, as one PR: the settings as `[tool.dkitchen.check]` in the code repo's `pyproject.toml`, with `rules` pointing at the team's own docs, such as its `CONTRIBUTING.md`, the tool tables, and the workflow, which installs dkitchen from PyPI; its commit needs a `Guard-change:` trailer, since checks were already in force. Once it merges, remove `[check]` from the kitchen's `.dkitchen.toml`, since the code repo's table wins and two copies drift. Leave `[merge] required_checks` to the team.
+
 Follow [Installing](../../kitchen/README.md#installing) for the prerequisites, language, rendering, updating in place, pointer blocks, and approval. When `/setup-dkitchen` brought you here, the prerequisites and the language are already settled: skip them. The checks themselves are `ding check` and `ding map` ([docs/ding.md](../../docs/ding.md#repo-checks)).
 
 ## Sources
@@ -36,7 +38,7 @@ Summarize the layout, the proposed areas, and the existing violations by kind, w
 
 ## 3. Settle each section
 
-One section, one answer, then the next. Lead each with your recommendation.
+Ask the sections as rounds, as [Installing](../../kitchen/README.md#installing) says. C waits for A and B, since the areas and the import contract decide what counts as a violation.
 
 **A. Areas.** Show each top-level folder with its proposed area, as a table: library, tools, experiments, tests, docs, outputs, assets, or vendor. Every folder gets one; there is no "other". A folder whose contents are mixed goes to the area most of it belongs to, and the rest becomes part of the cleanup. List the top-level files the usual names do not cover ([the usual names](../../docs/ding.md#repo-checks)); each one is either listed in `root_files` or moved.
 
@@ -74,7 +76,7 @@ Done when every approved file exists with its approved content and every cleanup
 
 Run the checks in [Installing](../../kitchen/README.md#installing), then:
 
-- `ding check --base HEAD` passes on the working tree, with the switches as approved.
+- `ding check --base HEAD` passes on the working tree, with the switches as approved; in a kitchen of its own, on the code repo's checkout.
 - `ding map` lists the library modules.
 - A scratch file `<library>/scratch_v2.py` makes `ding check --base HEAD` fail with `version-copy`; delete it afterwards.
 
