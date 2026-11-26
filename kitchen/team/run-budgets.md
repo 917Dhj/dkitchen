@@ -8,8 +8,8 @@ The designer writes the tier on the ticket. Without one, the highest tier that a
 
 | Tier | When | Before starting | After finishing |
 | --- | --- | --- | --- |
-| Light | CPU only; or at most <!-- fill: light-tier call limit, e.g. 50 --> calls at no cost to a self-hosted service already running; no training | One start line on the ticket: the command, the output folder, the call count | The gate table and the report path |
-| Medium | Pre-approved GPU inference or evaluation, as below | A run request with Scope, Model calls, Endpoint, Concurrency, and Expected time | The gate table, the report, and the paths of the run's record files |
+| Light | CPU only; or at most <!-- fill: light-tier call limit, e.g. 50 --> calls at no cost to a self-hosted service already running; no training | One start line on the ticket: the command, the output folder, the call count, the disk it writes | The gate table and the report path |
+| Medium | Pre-approved GPU inference or evaluation, as below | A run request with Scope, Model calls, Endpoint, Concurrency, Disk, and Expected time | The gate table, the report, and the paths of the run's record files |
 | Heavy | Paid hosted APIs, training, service starts, more than <!-- fill: pre-approved limit, e.g. 500 --> calls<!-- module:model-text -->, or changed model-visible text<!-- /module:model-text --> | A full run request, and the verifier's spot check of a few requests | The gate table, the report, and the paths of the run's record files |
 
 ## Run requests
@@ -23,10 +23,12 @@ Endpoint: <model and where it is served>
 Concurrency: <parallel requests, and the reading it came from>
 Expected cost: <amount, and how it was computed>
 GPU hours: <GPUs × hours>
+Disk: <GB written, on which host, split between runs/ and scratch/>
 Expected time: <duration, and the expected finish time>
 ```
 
 - **Expected time**: the measured time per item, from a smoke run or the finished part, × the items left ÷ the concurrency actually in effect. Add the expected finish time in <!-- fill: the user's timezone -->. When progress runs more than 50% behind the estimate, post an updated one with the reason.
+- **Disk**: estimated from a smoke run, the way Expected time is. Weights and datasets already on the host count zero; a new download or derived dataset is named here, with the root it goes to ([long-running-jobs.md](long-running-jobs.md#storage)).
 - **Concurrency**: fill the free capacity at request time, not a habitual number, and name the reading it came from. <!-- fill: the command that shows free capacity on the repo's services, or remove this sentence. -->
 
 ## What needs approval

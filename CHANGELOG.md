@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Storage rules.** `long-running-jobs.md` gets a Storage section: every host keeps the same roots (`models/`, `datasets/`, `envs/`, `code/<repo>@<commit>/`, `runs/<study>/<run>/`, `scratch/<ticket>/`), a worktree holds code only, runs on another host go through one wrapper instead of per-ticket clones, training runs delete resume checkpoints on success, and a ticket closes only after its executor's storage line (what each worktree, scratch, and run folder becomes) is carried out. Run requests get a Disk line, light-tier start lines name the disk a run writes, and `/goodnight` reads free disk on every host. The new reference script `check_disk.py` is a `[launch] preflight` that refuses a launch below a host's reserve or into a real outputs folder. Run `/setup-dkitchen` or `build-team` again to fill the roots for your hosts.
+
 ## 0.6.2
 
 - **`ding launch` no longer leaves tmux sessions behind.** The pane's output goes to `launch-records/<name>-<id>.log`, and the session closes when the job exits, however it exits. The wake-up message and the launch line name the log. A job's name is free again once it exits. Logs untouched for `[launch] keep_days` (default 14) are deleted at the next launch, except those of a session still open; records stay, so `ding board` is unchanged. Sessions left by earlier versions stay until you close them. Run `/setup-dkitchen` or `build-team` again to update `docs/agents/long-running-jobs.md`, which told executors to close panes by hand.

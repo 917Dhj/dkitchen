@@ -1,5 +1,6 @@
 """The setup skill's reference repo scripts, loaded from their files as an installed repo would run them."""
 from importlib.util import module_from_spec, spec_from_file_location
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -18,13 +19,36 @@ def load(name):
     return module
 
 
-review_pr, check_requests, check_prompt_in_issue = (load(name) for name in ("review_pr", "check_requests", "check_prompt_in_issue"))
+review_pr, check_requests, check_prompt_in_issue, check_disk = (
+    load(name) for name in ("review_pr", "check_requests", "check_prompt_in_issue", "check_disk"))
 
 
-@pytest.mark.parametrize("name", ["review_pr", "check_requests", "check_prompt_in_issue"])
+@pytest.mark.parametrize("name", ["review_pr", "check_requests", "check_prompt_in_issue", "check_disk"])
 def test_scripts_print_help(name):
     result = subprocess.run([sys.executable, str(SCRIPTS / f"{name}.py"), "--help"], capture_output=True, text=True)
     assert result.returncode == 0 and "usage:" in result.stdout
+
+
+def test_disk_check_refuses_below_reserve_and_writes_receipt(tmp_path, monkeypatch):
+    receipt = tmp_path / "receipt.json"
+    monkeypatch.setenv("DING_PREFLIGHT_RECEIPT", str(receipt))
+    assert check_disk.main(["--reserve-gb", "0", str(tmp_path)]) == 0
+    assert check_disk.main(["--reserve-gb", "1e12", str(tmp_path)]) == 1
+    saved = json.loads(receipt.read_text())
+    assert saved["disks"][0]["path"] == str(tmp_path) and "below the" in saved["problems"][0]
+
+
+def test_disk_check_refuses_a_real_outputs_folder_but_not_a_symlink(tmp_path, monkeypatch):
+    monkeypatch.delenv("DING_PREFLIGHT_RECEIPT", raising=False)
+    monkeypatch.setenv("DING_LAUNCH_CWD", str(tmp_path))
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    runs = tmp_path.parent / f"{tmp_path.name}-runs"
+    runs.mkdir()
+    (tmp_path / "outputs").symlink_to(runs)
+    assert check_disk.main(["--reserve-gb", "0", "--outputs", "outputs"]) == 0
+    (tmp_path / "outputs").unlink()
+    (tmp_path / "outputs").mkdir()
+    assert check_disk.main(["--reserve-gb", "0", "--outputs", "outputs"]) == 1
 
 
 def test_added_lines_warn_only_for_paths_and_new_nested_prompts():

@@ -13,7 +13,7 @@ The repo is split into areas, set under `[check]` in `.dkitchen.toml`. Every fil
 | Experiments | <!-- fill: experiments paths --> | One folder per study, `<study>/`, holding its entry points and configs. A study is a line of work that spans tickets; a ticket continuing a study reuses its folder. Study folders are snake_case and hold an `__init__.py` |
 | Tests | <!-- fill: tests paths --> | `<package>/test_<behaviour>.py`, mirroring the code they test |
 | Docs | <!-- fill: docs paths --> | Prose only |
-| Outputs | <!-- fill: outputs paths --> | Run outputs, kept out of Git, as `<study>/<run>/` where `<run>` names what varies |
+| Outputs | <!-- fill: outputs paths --> | Run outputs, kept out of Git, as `<study>/<run>/` where `<run>` names what varies. In every checkout and worktree the folder is a symlink to the host's runs root, so results outlive the worktree and are never copied with it |
 | Assets | <!-- fill: assets paths --> | Material that is not code: configs, prompts, data, schemas |
 | Vendor | <!-- fill: vendor paths --> | Other people's code, changed only by updating it from its source |
 
