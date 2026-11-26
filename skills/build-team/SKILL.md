@@ -56,9 +56,9 @@ With one designer, say so and move on.
 | `run-budgets` | The repo runs models on GPUs or calls paid APIs |
 | `model-text` | The repo studies or depends on what models are told: prompts, tool definitions, request templates |
 
-**E. Resources.** Fill the `<!-- fill: … -->` gaps of the chosen templates: hosts and GPUs and how to tell one is free, shared services with their owners and tunnels, the tier limits and timezone for `run-budgets` (defaults: 50 light-tier calls, 500 pre-approved calls), where prompts live for `model-text`. Propose values from exploration and let the user correct them.
+**E. Resources.** Fill the `<!-- fill: … -->` gaps of the chosen templates: hosts and GPUs and how to tell one is free, each host's storage roots and reserve (start from where the repo already keeps weights and data; on a host without worktrees, the wrapper that runs there), shared services with their owners and tunnels, the tier limits and timezone for `run-budgets` (defaults: 50 light-tier calls, 500 pre-approved calls), where prompts live for `model-text`. Propose values from exploration and let the user correct them.
 
-**F. Repo scripts.** Propose how `scripts/review_pr.py` runs this repo's tests and prepares a trial-merge worktree, and which module scripts to install: `check_requests.py` and `check_prompt_in_issue.py` for `model-text`. For `run-budgets`, a ledger script only if the repo already saves per-request receipts; otherwise drop the ledger section.
+**F. Repo scripts.** Propose how `scripts/review_pr.py` runs this repo's tests and prepares a trial-merge worktree, and which module scripts to install: `check_requests.py` and `check_prompt_in_issue.py` for `model-text`. `scripts/check_disk.py` as the `[launch] preflight`, with each host's reserve. For `run-budgets`, a ledger script only if the repo already saves per-request receipts; otherwise drop the ledger section.
 
 **G. Contributing.** Propose the conventions for `contributing.md` from what exploration found, and only those: a convention the code repo does not have stays out. In a kitchen of its own, also settle which PRs may go ready on a ticket's advance approval when the code repo is shared.
 

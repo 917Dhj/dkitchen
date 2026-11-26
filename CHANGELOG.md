@@ -2,6 +2,8 @@
 
 ## Unreleased (develop, 0.6.4.dev1)
 
+- **Storage rules.** `long-running-jobs.md` gets a Storage section: every host keeps the same roots (`models/`, `datasets/`, `envs/`, `code/<repo>@<commit>/`, `runs/<study>/<run>/`, `scratch/<ticket>/`), a worktree holds code only, runs on another host go through one wrapper instead of per-ticket clones, training runs delete resume checkpoints on success, and a ticket closes only after its executor's storage line (what each worktree, scratch, and run folder becomes) is carried out. Run requests get a Disk line, light-tier start lines name the disk a run writes, and `/goodnight` reads free disk on every host. The new reference script `check_disk.py` is a `[launch] preflight` that refuses a launch below a host's reserve or into a real outputs folder. Run `/setup-dkitchen` or `build-team` again to fill the roots for your hosts.
+
 ## 0.6.3
 
 - **The kitchen's rules need `ding` 0.6.3.** They use `[roles]`, `ding role take`, `ding claim`, `ding pr` and the other commands below, which earlier versions do not have, so the build skills now require `ding --version` 0.6.3 or later.

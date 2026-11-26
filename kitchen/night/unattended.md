@@ -24,7 +24,7 @@ When the user returns, they invoke `/goodmorning` in the orchestrator session. T
 - **Results**: the executor names the designer in *Waiting on*, and the designer reads them directly; the orchestrator does not forward them.
 - **Unanswered designer**: when the watch reports a request to a designer unanswered for 30 minutes, send that designer one line with the link, as in [watch.md](watch.md).
 - **New PR**: review and merge it as in [reviewing.md](reviewing.md), including PRs that change `docs/agents/`, rules, or process files. A PR that changes code a running job depends on waits for the user or the designer.
-- **Finished tickets**: label and close them. Tickets whose exit conditions include something for the user, or whose results the designer has yet to interpret, stay open.
+- **Finished tickets**: label and close them once their storage line is carried out ([long-running-jobs.md](long-running-jobs.md#storage)). Tickets whose exit conditions include something for the user, or whose results the designer has yet to interpret, stay open.
 - **Host reboot**: reopen tunnels and have executors resume with their original commands.
 
 ## The log

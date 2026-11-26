@@ -30,6 +30,26 @@ Every long job is resumable: rerunning the original command continues it. This i
 
 Other users' processes are never touched. Processes under our own account are ours, but before stopping one, confirm it is not another ticket's job.
 
+## Storage
+
+Every host the repo uses has the same roots, so where a file goes is never an agent's choice. A worktree holds code only.
+
+| Root | What goes there | Rule |
+| --- | --- | --- |
+| `models/` | Weights: downloaded models, and adapters or merged weights kept as baselines | One copy per host. Code and configs point here; nothing copies weights into a checkout or a run |
+| `datasets/` | Raw data and derived formats, such as a trainer's prepared cache | A derived format is a named dataset with the command that builds it, built once per host and shared by every ticket |
+| `envs/` | Environments | One per purpose, shared |
+| `code/<repo>@<commit>/` | Code on a host where runs start without a worktree | Unpacked read-only from a commit and shared by every ticket at that commit |
+| `runs/<study>/<run>/` | Results kept after the ticket: predictions, scores, summaries, small adapters | Named for what varies, never for the ticket. The repo's outputs folder in every checkout and worktree is a symlink to this root |
+| `scratch/<ticket>/` | Everything else a run writes: staging, checkpoints, model caches, `TMPDIR` | Deleted in full when the ticket closes |
+
+<!-- fill: the absolute path of each root on each host, and the free space each host keeps in reserve. -->
+
+- **Starting a run** sets `TMPDIR`, the model hub's cache, and the run's scratch folder to `scratch/<ticket>/`, and reads weights only from `models/`. A training run deletes its resume checkpoints when it finishes successfully; only the final weights stay, in `runs/`.
+- **Another host**: a run on a host without its own worktrees goes through one wrapper script. The wrapper unpacks the commit into `code/`, points outputs at `runs/` and caches at `scratch/<ticket>/`, maps model and data paths to that host's roots, and refuses to start when the host's free space is below the run request's Disk line plus the reserve. Agents never create checkouts or clones on another host. <!-- fill: the wrapper and how to call it, or remove this item when the repo uses one host. -->
+- **Disk gate**: the `[launch] preflight` in `.dkitchen.toml` refuses a local launch when the host's free space is below the reserve.
+- **Closing a ticket**: before the ticket closes, its executor posts one storage line per host, listing each worktree, scratch folder, and run folder the ticket left with its size, and what happens to it: kept in `runs/`, promoted to `models/` or `datasets/`, or deleted. Scratch and the worktree are always deleted; deleting a run folder is the designer's call. The orchestrator closes the ticket only once that line is carried out.
+
 ## Shared services
 
 <!-- fill: a table of shared services (model servers, databases, tunnels) with columns Service | Where | Owner, and the command that checks their load, if the repo has one. -->
